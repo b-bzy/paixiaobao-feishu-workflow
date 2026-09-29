@@ -1,0 +1,32 @@
+{
+  "name": "aihuishou-feishu-workflow",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "dev": "zsh scripts/start-local-dev.sh",
+    "dev:admin": "pnpm --filter miaoda-admin dev",
+    "dev:events": "node scripts/long-connection-bridge.mjs",
+    "build": "nitro build && node scripts/inject-edge-callback.mjs",
+    "build:admin": "pnpm --filter miaoda-admin build",
+    "prepare": "nitro prepare",
+    "typecheck": "pnpm typecheck:server && pnpm typecheck:admin",
+    "typecheck:server": "tsc --noEmit",
+    "typecheck:admin": "pnpm --filter miaoda-admin typecheck",
+    "lint": "biome check .",
+    "lint:admin": "pnpm --filter miaoda-admin lint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "h3": "1.15.11",
+    "nitropack": "^2.13.2",
+    "undici": "^8.11.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.6",
+    "@types/node": "^24.12.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.0"
+  }
+}

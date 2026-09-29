@@ -1,0 +1,193 @@
+import { getTenantAccessToken } from "../client";
+import type {
+  ApprovalFormValue,
+  CouponApprovalDefinition,
+} from "./approval-schema";
+
+interface FeishuResponse<T> {
+  code: number;
+  msg: string;
+  data?: T;
+}
+
+interface RawApprovalDefinition {
+  approval_name?: string;
+  form?: string;
+  node_list?: CouponApprovalDefinition["nodeList"];
+}
+
+export interface CreatedApprovalInstance {
+  instanceCode: string;
+  instanceLink?: string;
+}
+
+export interface ApprovalInstanceDetail {
+  approval_code?: string;
+  form?: string;
+  current_nodes?: unknown[];
+  task_list?: unknown[];
+  timeline?: unknown[];
+  status?: string;
+  open_id?: string;
+  department_id?: string;
+  [key: string]: unknown;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = await getTenantAccessToken();
+  const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...init.headers,
+    },
+  });
+  const result = (await response.json()) as FeishuResponse<T>;
+  if (!response.ok || result.code !== 0 || !result.data) {
+    throw new Error(`Feishu approval request failed: ${result.msg}`);
+  }
+  return result.data;
+}
+
+export async function getCouponApprovalDefinition(
+  approvalCode: string,
+): Promise<CouponApprovalDefinition> {
+  const data = await request<RawApprovalDefinition>(
+    `/approval/v4/approvals/${encodeURIComponent(approvalCode)}?locale=zh-CN`,
+  );
+  if (!data.form) {
+    throw new Error("Feishu approval definition did not include form controls");
+  }
+  return {
+    approvalCode,
+    form: data.form,
+    nodeList: data.node_list,
+  };
+}
+
+export async function createCouponApprovalInstance(input: {
+  approvalCode: string;
+  submitterOpenId: string;
+  submitterDepartmentId?: string;
+  form: ApprovalFormValue[];
+  uuid: string;
+}): Promise<CreatedApprovalInstance> {
+  const data = await request<{
+    instance_code?: string;
+    instance_link?: string;
+  }>("/approval/v4/instances", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      approval_code: input.approvalCode,
+      open_id: input.submitterOpenId,
+      ...(input.submitterDepartmentId
+        ? { department_id: input.submitterDepartmentId }
+        : {}),
+      form: JSON.stringify(input.form),
+      uuid: input.uuid,
+      with_link: true,
+    }),
+  });
+  if (!data.instance_code) {
+    throw new Error("Feishu did not return an approval instance code");
+  }
+  return {
+    instanceCode: data.instance_code,
+    instanceLink: data.instance_link,
+  };
+}
+
+export async function getCouponApprovalInstance(
+  instanceCode: string,
+): Promise<ApprovalInstanceDetail> {
+  return request<ApprovalInstanceDetail>(
+    `/approval/v4/instances/${encodeURIComponent(instanceCode)}?locale=zh-CN`,
+  );
+}
+
+interface FeishuMessageDetail {
+  items?: Array<{
+    body?: { content?: string };
+    msg_type?: string;
+  }>;
+}
+
+export async function getFeishuMessageBody(input: {
+  messageId: string;
+}): Promise<{ messageType: string; content: string }> {
+  const data = await request<FeishuMessageDetail>(
+    `/im/v1/messages/${encodeURIComponent(input.messageId)}`,
+  );
+  const message = data.items?.[0];
+  if (!message?.msg_type || !message.body?.content) {
+    throw new Error("Feishu message did not include its original body");
+  }
+  return {
+    messageType: message.msg_type,
+    content: message.body.content,
+  };
+}
+
+export async function downloadFeishuMessageResource(input: {
+  messageId: string;
+  fileKey: string;
+  type: "file" | "image";
+}): Promise<Uint8Array> {
+  const token = await getTenantAccessToken();
+  const response = await fetch(
+    `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(input.messageId)}/resources/${encodeURIComponent(input.fileKey)}?type=${input.type}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Feishu message resource download failed: ${response.status}`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * Approval attachments use the documented v4 endpoint. It returns a file code
+ * that must be assigned to image/attachmentV2 form controls.
+ */
+export async function uploadCouponApprovalFile(input: {
+  name: string;
+  type: "image" | "attachment";
+  contentType: string;
+  bytes: Uint8Array;
+}): Promise<string> {
+  const token = await getTenantAccessToken();
+  const form = new FormData();
+  form.set("name", input.name);
+  form.set("type", input.type);
+  const content = Uint8Array.from(input.bytes);
+  form.set(
+    "content",
+    new Blob([content.buffer], { type: input.contentType }),
+    input.name,
+  );
+  const response = await fetch(
+    "https://open.feishu.cn/open-apis/approval/v4/files/upload",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    },
+  );
+  const result = (await response.json()) as FeishuResponse<{
+    file_code?: string;
+    urls_detail?: Array<{
+      code?: string;
+      message?: string;
+      origin_url?: string;
+      url?: string;
+    }>;
+  }>;
+  const fileCode =
+    result.data?.file_code ?? result.data?.urls_detail?.[0]?.code;
+  if (!response.ok || result.code !== 0 || !fileCode) {
+    throw new Error(`Feishu approval file upload failed: ${result.msg}`);
+  }
+  return fileCode;
+}

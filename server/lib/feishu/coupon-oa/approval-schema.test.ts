@@ -1,0 +1,168 @@
+import { describe, expect, it } from "vitest";
+import {
+  bindCouponApprovalSchema,
+  type CouponApprovalDefinition,
+  couponApplicationValuesSchema,
+  encodeCouponOaForm,
+  getCouponApprovalDefinitionHash,
+} from "./approval-schema";
+
+const options = (items: string[]) =>
+  items.map((text) => ({ value: `option:${text}`, text }));
+
+const definition: CouponApprovalDefinition = {
+  approvalCode: "approval-coupon",
+  nodeList: [
+    { node_id: "submit", node_type: "AND", name: "提交" },
+    { node_id: "approval", node_type: "SEQUENTIAL", name: "部门审批" },
+  ],
+  form: JSON.stringify([
+    { id: "department", name: "部门", type: "department", required: true },
+    { id: "applicant", name: "申请人", type: "contact", required: true },
+    {
+      id: "applicationType",
+      name: "申请类型",
+      type: "radioV2",
+      option: options(["优惠券申请", "优惠券修改"]),
+    },
+    {
+      id: "businessMode",
+      name: "业务模式",
+      type: "radioV2",
+      option: options(["严选", "寄卖", "pop"]),
+    },
+    { id: "activityName", name: "活动名称", type: "input" },
+    { id: "activityBackground", name: "活动背景", type: "textarea" },
+    {
+      id: "modificationType",
+      name: "修改类型",
+      type: "radioV2",
+      option: options(["关闭优惠券批次", "增加商家id或sku", "剔除商家id或sku"]),
+    },
+    { id: "modificationReason", name: "修改背景&原因描述", type: "textarea" },
+    { id: "point", name: "活动点位(%)", type: "number" },
+    { id: "share", name: "平台承担比例(%)", type: "number" },
+    {
+      id: "overDeduction",
+      name: "是否超扣点",
+      type: "radioV2",
+      option: options(["是", "否"]),
+    },
+    { id: "overDeductionReason", name: "超扣点原因", type: "textarea" },
+    { id: "gmv", name: "预估GMV", type: "amount" },
+    { id: "cost", name: "预估费用", type: "amount" },
+    { id: "roi", name: "ROI", type: "formula" },
+    {
+      id: "channels",
+      name: "配置渠道",
+      type: "checkboxV2",
+      option: options(["京东渠道", "严选APP及小程序"]),
+    },
+    { id: "period", name: "DateInterval", type: "dateInterval" },
+    { id: "image", name: "请上传具体满减测算图片", type: "image" },
+    {
+      id: "couponTable",
+      name: "请上传配券信息表（按模版填写）",
+      type: "attachmentV2",
+    },
+    { id: "whitelist", name: "请上传商品明细白名单", type: "attachmentV2" },
+    { id: "blacklist", name: "请上传商品明细黑名单", type: "attachmentV2" },
+    { id: "related", name: "关联优惠券申请审批", type: "connect" },
+    { id: "batchIds", name: "涉及修改批次ID", type: "textarea" },
+    { id: "addItems", name: "请上传增加商家id或sku明细", type: "attachmentV2" },
+    {
+      id: "removeItems",
+      name: "请上传剔除商家id或sku明细",
+      type: "attachmentV2",
+    },
+  ]),
+};
+
+describe("coupon OA approval schema", () => {
+  it("fails closed when the definition omits a required control", () => {
+    const broken = {
+      ...definition,
+      form: JSON.stringify(JSON.parse(definition.form).slice(1)),
+    };
+    expect(() => bindCouponApprovalSchema(broken)).toThrow("missing 部门");
+  });
+
+  it("changes its fingerprint when a routing-relevant option changes", () => {
+    const altered = JSON.parse(definition.form);
+    altered[3].option = options(["严选", "寄卖"]);
+    expect(getCouponApprovalDefinitionHash(definition)).not.toBe(
+      getCouponApprovalDefinitionHash({
+        ...definition,
+        form: JSON.stringify(altered),
+      }),
+    );
+  });
+
+  it("validates the fields required for a consign application", () => {
+    const result = couponApplicationValuesSchema.safeParse({
+      applicationType: "优惠券申请",
+      businessMode: "寄卖",
+      activityName: "测试活动",
+      activityBackground: "测试背景",
+      overDeduction: "否",
+      estimatedGmvYuan: 10_000,
+      estimatedCostYuan: 100,
+      channels: ["京东渠道", "严选APP及小程序"],
+      activityStartAt: "2030-01-01",
+      activityEndAt: "2030-01-02",
+      calcImageFileCodes: ["image-code"],
+      couponTableFileCodes: ["coupon-code"],
+      productWhitelistFileCodes: ["white-code"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("encodes documented native approval control values and omits formula", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const form = encodeCouponOaForm(
+      schema,
+      couponApplicationValuesSchema.parse({
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道", "严选APP及小程序"],
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-02",
+        calcImageFileCodes: ["image-code"],
+        couponTableFileCodes: ["coupon-code"],
+        productWhitelistFileCodes: ["white-code"],
+      }),
+      {
+        openId: "ou_submitter",
+        userId: "user_submitter",
+        departmentOpenId: "od_department",
+      },
+    );
+
+    expect(form).toContainEqual({
+      id: "period",
+      type: "dateInterval",
+      value: {
+        start: "2030-01-01T00:00:00+08:00",
+        end: "2030-01-02T23:59:59+08:00",
+        interval: 2,
+      },
+    });
+    expect(form).toContainEqual({
+      id: "gmv",
+      type: "amount",
+      value: 10_000,
+      currency: "CNY",
+    });
+    expect(form).toContainEqual({
+      id: "channels",
+      type: "checkboxV2",
+      value: ["option:京东渠道", "option:严选APP及小程序"],
+    });
+    expect(form.some((control) => control.id === "roi")).toBe(false);
+  });
+});

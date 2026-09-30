@@ -9,6 +9,7 @@ export const couponOaDraftStatuses = [
   "Confirmed",
   "Submitting",
   "Submitted",
+  "CreatedNeedsReview",
   "Failed",
   "Canceled",
 ] as const;
@@ -251,8 +252,10 @@ export async function updateCouponOaDraft(
     >
   >,
 ): Promise<CouponOaDraft> {
-  if (["Submitted", "Canceled"].includes(draft.status)) {
-    throw new Error("Submitted or canceled coupon OA drafts cannot be changed");
+  if (["Submitted", "CreatedNeedsReview", "Canceled"].includes(draft.status)) {
+    throw new Error(
+      "Submitted, review-required, or canceled coupon OA drafts cannot be changed",
+    );
   }
   const tableId = getCouponOaDraftTableId();
   const next = { ...draft, ...updates };

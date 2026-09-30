@@ -69,7 +69,7 @@ FEISHU_PROCESS_URL=http://localhost:3000/api/feishu/process pnpm dev:events
 - 文件名和 `file_key` 在消息体中存在；
 - 首条日志中的“未包含原始消息体”不是附件本身永久缺少数据。
 
-当前代码在事件到达后只做一次立即回读，没有重试：[`events.ts:110-176`](../../../server/lib/feishu/events.ts#L110-L176) 与 [`approval-client.ts:115-129`](../../../server/lib/feishu/coupon-oa/approval-client.ts#L115-L129)。因此，首条失败高度疑似是**消息体/API 的短暂可见性延迟**；另一个待确认可能是 Vercel 运行版本与本地工作区版本不一致。仅凭事后只读结果，不能断言二者中的哪一个是首条失败的唯一原因。
+当前代码在事件到达后只做一次立即回读，没有重试：[`events.ts:110-176`](../../../../server/lib/feishu/events.ts#L110-L176) 与 [`approval-client.ts:115-129`](../../../../server/lib/feishu/coupon-oa/approval-client.ts#L115-L129)。因此，首条失败高度疑似是**消息体/API 的短暂可见性延迟**；另一个待确认可能是 Vercel 运行版本与本地工作区版本不一致。仅凭事后只读结果，不能断言二者中的哪一个是首条失败的唯一原因。
 
 ### 3.4 第二条附件的确定性阻断：审批附件上传没有应用权限
 
@@ -87,7 +87,7 @@ FEISHU_PROCESS_URL=http://localhost:3000/api/feishu/process pnpm dev:events
 Feishu approval file upload failed: No permission
 ```
 
-调用点位于 [`events.ts:149-166`](../../../server/lib/feishu/events.ts#L149-L166)，实际上传接口及失败条件位于 [`approval-client.ts:153-184`](../../../server/lib/feishu/coupon-oa/approval-client.ts#L153-L184)。
+调用点位于 [`events.ts:149-166`](../../../../server/lib/feishu/events.ts#L149-L166)，实际上传接口及失败条件位于 [`approval-client.ts:153-184`](../../../../server/lib/feishu/coupon-oa/approval-client.ts#L153-L184)。
 
 这是当前所有真实附件都无法成功处理的**确定性主阻断**。它与 PRD 已记录的约束一致：审批 v4 附件上传需要已开通且已发布的应用身份 `approval:approval` 权限；用户 token 不能替代该权限。
 
@@ -95,8 +95,8 @@ Feishu approval file upload failed: No permission
 
 `handleCouponOaAttachment()` 中没有针对回读、下载、分类、上传、Base 更新失败的 `try/catch`，也没有发送错误卡。异常一路冒泡到 HTTP 回调层：
 
-- 回调路由只记录 `console.error` 并返回 HTTP 400：[`process.post.ts:2-23`](../../../server/api/feishu/process.post.ts#L2-L23)；
-- bridge 将该 HTTP 400 写到本地日志：[`long-connection-bridge.mjs:53-63`](../../../scripts/long-connection-bridge.mjs#L53-L63)；
+- 回调路由只记录 `console.error` 并返回 HTTP 400：[`process.post.ts:2-23`](../../../../server/api/feishu/process.post.ts#L2-L23)；
+- bridge 将该 HTTP 400 写到本地日志：[`long-connection-bridge.mjs:53-63`](../../../../scripts/long-connection-bridge.mjs#L53-L63)；
 - 飞书用户没有收到任何失败提示。
 
 因此，**“无响应”是错误反馈缺失造成的产品问题，不是没有错误发生。**
@@ -109,7 +109,7 @@ Feishu approval file upload failed: No permission
 平台承担100%配券明细表9.30-10.10.xlsx
 ```
 
-按现有规则，文件名含“配券”会分类为 `couponTable`；同一角色重复上传时，新附件覆盖旧附件，而不会填充 `productWhitelist`：[`draft-service.ts:65-126`](../../../server/lib/feishu/coupon-oa/draft-service.ts#L65-L126)。
+按现有规则，文件名含“配券”会分类为 `couponTable`；同一角色重复上传时，新附件覆盖旧附件，而不会填充 `productWhitelist`：[`draft-service.ts:65-126`](../../../../server/lib/feishu/coupon-oa/draft-service.ts#L65-L126)。
 
 所以即使上传 API 权限修复后，这些同名文件也只会满足“配券信息表”，**仍不会满足“商品明细白名单”**。这不是本次无响应的原因，但会是下一步无法进入完整材料状态的原因。应另行发送文件名包含“白名单”的 `.xlsx`。
 

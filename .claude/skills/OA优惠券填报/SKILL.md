@@ -5,7 +5,7 @@ description: 优惠券 OA 智能提单 P1 交互。收集结构化申请字段�
 
 # OA优惠券填报（P1 填单底稿助手）
 
-对应 [优惠券 OA 智能提单 MVP PRD v1.2](../../../../../docs/oa-ticket-reimbursement-materials/product/coupon-oa-mvp-prd-v1.2.md) 的 P1 阶段。
+对应 [优惠券 OA 智能提单 MVP PRD v1.2](../../../docs/oa-ticket-reimbursement-materials/specifications/coupon-oa-mvp-prd-v1.2.md) 的 P1 阶段。
 
 **当前边界**：飞书 OA 的获授权写入 API 与表单字段标识尚未确认（PRD 第 8 节前置门槛）。因此本 skill 的产物是**填单底稿 + 结构化 fields.json**，由业务员据此在飞书 OA 原生表单中人工填写、核对并提交。未来 API 就绪后，由服务端接管「写入」步骤，本交互流程不变。
 
@@ -121,6 +121,6 @@ python3 .claude/skills/OA优惠券填报/scripts/parse_xlsx.py "文件.xlsx" --a
 ## 事实源与参考
 
 - 字段 schema：`references/fields.md`
-- 校验规则来源：[案例 202609240455 分析](../../../../../docs/oa-ticket-reimbursement-materials/cases/202609240455/README.md)（口径差异 §3.4、白名单两种模式 §4.2、待确认清单 §6）
+- 校验规则来源：[案例 202609240455 分析](../../../docs/oa-ticket-reimbursement-materials/cases/202609240455/README.md)（口径差异 §3.4、白名单两种模式 §4.2、待确认清单 §6）
 - 标准 Excel 模板：`docs/oa-ticket-reimbursement-materials/assets/templates/`
 - research/ 中「待确认」内容不是已发布规则，引用时保持「待确认」标注。

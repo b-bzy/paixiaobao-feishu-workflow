@@ -11,8 +11,8 @@ import {
   uploadCouponApprovalFile,
 } from "./approval-client";
 
-function response(data: object) {
-  return new Response(JSON.stringify({ code: 0, msg: "ok", data }), {
+function response(data: object, code: number | string = 0) {
+  return new Response(JSON.stringify({ code, msg: "ok", data }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
@@ -161,5 +161,40 @@ describe("coupon OA approval client", () => {
         bytes: new Uint8Array([1, 2, 3]),
       }),
     ).resolves.toBe("legacy-file-code");
+  });
+
+  it("reports a missing approval file code separately from an API failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({})));
+
+    await expect(
+      uploadCouponApprovalFile({
+        name: "白名单.xlsx",
+        type: "attachment",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    ).rejects.toThrow(
+      "Feishu approval file upload succeeded but did not return a file code",
+    );
+  });
+
+  it("accepts approval upload responses that encode the success code as a string", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(response({ file_code: "string-code-file" }, "0")),
+    );
+
+    await expect(
+      uploadCouponApprovalFile({
+        name: "白名单.xlsx",
+        type: "attachment",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    ).resolves.toBe("string-code-file");
   });
 });

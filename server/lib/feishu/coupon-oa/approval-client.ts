@@ -5,7 +5,7 @@ import type {
 } from "./approval-schema";
 
 interface FeishuResponse<T> {
-  code: number;
+  code: number | string;
   msg: string;
   data?: T;
 }
@@ -43,7 +43,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const result = (await response.json()) as FeishuResponse<T>;
-  if (!response.ok || result.code !== 0 || !result.data) {
+  if (!response.ok || Number(result.code) !== 0 || !result.data) {
     throw new Error(`Feishu approval request failed: ${result.msg}`);
   }
   return result.data;
@@ -186,8 +186,13 @@ export async function uploadCouponApprovalFile(input: {
   }>;
   const fileCode =
     result.data?.file_code ?? result.data?.urls_detail?.[0]?.code;
-  if (!response.ok || result.code !== 0 || !fileCode) {
+  if (!response.ok || Number(result.code) !== 0) {
     throw new Error(`Feishu approval file upload failed: ${result.msg}`);
+  }
+  if (!fileCode) {
+    throw new Error(
+      "Feishu approval file upload succeeded but did not return a file code",
+    );
   }
   return fileCode;
 }

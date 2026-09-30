@@ -3,6 +3,7 @@ import {
   bindCouponApprovalSchema,
   type CouponApprovalDefinition,
   couponApplicationValuesSchema,
+  diffSubmittedApprovalForm,
   encodeCouponOaForm,
   getCouponApprovalDefinitionHash,
 } from "./approval-schema";
@@ -126,6 +127,8 @@ describe("coupon OA approval schema", () => {
         businessMode: "寄卖",
         activityName: "测试活动",
         activityBackground: "测试背景",
+        activityPointPercent: 10,
+        platformBearingPercent: 50,
         overDeduction: "否",
         estimatedGmvYuan: 10_000,
         estimatedCostYuan: 100,
@@ -164,5 +167,100 @@ describe("coupon OA approval schema", () => {
       value: ["option:京东渠道", "option:严选APP及小程序"],
     });
     expect(form.some((control) => control.id === "roi")).toBe(false);
+    expect(form).toContainEqual({ id: "point", type: "number", value: 10 });
+    expect(form).toContainEqual({ id: "share", type: "number", value: 50 });
+  });
+
+  it("accepts Feishu option, amount, and Shanghai date normalization", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const expected = [
+      { id: "applicationType", type: "radioV2", value: "option:优惠券申请" },
+      {
+        id: "channels",
+        type: "checkboxV2",
+        value: ["option:京东渠道", "option:严选APP及小程序"],
+      },
+      { id: "gmv", type: "amount", value: 10000, currency: "CNY" },
+      {
+        id: "period",
+        type: "dateInterval",
+        value: {
+          start: "2030-01-01T00:00:00+08:00",
+          end: "2030-01-02T23:59:59+08:00",
+          interval: 2,
+        },
+      },
+    ];
+    const actual = [
+      { id: "applicationType", type: "radioV2", value: "优惠券申请" },
+      {
+        id: "channels",
+        type: "checkboxV2",
+        value: ["严选APP及小程序", "京东渠道"],
+      },
+      {
+        id: "gmv",
+        type: "amount",
+        value: {
+          amount: "10000.00",
+          ext: { currency: "CNY", display: "¥10,000" },
+        },
+      },
+      {
+        id: "period",
+        type: "dateInterval",
+        value: {
+          start: "2029-12-31T16:00:00.000Z",
+          end: "2030-01-02T15:59:59.000Z",
+          interval: "2",
+          timezoneOffset: 480,
+        },
+      },
+    ];
+
+    expect(diffSubmittedApprovalForm(schema, expected, actual)).toEqual({
+      issues: [],
+      needsReview: [],
+    });
+  });
+
+  it("requires review rather than falsely matching attachment URLs", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["approval-file-code"],
+        },
+      ],
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["https://example.test/signed-file"],
+        },
+      ],
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(result.needsReview).toHaveLength(1);
+  });
+
+  it("rejects genuinely changed native values and duplicate controls", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [{ id: "activityName", type: "input", value: "正确活动" }],
+      [
+        { id: "activityName", type: "input", value: "被改写的活动" },
+        { id: "activityName", type: "input", value: "重复值" },
+      ],
+    );
+
+    expect(result.issues).toEqual([
+      "activityName: duplicate from created approval",
+    ]);
   });
 });

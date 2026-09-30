@@ -56,6 +56,7 @@ import {
   saveCouponOaDraft,
   updateCouponOaDraft,
 } from "./coupon-oa/draft-store";
+import { submitConfirmedCouponOaDraft } from "./coupon-oa/submit-service";
 import { handleFeishuPocEvent, isExpenseInvocation } from "./events";
 
 function couponOaEvent(
@@ -126,6 +127,7 @@ describe("handleFeishuPocEvent", () => {
       couponDraft.values,
     );
     vi.mocked(saveCouponOaDraft).mockResolvedValue(couponDraft);
+    vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([]);
     vi.mocked(missingCouponOaAttachments).mockReturnValue([
       "具体满减测算图片",
       "配券信息表（.xlsx）",
@@ -189,6 +191,32 @@ describe("handleFeishuPocEvent", () => {
     expect(
       JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
     ).toContain("待补材料");
+  });
+
+  it("allows the draft owner to end an active coupon OA draft", async () => {
+    vi.mocked(getCouponOaDraft).mockResolvedValue(couponDraft);
+    vi.mocked(updateCouponOaDraft).mockResolvedValue({
+      ...couponDraft,
+      status: "Canceled",
+    });
+
+    await handleFeishuPocEvent({
+      header: { token: "verify-me" },
+      operator: { open_id: "ou_submitter" },
+      action: {
+        value: {
+          action: "coupon_oa_cancel",
+          draftRecordId: "rec-coupon-draft",
+        },
+      },
+    });
+
+    expect(updateCouponOaDraft).toHaveBeenCalledWith(couponDraft, {
+      status: "Canceled",
+    });
+    expect(
+      JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+    ).toContain("OA 草稿已结束");
   });
 
   it("opens a Base-only form in draft-demo mode", async () => {
@@ -340,6 +368,68 @@ describe("handleFeishuPocEvent", () => {
       messageId: "om_attachment",
       fileKey: "file-key",
       type: "file",
+    });
+  });
+
+  it("expires a stale OA draft before processing an attachment", async () => {
+    const staleDraft = {
+      ...couponDraft,
+      updatedAt: "2026-09-30T00:00:00.000Z",
+    };
+    vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([staleDraft]);
+    vi.mocked(updateCouponOaDraft).mockResolvedValue({
+      ...staleDraft,
+      status: "Canceled",
+    });
+
+    await handleFeishuPocEvent({
+      header: { event_type: "im.message.receive_v1", token: "verify-me" },
+      event: {
+        sender: { sender_id: { open_id: "ou_submitter" } },
+        message: {
+          message_id: "om-stale-attachment",
+          message_type: "file",
+          content: "配券信息表.xlsx",
+        },
+      },
+    });
+
+    expect(updateCouponOaDraft).toHaveBeenCalledWith(staleDraft, {
+      status: "Canceled",
+    });
+    expect(getFeishuMessageBody).not.toHaveBeenCalled();
+    expect(downloadFeishuMessageResource).not.toHaveBeenCalled();
+    expect(uploadCouponApprovalFile).not.toHaveBeenCalled();
+  });
+
+  it("sends a failure card when native OA submission fails", async () => {
+    vi.mocked(getCouponOaDraft).mockResolvedValue({
+      ...couponDraft,
+      status: "Confirmed",
+      definitionHash: "definition-hash",
+    });
+    vi.mocked(submitConfirmedCouponOaDraft).mockRejectedValue(
+      new Error("活动开始日期不能早于今天（2026-09-29）"),
+    );
+
+    const result = await handleFeishuPocEvent({
+      header: { token: "verify-me" },
+      operator: { open_id: "ou_submitter" },
+      action: {
+        value: {
+          action: "coupon_oa_submit",
+          draftRecordId: "rec-coupon-draft",
+        },
+      },
+    });
+
+    expect(
+      JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+    ).toContain("正式 OA 未创建");
+    expect(result).toEqual({
+      kind: "handled",
+      message:
+        "Coupon OA submission failed: 活动开始日期不能早于今天（2026-09-29）",
     });
   });
 

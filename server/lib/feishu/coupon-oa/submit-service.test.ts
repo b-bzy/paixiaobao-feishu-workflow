@@ -201,4 +201,32 @@ describe("coupon OA submit service", () => {
       }),
     );
   });
+
+  it("preserves the created native instance when readback fails", async () => {
+    vi.mocked(createCouponApprovalInstance).mockResolvedValue({
+      instanceCode: "instance-code",
+      instanceLink: "https://example.test/instance",
+    });
+    vi.mocked(getCouponApprovalInstance).mockRejectedValue(
+      new Error("approval readback unavailable"),
+    );
+
+    await expect(
+      submitConfirmedCouponOaDraft(draft("Confirmed")),
+    ).resolves.toMatchObject({
+      draft: {
+        status: "CreatedNeedsReview",
+        approvalInstanceCode: "instance-code",
+        approvalInstanceLink: "https://example.test/instance",
+      },
+      verificationIssues: ["approval readback unavailable"],
+    });
+    expect(updateCouponOaDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        status: "Submitting",
+        approvalInstanceCode: "instance-code",
+      }),
+    );
+  });
 });

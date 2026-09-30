@@ -224,6 +224,73 @@ export function buildCouponOaDraftErrorCard(input: {
   );
 }
 
+export function buildCouponOaActiveWorkflowCard(input: {
+  draftId: string;
+  draftRecordId: string;
+}): FeishuCard {
+  return baseCard(
+    "已有未完成的优惠券 OA 流程",
+    "请继续当前流程，或结束后再启动 Excel 试点",
+    "orange",
+    "进行中",
+    [
+      {
+        tag: "markdown",
+        content: `当前 OA 草稿 **${input.draftId.slice(0, 12)}** 尚未完成。为避免文件归属错误，不能同时启动 Excel 试点。`,
+      },
+      {
+        tag: "button",
+        text: plainText("结束当前 OA 草稿"),
+        type: "danger",
+        width: "fill",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              action: "coupon_oa_cancel",
+              draftRecordId: input.draftRecordId,
+            },
+          },
+        ],
+      },
+    ],
+  );
+}
+
+export function buildCouponOaWorkflowExpiredCard(input: {
+  draftId: string;
+}): FeishuCard {
+  return baseCard(
+    "优惠券 OA 流程已结束",
+    "超过 10 分钟未继续操作",
+    "orange",
+    "已结束",
+    [
+      {
+        tag: "markdown",
+        content: `草稿 **${input.draftId.slice(0, 12)}** 已因长时间未继续操作而结束。本次未创建或提交正式 OA；如需继续，请重新发送 \`OA优惠券填报\`。`,
+      },
+    ],
+  );
+}
+
+export function buildCouponOaWorkflowCanceledCard(input: {
+  draftId: string;
+}): FeishuCard {
+  return baseCard(
+    "优惠券 OA 草稿已结束",
+    "可重新发起其他优惠券流程",
+    "green",
+    "已结束",
+    [
+      {
+        tag: "markdown",
+        content: `草稿 **${input.draftId.slice(0, 12)}** 已结束，未创建或提交正式 OA。`,
+      },
+    ],
+  );
+}
+
 export function buildCouponOaPreviewCard(input: {
   draftRecordId: string;
   values: CouponOaDraftValues;
@@ -264,6 +331,8 @@ export function buildCouponOaPreviewCard(input: {
             : []),
           `**预估 GMV：** ${gmv === undefined ? "—" : `¥${gmv}`}`,
           `**预估费用：** ${cost === undefined ? "—" : `¥${cost}`}`,
+          `**活动点位：** ${values.activityPointPercent === undefined ? "—" : `${values.activityPointPercent}%`}`,
+          `**平台承担比例：** ${values.platformBearingPercent === undefined ? "—" : `${values.platformBearingPercent}%`}`,
           `**预估 ROI：** ${gmv && cost ? (gmv / cost).toFixed(2) : "由飞书公式计算"}`,
           `**配置渠道：** ${values.channels?.join("；") || "—"}`,
         ].join("\n"),
@@ -279,7 +348,7 @@ export function buildCouponOaPreviewCard(input: {
         tag: "markdown",
         content: [
           ready
-            ? "确认后系统会在提交前重新读取正式审批定义；定义变化或回读值不一致会阻断并标记失败。"
+            ? "确认后系统会在提交前重新读取正式审批定义；定义变化会阻止创建。创建后如回读无法确认，将保留正式 OA 并标记为人工复核，不会自动重试。"
             : `**仍缺少：** ${input.missing.join("、")}`,
         ].join("\n"),
       },
@@ -379,6 +448,26 @@ export function buildCouponOaSubmissionResultCard(input: {
             },
           ]
         : []),
+    ],
+  );
+}
+
+export function buildCouponOaSubmissionFailureCard(input: {
+  message: string;
+}): FeishuCard {
+  return baseCard(
+    "优惠券 OA 提交失败",
+    "正式 OA 未创建，请修正后重新提交",
+    "red",
+    "未提交",
+    [
+      {
+        tag: "markdown",
+        content: [
+          `**失败原因：** ${input.message}`,
+          "本次未创建正式审批，不会出现在“审批 → 已发起”中。请重新发送 `OA优惠券填报`，修正信息并重新上传附件。",
+        ].join("\n"),
+      },
     ],
   );
 }

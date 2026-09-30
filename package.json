@@ -18,6 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "h3": "1.15.11",
     "nitropack": "^2.13.2",
     "undici": "^8.11.2",

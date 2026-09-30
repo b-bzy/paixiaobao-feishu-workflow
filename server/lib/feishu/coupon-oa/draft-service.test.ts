@@ -36,6 +36,19 @@ describe("validateCouponApplicationDraft", () => {
     ).toThrow("活动结束日期不能早于开始日期");
   });
 
+  it("rejects an activity start date before today", () => {
+    expect(() =>
+      validateCouponApplicationDraft(
+        {
+          ...strictDraft,
+          activityStartAt: "2029-12-31",
+          activityEndAt: "2030-01-02",
+        },
+        { today: "2030-01-01" },
+      ),
+    ).toThrow("活动开始日期不能早于今天（2030-01-01）");
+  });
+
   it("requires financial fields for consign and pop drafts", () => {
     expect(() =>
       validateCouponApplicationDraft({

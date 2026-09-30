@@ -1,6 +1,7 @@
 # 优惠券 OA 机器人端自动填报实施方案 v1.3
 
 > 状态：实施中
+> 定位：P1-1 的 Excel 内网试点范围以 [P1 PRD v1.5](../specifications/coupon-oa-p1-excel-pilot-prd-v1.5.md) 为准；本方案仅覆盖满足前置条件后的后续 OA 自动填写与确认即提交能力。
 > 日期：2026-09-29
 > 变更：v1.3 依据飞书官方 SDK 核实，创建/读取原生审批实例使用应用 tenant access token，并以 `open_id` 指定申请人；取消 OAuth 作为自动填单的前置依赖
 > 变更：v1.2 将业务字段 schema 与飞书审批控件绑定合并为单一「提交 schema」；删除独立映射表，避免双配置漂移

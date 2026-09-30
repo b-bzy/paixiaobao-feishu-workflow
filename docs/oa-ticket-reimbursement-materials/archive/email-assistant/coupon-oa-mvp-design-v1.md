@@ -1,6 +1,6 @@
 # 优惠券 OA 邮件助手 MVP 设计方案 v1.0
 
-> **归档说明**：历史“邮件草稿助手”方案，仅供决策追溯；当前产品基线为[优惠券 OA 智能提单 MVP PRD v1.2](../../product/coupon-oa-mvp-prd-v1.2.md)。  
+> **归档说明**：历史“邮件草稿助手”方案，仅供决策追溯；当前产品基线为[优惠券 OA 智能提单 MVP PRD v1.2](../../specifications/coupon-oa-mvp-prd-v1.2.md)。
 > **原状态**：待邮箱草稿能力验证后进入开发  
 > **日期**：2026-09-28  
 > **范围依据**：[MVP 优先分期实施方案 v1.1](coupon-oa-mvp-phased-delivery-plan-v1.md)  

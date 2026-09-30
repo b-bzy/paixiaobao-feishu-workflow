@@ -52,6 +52,7 @@ export function parseCouponApplicationDraftForm(
 
 export function validateCouponApplicationDraft(
   values: CouponOaDraftValues,
+  options: { today?: string } = {},
 ): void {
   if (!values.activityName?.trim()) {
     throw new Error("活动名称不能为空");
@@ -81,6 +82,10 @@ export function validateCouponApplicationDraft(
   }
   if (endAt < startAt) {
     throw new Error("活动结束日期不能早于开始日期");
+  }
+  const today = options.today ?? new Date().toISOString().slice(0, 10);
+  if (startAt < today) {
+    throw new Error(`活动开始日期不能早于今天（${today}）`);
   }
 
   if (values.businessMode !== "严选") {

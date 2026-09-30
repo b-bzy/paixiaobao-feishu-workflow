@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   createCouponApprovalInstance,
   getCouponApprovalDefinition,
@@ -21,6 +21,26 @@ function validateValues(draft: CouponOaDraft) {
       ? couponApplicationValuesSchema
       : couponModificationValuesSchema;
   return schema.parse(draft.values);
+}
+
+function approvalRequestUuid(input: {
+  draft: CouponOaDraft;
+  form: unknown;
+}): string {
+  const bytes = createHash("sha256")
+    .update(
+      JSON.stringify({
+        draftId: input.draft.draftId,
+        definitionHash: input.draft.definitionHash,
+        form: input.form,
+      }),
+    )
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export interface CouponOaSubmissionResult {
@@ -61,38 +81,64 @@ export async function submitConfirmedCouponOaDraft(
     validationIssues: [],
   });
 
+  let created:
+    | Awaited<ReturnType<typeof createCouponApprovalInstance>>
+    | undefined;
+  let createdDraft: CouponOaDraft | undefined;
   try {
-    const created = await createCouponApprovalInstance({
+    created = await createCouponApprovalInstance({
       approvalCode,
       submitterOpenId: submitting.ownerOpenId,
       form,
-      uuid: randomUUID(),
+      uuid: approvalRequestUuid({ draft: submitting, form }),
+    });
+    // Persist the native instance before any best-effort GET verification. If
+    // the readback fails, the draft must not become retryable and create a
+    // duplicate approval.
+    createdDraft = await updateCouponOaDraft(submitting, {
+      status: "Submitting",
+      approvalInstanceCode: created.instanceCode,
+      approvalInstanceLink: created.instanceLink,
     });
     const instance = await getCouponApprovalInstance(created.instanceCode);
     const actual = parseApprovalFormValues(instance.form ?? "[]");
-    const verificationIssues = diffSubmittedApprovalForm(form, actual);
-    const status = verificationIssues.length ? "Failed" : "Submitted";
-    const next = await updateCouponOaDraft(submitting, {
-      status,
-      approvalInstanceCode: created.instanceCode,
-      approvalInstanceLink: created.instanceLink,
-      failureReason: verificationIssues.length
+    const verification = diffSubmittedApprovalForm(schema, form, actual);
+    const verificationIssues = [
+      ...verification.issues,
+      ...verification.needsReview,
+    ];
+    const needsReview = verificationIssues.length > 0;
+    const next = await updateCouponOaDraft(createdDraft, {
+      status: needsReview ? "CreatedNeedsReview" : "Submitted",
+      failureReason: needsReview
         ? `Created approval requires review: ${verificationIssues.join("; ")}`
         : undefined,
       validationIssues: verificationIssues,
     });
     return { draft: next, verificationIssues };
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown submission error";
+    if (created) {
+      const reviewDraft = await updateCouponOaDraft(
+        createdDraft ?? submitting,
+        {
+          status: "CreatedNeedsReview",
+          approvalInstanceCode: created.instanceCode,
+          approvalInstanceLink: created.instanceLink,
+          failureReason: `Created approval requires review: ${message}`,
+          validationIssues: [message],
+        },
+      );
+      return { draft: reviewDraft, verificationIssues: [message] };
+    }
     const failed = await updateCouponOaDraft(submitting, {
       status: "Failed",
-      failureReason:
-        error instanceof Error ? error.message : "Unknown submission error",
+      failureReason: message,
     });
     throw Object.assign(
       error instanceof Error ? error : new Error("Coupon OA submission failed"),
-      {
-        draft: failed,
-      },
+      { draft: failed },
     );
   }
 }

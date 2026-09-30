@@ -36,6 +36,8 @@ export const couponApplicationValuesSchema = z
     businessMode: z.enum(["严选", "寄卖", "pop"]),
     activityName: z.string().trim().min(1).max(200),
     activityBackground: z.string().trim().min(1).max(4000),
+    activityPointPercent: z.number().positive().finite().optional(),
+    platformBearingPercent: z.number().min(0).max(100).finite().optional(),
     overDeduction: z.enum(["是", "否"]).optional(),
     overDeductionReason: z.string().trim().max(4000).optional(),
     estimatedGmvYuan: z.number().positive().finite().optional(),
@@ -151,6 +153,8 @@ export interface CouponOaDraftValues {
   businessMode?: "严选" | "寄卖" | "pop";
   activityName?: string;
   activityBackground?: string;
+  activityPointPercent?: number;
+  platformBearingPercent?: number;
   overDeduction?: "是" | "否";
   overDeductionReason?: string;
   estimatedGmvYuan?: number;
@@ -369,6 +373,12 @@ export function encodeCouponOaForm(
     add("活动背景", values.activityBackground);
 
     if (values.businessMode !== "严选") {
+      if (values.activityPointPercent !== undefined) {
+        add("活动点位(%)", values.activityPointPercent);
+      }
+      if (values.platformBearingPercent !== undefined) {
+        add("平台承担比例(%)", values.platformBearingPercent);
+      }
       add(
         "是否超扣点",
         findOptionValue(
@@ -455,37 +465,324 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export interface ApprovalFormVerification {
+  /** Definite semantic mismatches. */
+  issues: string[];
+  /** Values Feishu transformed without a stable identity we can verify. */
+  needsReview: string[];
+}
+
+function optionsFor(control: ApprovalFormControl): Array<{
+  value: string;
+  text: string;
+}> {
+  const options = z
+    .array(z.object({ text: z.string(), value: z.string() }))
+    .safeParse(control.option);
+  return options.success ? options.data : [];
+}
+
+function optionIdentity(
+  control: ApprovalFormControl,
+  value: unknown,
+): string | undefined {
+  const candidate =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object"
+        ? typeof (value as Record<string, unknown>).value === "string"
+          ? String((value as Record<string, unknown>).value)
+          : typeof (value as Record<string, unknown>).text === "string"
+            ? String((value as Record<string, unknown>).text)
+            : undefined
+        : undefined;
+  if (!candidate) return undefined;
+  const option = optionsFor(control).find(
+    (item) => item.value === candidate || item.text === candidate,
+  );
+  return option?.value;
+}
+
+function normalizeText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return undefined;
+  const text = (value as Record<string, unknown>).text;
+  return typeof text === "string" ? text : undefined;
+}
+
+function decimal(value: unknown): string | undefined {
+  const text =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : typeof value === "string"
+        ? value
+        : undefined;
+  if (!text || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return undefined;
+  const negative = text.startsWith("-");
+  const [integer, fraction = ""] = (negative ? text.slice(1) : text).split(".");
+  const normalizedInteger = integer.replace(/^0+(?=\d)/, "") || "0";
+  const normalizedFraction = fraction.replace(/0+$/, "");
+  const normalized = normalizedFraction
+    ? `${normalizedInteger}.${normalizedFraction}`
+    : normalizedInteger;
+  return negative && normalized !== "0" ? `-${normalized}` : normalized;
+}
+
+function amountValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const object = value as Record<string, unknown>;
+  return object.amount ?? object.value ?? value;
+}
+
+function currencyValue(control: ApprovalFormValue): string | undefined {
+  if (control.currency) return control.currency;
+  if (!control.value || typeof control.value !== "object") return undefined;
+  const ext = (control.value as Record<string, unknown>).ext;
+  if (!ext || typeof ext !== "object") return undefined;
+  const currency = (ext as Record<string, unknown>).currency;
+  return typeof currency === "string" ? currency : undefined;
+}
+
+function shanghaiDate(value: unknown): string | undefined {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+  const date =
+    typeof value === "number"
+      ? new Date(value)
+      : typeof value === "string"
+        ? new Date(value)
+        : undefined;
+  if (!date || Number.isNaN(date.getTime())) return undefined;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: string) =>
+    parts.find((item) => item.type === type)?.value;
+  const year = part("year");
+  const month = part("month");
+  const day = part("day");
+  return year && month && day ? `${year}-${month}-${day}` : undefined;
+}
+
+function dateInterval(
+  value: unknown,
+): { start: string; end: string; interval: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const object = value as Record<string, unknown>;
+  const start = shanghaiDate(object.start);
+  const end = shanghaiDate(object.end);
+  const interval = decimal(object.interval);
+  return start && end && interval ? { start, end, interval } : undefined;
+}
+
+function attachmentIdentity(
+  value: unknown,
+):
+  | { kind: "codes"; values: string[] }
+  | { kind: "urls"; values: string[] }
+  | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const codes: string[] = [];
+  const urls: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      if (item.startsWith("https://")) urls.push(item);
+      else codes.push(item);
+      continue;
+    }
+    if (!item || typeof item !== "object") return undefined;
+    const object = item as Record<string, unknown>;
+    const code = object.file_code ?? object.fileCode ?? object.code;
+    if (typeof code === "string" && code) {
+      codes.push(code);
+      continue;
+    }
+    const url = object.url ?? object.file_url;
+    if (typeof url === "string" && url.startsWith("https://")) {
+      urls.push(url);
+      continue;
+    }
+    return undefined;
+  }
+  if (codes.length && urls.length) return undefined;
+  return codes.length
+    ? { kind: "codes", values: codes }
+    : { kind: "urls", values: urls };
+}
+
+function sameSet(expected: string[], actual: string[]): boolean {
+  return (
+    expected.length === actual.length &&
+    new Set(expected).size === expected.length &&
+    new Set(actual).size === actual.length &&
+    expected.every((value) => actual.includes(value))
+  );
+}
+
 /**
- * Compares only values the system submitted. Formula and defaulted controls are
- * intentionally excluded from `expected` and therefore cannot create false
- * failures; callers inspect formula values separately when needed.
+ * Compares only controls we submitted. Formula/default controls are excluded,
+ * while Feishu's documented display-level normalization is handled per type.
  */
 export function diffSubmittedApprovalForm(
+  schema: BoundCouponApprovalSchema,
   expected: ApprovalFormValue[],
   actual: ApprovalFormValue[],
-): string[] {
-  const actualById = new Map(actual.map((control) => [control.id, control]));
-  return expected.flatMap((control) => {
-    const received = actualById.get(control.id);
-    if (!received) return [`${control.id}: missing from created approval`];
-    if (received.type !== control.type) {
-      return [
-        `${control.id}: expected ${control.type}, received ${received.type}`,
-      ];
+): ApprovalFormVerification {
+  const actualById = new Map<string, ApprovalFormValue[]>();
+  for (const control of actual) {
+    actualById.set(control.id, [
+      ...(actualById.get(control.id) ?? []),
+      control,
+    ]);
+  }
+  const issues: string[] = [];
+  const needsReview: string[] = [];
+  const controlById = new Map(
+    Object.values(schema.controls).map((control) => [control.id, control]),
+  );
+
+  for (const submitted of expected) {
+    const receivedControls = actualById.get(submitted.id) ?? [];
+    if (receivedControls.length !== 1) {
+      issues.push(
+        `${submitted.id}: ${receivedControls.length ? "duplicate" : "missing"} from created approval`,
+      );
+      continue;
     }
-    if (stableJson(received.value) !== stableJson(control.value)) {
-      return [`${control.id}: submitted value differs from created approval`];
+    const received = receivedControls[0];
+    if (received.type !== submitted.type) {
+      issues.push(
+        `${submitted.id}: expected ${submitted.type}, received ${received.type}`,
+      );
+      continue;
     }
-    if ((received.currency ?? "") !== (control.currency ?? "")) {
-      return [
-        `${control.id}: submitted currency differs from created approval`,
-      ];
+    const definitionControl = controlById.get(submitted.id);
+    if (!definitionControl) {
+      issues.push(`${submitted.id}: not present in bound approval definition`);
+      continue;
+    }
+
+    if (submitted.type === "radioV2") {
+      const submittedOption = optionIdentity(
+        definitionControl,
+        submitted.value,
+      );
+      const receivedOption = optionIdentity(definitionControl, received.value);
+      if (
+        !submittedOption ||
+        !receivedOption ||
+        submittedOption !== receivedOption
+      ) {
+        issues.push(
+          `${submitted.id}: submitted option differs from created approval`,
+        );
+      }
+      continue;
+    }
+    if (submitted.type === "checkboxV2") {
+      const submittedOptions = Array.isArray(submitted.value)
+        ? submitted.value.map((value) =>
+            optionIdentity(definitionControl, value),
+          )
+        : [];
+      const receivedOptions = Array.isArray(received.value)
+        ? received.value.map((value) =>
+            optionIdentity(definitionControl, value),
+          )
+        : [];
+      if (
+        submittedOptions.some((value) => !value) ||
+        receivedOptions.some((value) => !value) ||
+        !sameSet(submittedOptions as string[], receivedOptions as string[])
+      ) {
+        issues.push(
+          `${submitted.id}: submitted options differ from created approval`,
+        );
+      }
+      continue;
+    }
+    if (submitted.type === "amount") {
+      const submittedAmount = decimal(amountValue(submitted.value));
+      const receivedAmount = decimal(amountValue(received.value));
+      if (
+        !submittedAmount ||
+        !receivedAmount ||
+        submittedAmount !== receivedAmount ||
+        currencyValue(submitted) !== currencyValue(received)
+      ) {
+        issues.push(
+          `${submitted.id}: submitted amount differs from created approval`,
+        );
+      }
+      continue;
+    }
+    if (submitted.type === "dateInterval") {
+      const submittedInterval = dateInterval(submitted.value);
+      const receivedInterval = dateInterval(received.value);
+      if (
+        !submittedInterval ||
+        !receivedInterval ||
+        stableJson(submittedInterval) !== stableJson(receivedInterval)
+      ) {
+        issues.push(
+          `${submitted.id}: submitted date interval differs from created approval`,
+        );
+      }
+      continue;
+    }
+    if (["attachmentV2", "image", "connect"].includes(submitted.type)) {
+      const submittedIdentity = attachmentIdentity(submitted.value);
+      const receivedIdentity = attachmentIdentity(received.value);
+      if (!submittedIdentity || !receivedIdentity) {
+        issues.push(`${submitted.id}: created attachment value is invalid`);
+      } else if (
+        submittedIdentity.kind === "codes" &&
+        receivedIdentity.kind === "codes"
+      ) {
+        if (!sameSet(submittedIdentity.values, receivedIdentity.values)) {
+          issues.push(
+            `${submitted.id}: submitted attachment differs from created approval`,
+          );
+        }
+      } else if (
+        submittedIdentity.values.length !== receivedIdentity.values.length
+      ) {
+        issues.push(
+          `${submitted.id}: submitted attachment count differs from created approval`,
+        );
+      } else {
+        needsReview.push(
+          `${submitted.id}: Feishu returned display URLs instead of stable file identity`,
+        );
+      }
+      continue;
+    }
+    if (["input", "textarea"].includes(submitted.type)) {
+      if (normalizeText(submitted.value) !== normalizeText(received.value)) {
+        issues.push(
+          `${submitted.id}: submitted text differs from created approval`,
+        );
+      }
+      continue;
+    }
+    if (stableJson(received.value) !== stableJson(submitted.value)) {
+      issues.push(
+        `${submitted.id}: submitted value differs from created approval`,
+      );
     }
     if (
-      stableJson(received.open_ids ?? []) !== stableJson(control.open_ids ?? [])
+      stableJson(received.open_ids ?? []) !==
+      stableJson(submitted.open_ids ?? [])
     ) {
-      return [`${control.id}: submitted contacts differ from created approval`];
+      issues.push(
+        `${submitted.id}: submitted contacts differ from created approval`,
+      );
     }
-    return [];
-  });
+  }
+  return { issues, needsReview };
 }

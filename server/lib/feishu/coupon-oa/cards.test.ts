@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildCouponOaPreviewCard, buildCouponOaSubmitCard } from "./cards";
+import {
+  buildCouponOaActiveWorkflowCard,
+  buildCouponOaPreviewCard,
+  buildCouponOaSubmissionFailureCard,
+  buildCouponOaSubmitCard,
+} from "./cards";
 import type { CouponOaDraft } from "./draft-store";
+import {
+  buildCouponExcelPilotActiveWorkflowCard,
+  buildCouponExcelPilotAmbiguousCard,
+} from "./excel-pilot-cards";
+import type { CouponExcelPilotDraft } from "./excel-pilot-store";
 
 const values: CouponOaDraft["values"] = {
   applicationType: "优惠券申请",
@@ -89,5 +99,53 @@ describe("coupon OA confirmation cards", () => {
     expect(text).toContain("商品明细白名单.xlsx");
     expect(text).toContain("以上是即将提交的完整内容");
     expect(text).toContain("coupon_oa_submit");
+  });
+
+  it("explains a failed submission and makes clear no OA was created", () => {
+    const text = JSON.stringify(
+      buildCouponOaSubmissionFailureCard({
+        message: "活动开始日期不能早于今天（2026-09-29）",
+      }),
+    );
+
+    expect(text).toContain("优惠券 OA 提交失败");
+    expect(text).toContain("正式 OA 未创建");
+    expect(text).toContain("审批 → 已发起");
+    expect(text).toContain("OA优惠券填报");
+  });
+
+  it("includes cancellation actions on active and conflicting workflows", () => {
+    const pilot: CouponExcelPilotDraft = {
+      recordId: "rec-pilot",
+      pilotId: "CEP-test",
+      ownerOpenId: "ou_test",
+      status: "AwaitingWhitelistUpload",
+      revision: 2,
+      schemaVersion: "coupon-excel-pilot-v1",
+      artifacts: [],
+      validationIssues: [],
+      processedMessageIds: [],
+    };
+
+    const oaText = JSON.stringify(
+      buildCouponOaActiveWorkflowCard({
+        draftId: "COA-test",
+        draftRecordId: "rec-oa",
+      }),
+    );
+    const pilotText = JSON.stringify(
+      buildCouponExcelPilotActiveWorkflowCard(pilot),
+    );
+    const conflictText = JSON.stringify(
+      buildCouponExcelPilotAmbiguousCard({
+        pilot,
+        oaDraft: { recordId: "rec-oa", draftId: "COA-test" },
+      }),
+    );
+
+    expect(oaText).toContain("coupon_oa_cancel");
+    expect(pilotText).toContain("coupon_excel_pilot_cancel");
+    expect(conflictText).toContain("coupon_oa_cancel");
+    expect(conflictText).toContain("coupon_excel_pilot_cancel");
   });
 });

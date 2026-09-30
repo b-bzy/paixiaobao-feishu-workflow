@@ -46,6 +46,23 @@
 - 申请人和管理员可以追踪审批状态及日志
 - 每个实例固定绑定发起时的模板版本
 
+## 优惠券 Excel 内网试点（P1-1）
+
+试点入口为 Bot 单聊中的 `优惠券Excel试点`。它只支持“常规满减券 + 单列 SKUID 白名单”：确认生成结果后，会自动填写**系统 OA 草稿**并将两份冻结 Excel 上传为审批附件；它不会自动确认或提交正式 OA。
+
+启用前需准备：
+
+1. 在现有 Base App 中创建**独立**的「优惠券 Excel 试点草稿」表，不得复用 `FEISHU_COUPON_DRAFT_TABLE_ID` 指向的 OA 草稿表；字段需与 `excel-pilot-store.ts` 中的 `recordFields()` 对应，特别是附件类型字段 `Generated Coupon File`、`Generated Whitelist File` 和长文本字段 `OA Handoff JSON`。
+2. 创建供应用身份写入的飞书 Drive 文件夹，记录文件夹 token。
+3. 为应用开通 Base 读写、消息资源下载、Drive 文件上传/下载和审批附件上传所需权限并发布应用版本。
+4. 在 Vercel 环境变量中设置 `FEISHU_COUPON_EXCEL_PILOT_ENABLED=true`、试点表 ID、Drive 文件夹 token 和 `DEEPSEEK_API_KEY`。
+
+生成结果会上传到该 Drive 文件夹，并同时附加到系统自有的 Base 试点草稿。自动填写只提升两份已确认的生成文件，源白名单绝不会上传到审批附件库。寄卖/pop 仍须由业务员手动上传满减测算图片；随后仍须手动确认并点击现有的正式 OA 提交按钮。
+
+## 优惠券 OA 文档库
+
+产品需求、实施方案、模板调研、脱敏演练和本地案例的数据边界统一见[优惠券 OA 文档库](docs/oa-ticket-reimbursement-materials/README.md)。本次 P1-1 增量在保留其受限 Excel 生成范围的同时，将确认后的两份输出接入既有系统 OA 草稿；正式 OA 始终由业务员人工发起。
+
 ## 项目边界
 
 - 源系统：原 Slack/Notion 项目，仅用于功能对照

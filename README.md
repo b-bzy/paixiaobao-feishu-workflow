@@ -1,50 +1,50 @@
-# aihuishou Feishu Workflow
+# 拍小宝飞书工作流
 
-爱回收飞书工作流项目。该工程从原 Slack/Notion 项目提炼业务能力后形成独立目标项目，不与源系统共用部署、凭证或数据源。
+拍小宝（面向爱回收业务）是一个以**飞书 Bot**为主要交互入口的内部工作流项目。它将业务人员的对话、卡片和文件输入，与管理员在妙搭中的配置能力、Nitro 服务端的受控处理，以及飞书 Base / Drive 中隔离的 POC 草稿和冻结产物连接起来。
+
+本仓库用于建设和验证受限 POC 与内网试点能力，而不是替代飞书原生 OA：业务规则、权限、状态变迁、幂等与最终审批写入均由服务端确定性代码控制；AI 仅用于辅助理解和结构化提取，不能决定审批结果、路由或补造业务事实。
+
+当前重点是优惠券 OA 路线：业务人员可通过 Bot 打开既有 OA、收集字段形成系统草稿，或在 `优惠券Excel试点` 中生成受控的配券表和 SKU 白名单。试点首发为 `draft-only`，不自动创建或提交原生 OA；只有通过明确的服务端 Gate、allowlist、当前 revision 确认和回读校验后，后续受控流程才可能创建原生审批实例。
 
 ## 项目结构
 
 ```text
 .
-├── .env.example                  # 环境变量示例
+├── .env.example                  # 环境变量示例（不含真实凭证）
 ├── apps/
-│   └── miaoda-admin/              # 妙搭管理员前端（独立 Vite 包）
-├── biome.json                    # Biome 代码检查与格式化配置
-├── docs/                         # 架构与迁移文档
-│   ├── adr/                      # 架构决策记录（ADR）
-│   ├── architecture-decision.md  # 当前 POC 架构基线
-│   └── future-technology-selection.md # 后续技术选型决策
-├── miaoda-auth.png               # 妙搭认证示意图
-├── nitro.config.ts               # Nitro 配置
-├── package.json                  # 项目依赖和脚本
-├── pnpm-lock.yaml                # pnpm 锁文件
-├── scripts/                      # 运维与集成脚本
-│   ├── inject-edge-callback.mjs  # 注入边缘回调
-│   └── long-connection-bridge.mjs # 长连接桥接
-├── server/                       # 服务端业务代码
-│   ├── api/
-│   │   └── feishu/
-│   │       └── process.post.ts   # 飞书流程处理接口
+│   └── miaoda-admin/              # 妙搭管理员控制台（独立 Vite 包）
+├── docs/                          # 架构、产品、运行与参考资产
+│   ├── adr/                       # 架构决策记录（ADR）
+│   └── oa-ticket-reimbursement-materials/
+│       ├── current/               # 当前生效的产品、实现和运行基线
+│       ├── proposals/             # 尚未启用的待评审方案
+│       ├── records/               # 诊断、验证与运行记录
+│       └── reference/             # 脱敏模板、调研与演练 fixture
+├── miaoda-auth.png                # 妙搭认证示意图
+├── nitro.config.ts                # Nitro 配置
+├── package.json                   # 依赖、开发、测试与运维脚本
+├── scripts/                       # 本地开发、Bridge 与运维辅助脚本
+├── server/
+│   ├── api/                       # 管理、飞书事件与内部 HTTP 接口
 │   ├── lib/
-│   │   ├── feishu/               # 飞书客户端、事件与报销 POC
-│   │   ├── health.ts             # 健康检查逻辑
-│   │   └── health.test.ts        # 健康检查测试
-│   └── routes/
-│       └── index.get.ts          # 根路由
-├── tsconfig.json                 # TypeScript 配置
-└── vercel.json                   # Vercel 部署配置
+│   │   ├── admin/                 # 管理端鉴权与服务逻辑
+│   │   ├── feishu/                # 飞书客户端、事件、卡片与优惠券 OA 流程
+│   │   └── health.ts              # 健康检查逻辑
+│   └── routes/                    # Nitro 路由
+├── tsconfig.json                  # TypeScript 配置
+└── vercel.json                    # Vercel 部署配置
 ```
 
 > `.nitro/`、`.output/` 和 `.vercel/` 是本地生成的类型、构建或部署产物，未列入上述源码结构；`.env.local` 用于本地私密配置，不应提交到版本控制。
 
-## POC 范围
+## 当前阶段与范围
 
-- POC 测试成员不超过 10 人，使用 Vercel Hobby（免费版）和测试数据；后续首批正式上线预计约 30 人，届时切换至付费正式版本或企业批准的执行环境。
-- 管理员通过妙搭工作台配置、保存草稿并发布报销模板；模板和实例继续以飞书 Base 为 POC 数据源
-- 员工通过飞书机器人调用已发布模板
-- 提交后进入审批人处理队列
-- 申请人和管理员可以追踪审批状态及日志
-- 每个实例固定绑定发起时的模板版本
+- 项目处于 POC 与受限内网试点阶段：使用测试数据和严格 allowlist，不承诺生产 SLA、全员开放或长期存储真实业务数据。
+- 业务人员在飞书 Bot 中发起流程、补充信息、确认卡片并查看结果；审批人仍在飞书原生审批中处理审批节点。
+- 管理员通过妙搭控制台配置和发布报销模板、查看流程状态与实例；前端页面权限不能替代服务端鉴权。
+- 当前优惠券 P1-1 只支持“常规满减券 + 单列 `SKUID` 白名单”的受控 Excel 生成和系统 OA 草稿交接。
+- 原生 OA 创建、批准附件提升和自动提交默认关闭；任何后续开放都必须遵循 rollout 的阶段 Gate、服务端授权、幂等和回读要求。
+- `proposals/` 中的一轮确认、三源填报等材料均为待评审方案，不代表已经开放的 Bot 能力。
 
 ## 优惠券 Excel 内网试点（P1-1）
 
@@ -73,12 +73,13 @@
 
 产品需求、实施方案、模板调研、脱敏演练和本地案例的数据边界统一见[优惠券 OA 文档库](docs/oa-ticket-reimbursement-materials/README.md)。P1-1 在保留其受限 Excel 生成范围的同时，将确认后的两份输出接入既有系统 OA 草稿；`draft-only` 阶段不创建原生 OA，后续服务端创建必须遵循当前 revision、明确确认、allowlist、幂等与回读门禁。
 
-## 项目边界
+## 系统与数据边界
 
-- 源系统：原 Slack/Notion 项目，仅用于功能对照
-- 目标系统：本工程 + 飞书自建应用 + 独立 Base
-- 部署项目：独立的 `aihuishou-feishu-workflow`，禁止复用原项目
-- 数据策略：POC 不迁移历史生产数据，只使用测试记录
+- **业务入口**：拍小宝飞书 Bot 承载业务人员与审批人的对话、卡片和原生 OA 导航；它不替代飞书原生审批人的处理职责。
+- **管理控制面**：妙搭管理员控制台负责配置和运营查看；最终身份、角色与写入权限由 Nitro 服务端复核。
+- **执行面**：本工程的 Nitro 服务负责事件处理、状态机、文件编排和受控 OA 交接；内网试点事件必须经企业托管 bridge 与服务端鉴权进入，不能以个人电脑或本地开发 shell 作为上线链路。
+- **POC 数据面**：飞书 Base / Drive 仅保存按流程隔离的草稿、元数据和冻结产物引用，不是正式生产主库或长期合规存档。
+- **数据策略**：不迁移历史生产数据；真实 OA、附件、模型审计输出和本地业务底稿必须留在 Git 忽略的 `cases/` 或 `drafts/`，不得随仓库公开提交。
 
 ## 当前资源
 

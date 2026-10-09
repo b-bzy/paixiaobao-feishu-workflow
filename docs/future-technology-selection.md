@@ -1,10 +1,11 @@
 # 后续技术选型决策
 
-> 状态：待决策，持续更新  
-> 创建日期：2026-09-28  
-> 适用阶段：POC 验证通过后的部门试点与正式生产阶段  
-> 当前 POC 基线：[爱回收飞书工作流 POC 架构基线 v1.0](architecture-decision.md)  
-> 规模前提：POC 测试人员不超过 10 人；后续首批正式上线人员约 30 人。
+> 状态：待决策，持续更新
+> 创建日期：2026-09-28
+> 最近更新：2026-10-08
+> 适用阶段：受控内网试点后的生产化评估与正式生产阶段；内网试点例外见 ADR-0006。
+> 当前基线：[爱回收飞书工作流 POC 与优惠券内网试点架构基线 v1.1](architecture-decision.md)
+> 规模前提：开发 POC 不超过 10 人；优惠券内网试点仅限批准 allowlist；后续首批正式上线人员约 30 人。
 
 ## 1. 文档目的
 
@@ -17,13 +18,42 @@
 后续选择产品或供应商时，必须保留以下边界；如果需要改变其中任何一项，必须先创建新的 ADR：
 
 1. 飞书仍是员工发起、审批和结果通知的主要业务入口。
-2. 飞书回调采用标准 HTTPS 协议；同步路径只做验证、去重、可靠接收和快速响应，耗时工作异步处理。
+2. 正式目标仍采用标准 HTTPS callback：同步路径只做验证、去重、可靠接收和快速响应，耗时工作异步处理。经 [ADR-0006](adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) 接受的企业托管 WebSocket bridge 仅是时间受限的优惠券内网试点例外，不能取代此目标。
 3. 管理员配置体验与任务执行面分离；妙搭页面权限不能替代后端鉴权。
 4. 权限、审批路径、状态转换、幂等和最终业务写入由确定性代码控制，AI/Agent 不得绕过这些规则。
 5. 已发布配置、流程实例、审批、事件和审计只能有一个权威数据源；禁止 Base、妙搭数据库和主数据库长期三方双写。
-6. 运行时不能依赖个人电脑、飞书 CLI、函数本地磁盘、进程内内存或进程内队列保存关键状态。
+6. 正式运行时不能依赖个人电脑、个人登录、函数本地磁盘、进程内内存或进程内队列保存关键状态。试点 bridge 也必须运行在企业托管常驻环境，并具有持久 outbox、认证、去重、监控和明确退出条件。
 
 这些边界的决策背景见 [ADR-0001](adr/0001-adopt-phased-hybrid-architecture.md)、[ADR-0002](adr/0002-use-http-callback-as-event-ingress.md) 和 [ADR-0003](adr/0003-separate-miaoda-control-plane-and-vercel-execution-plane.md)。
+
+## 2.1 优惠券内网试点例外登记
+
+该登记只记录已接受的试点例外，不能替代生产选型或作为生产批准。
+
+| 项目 | 当前决定 |
+| --- | --- |
+| 适用范围 | 仅批准的优惠券路线和服务端 allowlist；先 draft-only，后经 canary 才可考虑原生 OA |
+| 临时入口 | 企业托管 Linux VM/容器中的 `lark-cli` WebSocket bridge → 已签名 HTTPS → Vercel/Nitro |
+| Owner / 审批 | 见 [ADR-0006](adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) 与 [rollout](oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)；每次阶段变更须填写 checklist |
+| 补偿控制 | bridge 专用认证、timestamp/nonce 重放防护、持久 outbox/去重、单活动消费者、可观测性、allowlist、kill switch、回滚与对账 |
+| 期限/复核 | 每个 rollout ring 完成后复核；扩大人群、真实原生 OA 或发现任一回滚触发条件时必须重新审批 |
+| 退出条件 | HTTP callback 等价合同、持久接收/异步执行、切换和回滚演练完成；或不满足试点安全门禁时关闭 bridge |
+
+**仍未决定：**正式生产供应商、生产 HA/备份等级和长期云平台。不得因进入内网试点而默认选定其中任何一项。
+
+### 2.2 耐久控制面试点决策（2026-10-09）
+
+| 项目 | 当前决定 |
+| --- | --- |
+| 适用范围 | 优惠券受控内网试点的 R1/R2；不构成正式生产采购或发布批准。 |
+| 数据库 | 使用企业批准的托管 PostgreSQL，作为 receipt、outbox、task、审批 attempt、effect 与审计的唯一事实源。 |
+| 队列 | R1/R2 使用 PostgreSQL transactional outbox、lease 和 DLQ；领域接口保留未来接入企业 broker 的替换点。 |
+| 文件 | 使用加密 S3 兼容对象存储保存 canonical source/artifact bytes；Drive/Base 仅为飞书投影。 |
+| 执行面 | 企业托管容器运行 bridge 和 worker；Vercel/Nitro 保留 HTTP/API 和受保护 ingress。 |
+| 退出路径 | 以同一 inbox/outbox 合同替换 bridge 为标准 HTTPS callback，不重写领域任务或审批提交。 |
+| ADR | [ADR-0007](adr/0007-adopt-durable-control-plane-for-coupon-pilot.md)。 |
+
+供应商、地域、数据保留、备份等级、密钥服务和生产 HA 在企业证据批准前仍为 No-go。
 
 ## 3. 何时启动选型
 

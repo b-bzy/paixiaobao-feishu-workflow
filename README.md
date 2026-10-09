@@ -48,20 +48,30 @@
 
 ## 优惠券 Excel 内网试点（P1-1）
 
-试点入口为 Bot 单聊中的 `优惠券Excel试点`。它只支持“常规满减券 + 单列 SKUID 白名单”：确认生成结果后，会自动填写**系统 OA 草稿**并将两份冻结 Excel 上传为审批附件；它不会自动确认或提交正式 OA。
+试点入口为 Bot 单聊中的 `优惠券Excel试点`。它只支持“常规满减券 + 单列 SKUID 白名单”：确认生成结果后形成**系统 OA 草稿**并冻结两份受控 Excel。`draft-only` 首发只保存 Drive/Base 引用、hash 与草稿状态；进入原生 OA canary 前，现有审批附件提升逻辑必须改为最终门禁后的即时提升。Excel 流程自身绝不自动确认或提交正式 OA。
+
+> **上线边界**：本地 `pnpm dev:events` 仅用于调试。内网首发必须使用企业托管、常驻且受监督的长连接 bridge，经已签名的请求将事件交给 Vercel/Nitro。首发为 `draft-only`，严禁调用原生 OA 创建 API；仅在 [rollout](docs/oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md) 的原生 OA Gate 全部通过后，才可向严格服务端 allowlist 开放 canary。该例外不取代 [ADR-0002](docs/adr/0002-use-http-callback-as-event-ingress.md) 的长期 HTTP callback 目标。
 
 启用前需准备：
 
 1. 在现有 Base App 中创建**独立**的「优惠券 Excel 试点草稿」表，不得复用 `FEISHU_COUPON_DRAFT_TABLE_ID` 指向的 OA 草稿表；字段需与 `excel-pilot-store.ts` 中的 `recordFields()` 对应，特别是附件类型字段 `Generated Coupon File`、`Generated Whitelist File` 和长文本字段 `OA Handoff JSON`。
 2. 创建供应用身份写入的飞书 Drive 文件夹，记录文件夹 token。
-3. 为应用开通 Base 读写、消息资源下载、Drive 文件上传/下载和审批附件上传所需权限并发布应用版本。
-4. 在 Vercel 环境变量中设置 `FEISHU_COUPON_EXCEL_PILOT_ENABLED=true`、试点表 ID、Drive 文件夹 token 和 `DEEPSEEK_API_KEY`。
+3. 为 R2 开通 Base 读写、消息资源下载和 Drive 文件上传/下载并发布应用版本；审批附件上传、原生 instance create/get 仅在 R3 原生 OA Gate 前以隔离定义/测试用户完成权限验证。
+4. 在 Vercel 环境变量中设置 `FEISHU_COUPON_EXCEL_PILOT_ENABLED=true`、试点表 ID、Drive 文件夹 token 和 `DEEPSEEK_API_KEY`；上线环境还必须通过 rollout 要求的显式 fail-closed stage/allowlist/kill switch 改造，不能只依赖这些变量。
 
-生成结果会上传到该 Drive 文件夹，并同时附加到系统自有的 Base 试点草稿。自动填写只提升两份已确认的生成文件，源白名单绝不会上传到审批附件库。寄卖/pop 仍须由业务员手动上传满减测算图片；随后仍须手动确认并点击现有的正式 OA 提交按钮。
+生成结果会上传到该 Drive 文件夹，并同时附加到系统自有的 Base 试点草稿。源白名单绝不会上传到审批附件库。寄卖/pop 仍须由业务员手动上传满减测算图片；在 `draft-only` 阶段，用户只会看到草稿/补件/核对结果。只有 rollout 的 native-submit Gate 通过后，当前 revision 的最终确认才可按受控路径上传批准附件并创建、回读原生 OA。
+
+### 试点失败反馈与安全重试样例
+
+下图为用户提供的、仅含测试数据的飞书 Bot 对话记录。它展示了三类可恢复反馈：映射确认卡过期、白名单暂不能接收，以及 Drive 下载返回 `403` 后系统 OA 草稿未完成。前两种情况必须在最新卡片中修正后继续；最后一种可以安全重试。**两份 Excel 冻结不等于 OA 已创建，更不等于正式 OA 已提交。**
+
+![优惠券 Excel 试点的失败反馈与重试卡片](docs/oa-ticket-reimbursement-materials/reference/fixtures/excel-pilot-retry-evidence/coupon-excel-pilot-retry-evidence-2026-10-09.png)
+
+截图中可见的“测试SKU白名单”已作为可下载、脱敏的 [Excel 示例文件](docs/oa-ticket-reimbursement-materials/reference/fixtures/excel-pilot-retry-evidence/测试SKU白名单.xlsx) 上传；它仅含 `SKUID` 列和三个测试值。原始附件没有随截图提供，因此仓库版本是根据可见内容重建的样例，而不是原始文件的二进制副本。完整的证据边界、校验和与场景说明见 [重试反馈 fixture](docs/oa-ticket-reimbursement-materials/reference/fixtures/excel-pilot-retry-evidence/README.md)。
 
 ## 优惠券 OA 文档库
 
-产品需求、实施方案、模板调研、脱敏演练和本地案例的数据边界统一见[优惠券 OA 文档库](docs/oa-ticket-reimbursement-materials/README.md)。本次 P1-1 增量在保留其受限 Excel 生成范围的同时，将确认后的两份输出接入既有系统 OA 草稿；正式 OA 始终由业务员人工发起。
+产品需求、实施方案、模板调研、脱敏演练和本地案例的数据边界统一见[优惠券 OA 文档库](docs/oa-ticket-reimbursement-materials/README.md)。P1-1 在保留其受限 Excel 生成范围的同时，将确认后的两份输出接入既有系统 OA 草稿；`draft-only` 阶段不创建原生 OA，后续服务端创建必须遵循当前 revision、明确确认、allowlist、幂等与回读门禁。
 
 ## 项目边界
 
@@ -121,10 +131,13 @@ pnpm build:admin
 
 ## 架构文档
 
-- [当前 POC 架构基线 v1.0](docs/architecture-decision.md)：当前已采用的飞书 + 妙搭 + Vercel + Base 架构、职责、边界、验收与 POC 成本估算。
-- [后续技术选型决策](docs/future-technology-selection.md)：部门试点和正式生产阶段待评估的云、数据库、队列、日志、对象存储及 AI/Agent 选型流程。
+- [当前 POC 与优惠券内网试点架构基线 v1.1](docs/architecture-decision.md)：当前已采用的飞书 + 妙搭 + Vercel + Base 架构，以及企业托管 bridge 的受限试点边界。
+- [后续技术选型决策](docs/future-technology-selection.md)：内网试点例外登记，以及生产云、数据库、队列、日志、对象存储及 AI/Agent 的待决策项。
+- [跨产品需求排期 Backlog](docs/requirements-backlog.md)：记录已确认但尚未排入当前交付范围的跨产品需求；当前包含优惠券 OA 的身份映射与配券节奏表 API 候选。
 - [ADR-0001：分阶段混合架构](docs/adr/0001-adopt-phased-hybrid-architecture.md)
 - [ADR-0002：HTTP 回调事件入口](docs/adr/0002-use-http-callback-as-event-ingress.md)
 - [ADR-0003：妙搭控制面与 Vercel 执行面](docs/adr/0003-separate-miaoda-control-plane-and-vercel-execution-plane.md)
+- [ADR-0004：系统草稿与确认即提交](docs/adr/0004-bot-confirmed-submit-for-coupon-oa.md)
+- [ADR-0006：企业托管长连接内网试点](docs/adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)
 
 当前 POC 的架构边界变更必须新增 ADR；后续技术选择先在“后续技术选型决策”中完成评估，若改变职责边界、事实源、事件入口或正式部署平台，也必须新增 ADR。

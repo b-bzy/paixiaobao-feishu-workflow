@@ -143,7 +143,7 @@ Vercel 复核管理员角色、校验配置、生成版本号
 - 正式 PostgreSQL、持久化队列、日志和备份需要独立选型与成本。
 
 成本预算和阶段性组合见
-[总体架构选型的成本估算](../architecture-decision.md#16-架构组合成本估算)。成本属于
+[后续技术选型决策](../future-technology-selection.md)。成本属于
 可变运营数据，不在本 ADR 中固化具体供应商报价。
 
 ## Validation
@@ -159,5 +159,7 @@ Vercel 复核管理员角色、校验配置、生成版本号
 
 - [ADR-0001：采用分阶段混合架构](0001-adopt-phased-hybrid-architecture.md)
 - [ADR-0002：使用飞书 HTTP 回调](0002-use-http-callback-as-event-ingress.md)
-- [总体架构选型](../architecture-decision.md)
-- [迁移方案](../migration-plan.md)
+- [总体架构基线](../architecture-decision.md)
+- [后续技术选型决策](../future-technology-selection.md)
+- [优惠券内网试点 rollout（仅作为 ADR-0002 的临时例外说明）](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
+- [ADR-0006：企业托管长连接内网试点](0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)

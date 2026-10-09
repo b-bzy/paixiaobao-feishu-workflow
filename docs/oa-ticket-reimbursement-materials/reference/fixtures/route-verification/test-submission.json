@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "coupon-oa-route-verification-fixture-v1",
+  "purpose": "仅用于演练审批定义；不得上传到正式审批定义或生产流程。",
+  "submission": {
+    "applicationType": "优惠券申请",
+    "businessMode": "寄卖",
+    "activityName": "【自动填报演练，请勿配置】寄卖满减券",
+    "activityBackground": "本申请仅用于验证自动填报与原生提交的审批路径一致性，不产生、不配置、不启用真实优惠券或商品。",
+    "overDeduction": "否",
+    "estimatedGmvYuan": 10000,
+    "estimatedCostYuan": 100,
+    "expectedRoi": 100,
+    "channels": [
+      "京东渠道",
+      "严选APP及小程序"
+    ],
+    "activityStartAt": "2030-01-01",
+    "activityEndAt": "2030-01-01",
+    "durationDays": 1
+  },
+  "attachments": [
+    {
+      "role": "calcImage",
+      "file": "满减测算图片-自动填报演练.png",
+      "bytes": 84,
+      "sha256": "c2d9bd075c45a2662787be1fe423137491ba807941e4aa9d224a2c002e47d96f"
+    },
+    {
+      "role": "couponTable",
+      "file": "配券信息表-自动填报演练.xlsx",
+      "bytes": 7078,
+      "sha256": "f107a65d63a09a1c9677f33f5fef4fe0b4e1f75cde8bd5e96123fd2f4b1f76f5"
+    },
+    {
+      "role": "productWhitelist",
+      "file": "商品明细白名单-自动填报演练.xlsx",
+      "bytes": 4934,
+      "sha256": "338880470736c9abf6d96b920d8b89829391ef79adcc99c8852519d3303ef91c"
+    }
+  ]
+}

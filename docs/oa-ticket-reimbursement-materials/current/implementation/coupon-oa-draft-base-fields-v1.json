@@ -1,0 +1,14 @@
+[
+  {"name":"Draft ID","type":"text"},
+  {"name":"Owner Open ID","type":"text"},
+  {"name":"Status","type":"select","multiple":false,"options":[{"name":"Draft"},{"name":"Validated"},{"name":"Confirmed"},{"name":"Submitting"},{"name":"Submitted"},{"name":"CreatedNeedsReview"},{"name":"SubmissionUnknown"},{"name":"Failed"},{"name":"Canceled"}]},
+  {"name":"Schema Version","type":"text"},
+  {"name":"Definition Hash","type":"text"},
+  {"name":"Fields JSON","type":"text"},
+  {"name":"Attachments JSON","type":"text"},
+  {"name":"Validation Issues JSON","type":"text"},
+  {"name":"Confirmed At","type":"date"},
+  {"name":"Approval Instance Code","type":"text"},
+  {"name":"Approval Instance Link","type":"url"},
+  {"name":"Failure Reason","type":"text"}
+]

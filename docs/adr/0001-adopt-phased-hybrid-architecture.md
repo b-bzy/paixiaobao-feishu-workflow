@@ -184,5 +184,6 @@ POC 通过以下条件后，才视为本阶段架构有效：
 
 ## Related Documents
 
-- [总体架构选型](../architecture-decision.md)
-- [Slack/Notion 到飞书迁移方案](../migration-plan.md)
+- [总体架构基线](../architecture-decision.md)
+- [后续技术选型决策](../future-technology-selection.md)
+- [优惠券内网试点 rollout](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)

@@ -4,7 +4,7 @@
 - 日期：2026-09-29
 - 变更：创建/回读实例使用应用 tenant access token，并以申请人 `open_id` 标记实例发起人；用户 OAuth 不再是自动填单前置依赖
 - 变更：以单一提交 schema 取代独立映射表；字段业务语义、飞书控件绑定、编码/解码规则同源维护
-- 关联：[优惠券 OA 智能提单 MVP PRD v1.2](../oa-ticket-reimbursement-materials/specifications/coupon-oa-mvp-prd-v1.2.md) · [机器人端自动填报实施方案 v1.3](../oa-ticket-reimbursement-materials/implementation/coupon-oa-bot-autofill-plan-v1.3.md)
+- 关联：[优惠券 OA 智能提单 MVP PRD v1.3](../oa-ticket-reimbursement-materials/current/product/coupon-oa-mvp-prd-v1.3.md) · [机器人端自动填报实施方案 v1.4](../oa-ticket-reimbursement-materials/current/implementation/coupon-oa-bot-autofill-plan-v1.4.md) · [内网试点 rollout](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
 
 ## 背景
 
@@ -35,7 +35,7 @@ PRD v1.2 将 P1（自动填写 OA）的前置条件定为"流程管理员确认 
 
 ## 理由
 
-- 系统业务草稿补足飞书 API 无法创建客户端草稿的缺口：业务员可中断、续填、修改、复核，且草稿版本历史与 `/OA优惠券填报` skill 的结构化产物可统一为同一事实源。
+- 系统业务草稿补足飞书 API 无法创建客户端草稿的缺口：业务员可中断、续填、修改、复核。`/OA优惠券提报` Claude Code Skill 的本地结构化产物不是运行时系统草稿，也不会自动共享状态；如未来需要导入，必须以显式的服务端 schema、owner、revision、hash 与审计合同完成关联。
 - 单一提交 schema 将业务字段语义、飞书控件绑定及编码/解码规则合并维护，避免独立映射表与业务 schema 漂移；审批定义结构哈希变更时 fail-closed，创建后回读比对提供最终校验。
 - 该模式是唯一满足"自动填写"诉求的官方路径；"出错必被拦"（回读比对 + 自动止损）替代"控件绑定或编码永不犯错"的不可承诺目标。
 - OA 流程中优惠券配置位于部门人工审批之后，撤回/驳回窗口横跨人工节点，实际风险窗口较宽。
@@ -48,7 +48,15 @@ PRD v1.2 将 P1（自动填写 OA）的前置条件定为"流程管理员确认 
 - 审计完整：每单记录确认人/时间/提交 schema 版本/审批定义结构哈希/实例 code/回读结果。
 - App Secret 与 tenant access token 只保存在服务端环境变量；最小审批、附件和 Base scope；不向浏览器、卡片或日志输出 token。
 
-## 后果
+## 试点阶段澄清（2026-10-08）
+
+本 ADR 规定的是**允许服务端原生提交时**的确认、身份、定义 hash 与回读边界，不等于所有优惠券路径现在都可创建实例：
+
+- `优惠券Excel试点` 的 output confirmation 仅交接系统 OA 草稿；它本身不创建原生 OA。
+- 内网首发为 draft-only；只有 [rollout](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md) 的 native-submit Gate 通过后，服务端才可对当前 revision、明确确认且 allowlist 内的用户创建实例。
+- `CreatedNeedsReview` 与拟实施的 `SubmissionUnknown` 必须可人工对账；不能因 create/readback 异常盲目再次提交。
+- 本 ADR 不覆盖三源流程尚未完成的模板、字段映射与服务端实现前置条件。
+
 
 - 修订 PRD v1.2 中"P1 不自动提交"的边界；PRD 升版至 v1.3 时引用本 ADR。
 - 新增前置依赖：流程管理员提供目标定义 approval_code、开放可见范围、确认撤回规则；应用管理员审批审批定义读取、实例创建/读取、附件上传和 Base 读写 scope。

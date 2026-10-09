@@ -113,5 +113,7 @@ POC 阶段由妙搭托管管理员页面，Vercel 承载回调端点、管理 AP
 
 - [ADR-0001：采用分阶段混合架构](0001-adopt-phased-hybrid-architecture.md)
 - [ADR-0003：妙搭控制面与 Vercel 执行面](0003-separate-miaoda-control-plane-and-vercel-execution-plane.md)
-- [总体架构选型](../architecture-decision.md)
-- [迁移方案](../migration-plan.md)
+- [总体架构基线](../architecture-decision.md)
+- [后续技术选型决策](../future-technology-selection.md)
+- [优惠券内网试点 rollout（仅作为 ADR-0002 的临时例外说明）](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
+- [ADR-0006：企业托管长连接内网试点](0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)

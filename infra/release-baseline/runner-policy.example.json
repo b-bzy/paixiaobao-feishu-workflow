@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "fdev001-runner-policy-v1",
+  "noEgressPolicyId": "fdev001-no-egress-v1",
+  "noEgressImage": "REPLACE_WITH_PROTECTED_DIGEST",
+  "postgresOnlyPolicyId": "fdev001-postgres-only-v1",
+  "postgresOnlyImage": "REPLACE_WITH_PROTECTED_DIGEST",
+  "postgresTarget": "fdev001-postgres17-isolated-v1",
+  "dockerEngineMajor": 28,
+  "auditRunId": "REPLACE_WITH_PROTECTED_AUDIT_UUID"
+}

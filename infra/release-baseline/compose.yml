@@ -1,0 +1,84 @@
+name: fdev001-release-baseline
+
+services:
+  no-egress:
+    image: ${FDEV001_NO_EGRESS_IMAGE:?FDEV001_NO_EGRESS_IMAGE is required}
+    network_mode: "none"
+    read_only: true
+    user: "1000:1000"
+    working_dir: /workspace/scratch
+    environment:
+      FDEV001_HOST_ORCHESTRATED: "true"
+    command: ["node", "/runner/verify-feishu-dev-release-baseline.mjs", "--lane", "no-egress"]
+    volumes:
+      - type: bind
+        source: ${FDEV001_SOURCE_SNAPSHOT:?FDEV001_SOURCE_SNAPSHOT is required}
+        target: /workspace/source
+        read_only: true
+      - type: volume
+        source: fdev001_evidence
+        target: /workspace/evidence
+      - type: bind
+        source: ${FDEV001_POLICY_FILE:?FDEV001_POLICY_FILE is required}
+        target: /run/fdev001/policy.json
+        read_only: true
+    tmpfs:
+      - /workspace/scratch:uid=1000,gid=1000,mode=0700
+
+  postgres-only:
+    image: ${FDEV001_POSTGRES_ONLY_IMAGE:?FDEV001_POSTGRES_ONLY_IMAGE is required}
+    read_only: true
+    user: "1000:1000"
+    working_dir: /workspace/scratch
+    environment:
+      FDEV001_HOST_ORCHESTRATED: "true"
+      CONTROL_PLANE_TEST_DATABASE_URL_FILE: /run/secrets/control_plane_test_database_url
+    command: ["node", "/runner/verify-feishu-dev-release-baseline.mjs", "--lane", "postgres-only"]
+    volumes:
+      - type: bind
+        source: ${FDEV001_SOURCE_SNAPSHOT:?FDEV001_SOURCE_SNAPSHOT is required}
+        target: /workspace/source
+        read_only: true
+      - type: volume
+        source: fdev001_evidence
+        target: /workspace/evidence
+      - type: bind
+        source: ${FDEV001_POLICY_FILE:?FDEV001_POLICY_FILE is required}
+        target: /run/fdev001/policy.json
+        read_only: true
+    secrets:
+      - control_plane_test_database_url
+    networks:
+      - postgres_only
+    tmpfs:
+      - /workspace/scratch:uid=1000,gid=1000,mode=0700
+
+  postgres:
+    image: ${FDEV001_POSTGRES_IMAGE:?FDEV001_POSTGRES_IMAGE is required}
+    read_only: true
+    user: "999:999"
+    environment:
+      POSTGRES_DB: control_plane_test
+      POSTGRES_USER: control_plane_test
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    networks:
+      - postgres_only
+    tmpfs:
+      - /var/lib/postgresql/data:uid=999,gid=999,mode=0700
+
+networks:
+  postgres_only:
+    internal: true
+
+volumes:
+  fdev001_evidence:
+    external: true
+    name: ${FDEV001_EVIDENCE_VOLUME:?FDEV001_EVIDENCE_VOLUME is required}
+
+secrets:
+  control_plane_test_database_url:
+    file: ${FDEV001_TEST_DATABASE_URL_FILE:?FDEV001_TEST_DATABASE_URL_FILE is required}
+  postgres_password:
+    file: ${FDEV001_POSTGRES_PASSWORD_FILE:?FDEV001_POSTGRES_PASSWORD_FILE is required}

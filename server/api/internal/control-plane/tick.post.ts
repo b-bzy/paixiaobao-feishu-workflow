@@ -5,6 +5,7 @@ import {
   getDurableCouponWorkerRunOptions,
 } from "~/lib/control-plane/durable-worker-tick";
 import { getFeishuRuntimeStage } from "~/lib/control-plane/runtime-config";
+import { isCouponThreeSourceAiRecognitionEnabled } from "~/lib/feishu/coupon-oa/three-source/ai-config";
 
 /**
  * Authenticated scheduler entry point. It remains unavailable in local mode,
@@ -12,7 +13,10 @@ import { getFeishuRuntimeStage } from "~/lib/control-plane/runtime-config";
  */
 export default defineEventHandler(async (event) => {
   try {
-    if (getFeishuRuntimeStage() === "local") {
+    if (
+      getFeishuRuntimeStage() === "local" &&
+      !isCouponThreeSourceAiRecognitionEnabled()
+    ) {
       setResponseStatus(event, 503);
       return { code: 1, message: "Durable worker is not installed" };
     }

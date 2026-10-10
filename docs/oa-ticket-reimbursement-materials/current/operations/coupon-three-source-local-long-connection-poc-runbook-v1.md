@@ -88,7 +88,7 @@ FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
 
 1. 使用只含 P0 long-connection scope 的 Git revision 部署 Vercel；不得发布当前脏工作区或 P1 control-plane 文件。
 2. 复核 Vercel 中 native kill switch 为 `false`、三源 pilot 为 `false`，并确认 `/api/feishu/poc-bridge` 对无效 HMAC fail closed。
-3. 若本次不测 AI，确认 AI 开关仍为 `false`，跳过 migration/tick。若本次明确测试 AI，先执行 `pnpm db:migrate:control-plane`，确认 `0005_coupon_ai_recognition_runs.sql` 已应用，再对受保护的 control-plane tick 做无业务副作用健康检查；任一失败都关闭 AI 开关。
+3. 若本次不测 AI，确认 AI 开关仍为 `false`，跳过 migration/tick。若本次明确测试 AI，先执行 `pnpm db:migrate:control-plane`，确认 `0005_coupon_ai_recognition_runs.sql` 已应用，再对受保护的 control-plane tick 做无业务副作用健康检查；`local` 阶段仅在 AI Gate 明确开启时允许该 tick，且仍必须通过独立 Bearer token、数据库与 worker 配置检查。任一失败都关闭 AI 开关。
 4. 在 Mac 确认单 consumer 后启动：
    ```bash
    pnpm dev:coupon-three-source:p0

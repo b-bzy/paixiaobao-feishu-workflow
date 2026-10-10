@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   createWorker: vi.fn(),
   getOptions: vi.fn(),
   getStage: vi.fn(),
+  isAiEnabled: vi.fn(),
   runOnce: vi.fn(),
 }));
 
@@ -20,6 +21,9 @@ vi.mock("~/lib/control-plane/durable-worker-tick", () => ({
 }));
 vi.mock("~/lib/control-plane/runtime-config", () => ({
   getFeishuRuntimeStage: mocks.getStage,
+}));
+vi.mock("~/lib/feishu/coupon-oa/three-source/ai-config", () => ({
+  isCouponThreeSourceAiRecognitionEnabled: mocks.isAiEnabled,
 }));
 
 interface FakeTickEvent {
@@ -38,6 +42,7 @@ describe("durable control-plane tick route", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    mocks.isAiEnabled.mockReturnValue(false);
     mocks.getOptions.mockReturnValue({
       workerId: "worker-1",
       jobLimit: 10,
@@ -88,6 +93,23 @@ describe("durable control-plane tick route", () => {
 
   it("runs a configured worker only after the route authorization guard", async () => {
     mocks.getStage.mockReturnValue("r2-draft-only");
+    const event: FakeTickEvent = {
+      headers: { authorization: "Bearer scheduler-token" },
+    };
+
+    await expect((await tickHandler())(event)).resolves.toMatchObject({
+      code: 0,
+      result: { skipped: false },
+    });
+    expect(mocks.authorize).toHaveBeenCalledWith("Bearer scheduler-token");
+    expect(mocks.runOnce).toHaveBeenCalledWith(
+      expect.objectContaining({ workerId: "worker-1" }),
+    );
+  });
+
+  it("allows an authorized local tick only when the P0 AI gate is enabled", async () => {
+    mocks.getStage.mockReturnValue("local");
+    mocks.isAiEnabled.mockReturnValue(true);
     const event: FakeTickEvent = {
       headers: { authorization: "Bearer scheduler-token" },
     };

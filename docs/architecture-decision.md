@@ -12,7 +12,8 @@
 3. **飞书 Base 与 Drive**可作为按流程隔离的 POC 草稿和冻结产物存储；它们不是长期多事实源生产设计，也未证明提供原生 OA 创建所需的原子唯一约束。
 4. [ADR-0002](adr/0002-use-http-callback-as-event-ingress.md) 的 HTTPS callback + 持久接收 + 异步执行仍是长期正式目标。
 5. [ADR-0006](adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) 允许一个企业托管的 `lark-cli` bridge 作为**时间受限内网试点例外**。个人电脑、个人凭据、开发 shell 与本地 CLI 常驻仍不允许成为上线链路。
-6. 权限、版本、状态变迁、幂等、最终审批写入与回读由确定性服务端代码控制；AI 不得决定审批结果、篡改路由或补造业务事实。
+6. [ADR-0010](adr/0010-timebox-local-long-connection-three-source-poc.md) 仅为一个可随时停止的 P0 用户体验窗口允许本机长连接；它不是 ADR-0006 的替代，不具备可靠 ACK/retry/recovery，也绝不构成上线链路。
+7. 权限、版本、状态变迁、幂等、最终审批写入与回读由确定性服务端代码控制；AI 不得决定审批结果、篡改路由或补造业务事实。
 
 ## 2. 当前优惠券路线与阶段
 
@@ -102,6 +103,7 @@
 - [ADR-0003：妙搭控制面与 Vercel 执行面](adr/0003-separate-miaoda-control-plane-and-vercel-execution-plane.md)
 - [ADR-0004：系统草稿与确认即提交](adr/0004-bot-confirmed-submit-for-coupon-oa.md)
 - [ADR-0006：企业托管长连接内网试点](adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)
+- [ADR-0010：本机长连接三源 P0](adr/0010-timebox-local-long-connection-three-source-poc.md)
 - [后续技术选型决策](future-technology-selection.md)
 - [优惠券内网试点 rollout](oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
 - [Bridge 设计](oa-ticket-reimbursement-materials/current/implementation/coupon-oa-managed-bridge-design-v1.md)

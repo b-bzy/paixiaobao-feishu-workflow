@@ -1,9 +1,9 @@
-# 三源优惠券直接 HTTP draft-only POC 运行手册 v1
+# 已废止：三源优惠券直接 HTTP draft-only POC 运行手册 v1
 
-> **状态**：待相关 Owner 审阅的单用户、限时测试部署手册；不是 R1/R2/R3、生产上线或原生 OA 授权。
+> **状态**：已被[本机长连接 POC 运行手册](coupon-three-source-local-long-connection-poc-runbook-v1.md)取代；只保留直接 HTTP 的历史记录，不得用于当前 P0 配置或 E2E。
 > **日期**：2026-10-10
-> **适用拓扑**：飞书开发者服务器回调 → Vercel `/api/feishu/process` → 严选三源 Bot → OA 测试稿。
-> **权威边界**：[ADR-0009](../../../adr/0009-timebox-direct-http-callback-for-three-source-draft-poc.md)；P0 开发范围以[最快 Bot POC 交付计划](../../proposals/three-source/coupon-three-source-fast-poc-delivery-plan-v1.md)为准；与本手册冲突时以 ADR 和 rollout 为准。
+> **历史拓扑**：飞书开发者服务器回调 → Vercel `/api/feishu/process` → 严选三源 Bot → OA 测试稿。
+> **当前权威边界**：[ADR-0010](../../../adr/0010-timebox-local-long-connection-three-source-poc.md)。
 
 ## 0. 目的与非目标
 

@@ -7,6 +7,7 @@
     "dev": "zsh scripts/start-local-dev.sh",
     "dev:admin": "pnpm --filter miaoda-admin dev",
     "dev:events": "node scripts/long-connection-bridge.mjs",
+    "dev:coupon-three-source:p0": "FEISHU_BRIDGE_P0_MODE=true node scripts/long-connection-bridge.mjs",
     "build": "nitro build && node scripts/inject-edge-callback.mjs",
     "build:admin": "pnpm --filter miaoda-admin build",
     "prepare": "nitro prepare",

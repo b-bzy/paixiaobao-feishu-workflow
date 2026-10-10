@@ -1,9 +1,11 @@
-# ADR-0009：将三源优惠券直接 HTTP 回调用于限时 draft-only POC
+# ADR-0009：已废止的三源优惠券直接 HTTP draft-only POC
 
-- **状态**：提议中；记录选定的单用户 POC 方式，仍待优惠券流程、应用、工程与运行 Owner 审阅；不构成 R1/R2/R3 或生产批准
+- **状态**：已被 [ADR-0010](0010-timebox-local-long-connection-three-source-poc.md) 取代；保留为历史，不得按本文配置或执行当前 P0。
 - **日期**：2026-10-10
 - **决策 Owner**：优惠券流程 Owner、工程 Owner、飞书应用管理员
-- **关联**：[ADR-0002](0002-use-http-callback-as-event-ingress.md) · [ADR-0006](0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) · [ADR-0007](0007-adopt-durable-control-plane-for-coupon-pilot.md) · [ADR-0008](0008-limit-local-lark-cli-to-vercel-integration-smoke.md)
+- **关联**：[ADR-0010](0010-timebox-local-long-connection-three-source-poc.md) · [ADR-0002](0002-use-http-callback-as-event-ingress.md) · [ADR-0006](0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) · [ADR-0007](0007-adopt-durable-control-plane-for-coupon-pilot.md) · [ADR-0008](0008-limit-local-lark-cli-to-vercel-integration-smoke.md)
+
+> **历史说明：** 这是原先为 direct HTTP callback 编写的 P0 方案。需求方随后选择保留测试 App 的长连接模式；当前可执行手册为[本机长连接 POC 运行手册](../oa-ticket-reimbursement-materials/current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
 
 ## 背景
 

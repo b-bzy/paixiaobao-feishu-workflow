@@ -241,6 +241,19 @@ describe("handleFeishuPocEvent", () => {
     expect(sendFeishuCard).toHaveBeenCalledOnce();
   });
 
+  it("does not fall through to legacy routes for the P0 bridge", async () => {
+    const result = await handleFeishuPocEvent(couponOaEvent("OA优惠券填报"), {
+      trustedIngress: "bridge",
+      threeSourceOnly: true,
+    });
+
+    expect(result).toEqual({
+      kind: "ignored",
+      reason: "Unsupported three-source P0 message",
+    });
+    expect(sendFeishuCard).not.toHaveBeenCalled();
+  });
+
   it("persists entered fields as a system draft and requests attachments", async () => {
     await handleFeishuPocEvent({
       header: { token: "verify-me" },

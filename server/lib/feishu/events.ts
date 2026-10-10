@@ -358,6 +358,8 @@ function draftPreviewCard(draft: Awaited<ReturnType<typeof getCouponOaDraft>>) {
 export interface FeishuPocEventOptions {
   /** Only the HMAC-verified private bridge ingress may set this value. */
   trustedIngress?: "bridge";
+  /** Restricts the temporary P0 bridge to the three-source adapter. */
+  threeSourceOnly?: boolean;
 }
 
 export async function handleFeishuPocEvent(
@@ -397,20 +399,24 @@ export async function handleFeishuPocEvent(
     if (["image", "file"].includes(message.message_type)) {
       if (message.message_type === "file" && message.message_id) {
         const content = objectValue(message.content);
-        const fileKey = String(content?.file_key ?? "");
-        const fileName = String(content?.file_name ?? "未命名来源文件.xlsx");
-        if (fileKey) {
-          const threeSourceResult = await dispatchCouponThreeSourceFile({
-            openId,
-            messageId: message.message_id,
-            fileKey,
-            fileName,
-            idempotencyKey,
-          });
-          if (threeSourceResult.handled) {
-            return { kind: "handled", message: threeSourceResult.message };
-          }
+        const fileKey = String(content?.file_key ?? "") || undefined;
+        const fileName = String(content?.file_name ?? "") || undefined;
+        const threeSourceResult = await dispatchCouponThreeSourceFile({
+          openId,
+          messageId: message.message_id,
+          fileKey,
+          fileName,
+          idempotencyKey,
+        });
+        if (threeSourceResult.handled) {
+          return { kind: "handled", message: threeSourceResult.message };
         }
+      }
+      if (options.threeSourceOnly) {
+        return {
+          kind: "ignored",
+          reason: "Unsupported three-source P0 attachment",
+        };
       }
       const workflowState = await activeCouponWorkflowState(openId);
       await sendExpiredCouponWorkflowCards(openId, workflowState);
@@ -552,6 +558,12 @@ export async function handleFeishuPocEvent(
     });
     if (threeSourceResult.handled) {
       return { kind: "handled", message: threeSourceResult.message };
+    }
+    if (options.threeSourceOnly) {
+      return {
+        kind: "ignored",
+        reason: "Unsupported three-source P0 message",
+      };
     }
     if (
       isCouponThreeSourcePilotEnabled() &&
@@ -773,6 +785,9 @@ export async function handleFeishuPocEvent(
   });
   if (threeSourceResult.handled) {
     return { kind: "handled", message: threeSourceResult.message };
+  }
+  if (options.threeSourceOnly) {
+    return { kind: "ignored", reason: "Unsupported three-source P0 action" };
   }
   const name = payload.action?.name ?? "";
   const [mappingAction, mappingPilotRecordId, mappingRevisionText] =

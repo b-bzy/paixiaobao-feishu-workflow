@@ -54,6 +54,7 @@ function dependencies(input: {
     listActiveThreeSource: async () => current,
     listActiveOa: async () => input.activeOa ?? [],
     listActiveExcel: async () => input.activeExcel ?? [],
+    getMessageBody: vi.fn(),
     downloadFile: vi.fn(),
     sendCard,
     getOaDraft: vi.fn(),
@@ -122,7 +123,65 @@ describe("three-source Bot dispatcher", () => {
         fileName: "白名单.xlsx",
       }),
     ).resolves.toEqual({ handled: false });
+    expect(values.getMessageBody).not.toHaveBeenCalled();
     expect(values.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("resolves a long-connection file through its original message body", async () => {
+    const current = draft();
+    const receiveSource: CouponThreeSourcePilotService["receiveSource"] = vi.fn(
+      async (input) => ({
+        ...current,
+        task: {
+          ...current.task,
+          sources: {
+            couponTable: {
+              role: "couponTable" as const,
+              bytes: input.bytes.byteLength,
+              fileKey: input.fileKey,
+              fileName: input.fileName,
+              messageId: input.messageId,
+              sha256: "a".repeat(64),
+            },
+          },
+        },
+      }),
+    );
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: { receiveSource },
+    });
+    vi.mocked(values.getMessageBody).mockResolvedValue({
+      messageType: "file",
+      content: JSON.stringify({
+        file_key: "file-from-message",
+        file_name: "业务白名单.xlsx",
+      }),
+    });
+    vi.mocked(values.downloadFile).mockResolvedValue(new Uint8Array([1, 2]));
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchFile({
+        openId: "ou_owner",
+        messageId: "om-from-cli",
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(values.getMessageBody).toHaveBeenCalledWith({
+      messageId: "om-from-cli",
+    });
+    expect(values.downloadFile).toHaveBeenCalledWith({
+      messageId: "om-from-cli",
+      fileKey: "file-from-message",
+      type: "file",
+    });
+    expect(receiveSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileKey: "file-from-message",
+        fileName: "业务白名单.xlsx",
+      }),
+    );
   });
 
   it("passes mapping choices to the revisioned service before generating artifacts", async () => {

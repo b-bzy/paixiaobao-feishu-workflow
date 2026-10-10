@@ -1,6 +1,9 @@
 import { multiTierSkuSheetNames } from "../../../excel-template-engine/template-manifests";
 import { sendFeishuCard } from "../../client";
-import { downloadFeishuMessageResource } from "../../message-client";
+import {
+  downloadFeishuMessageResource,
+  getFeishuMessageBody,
+} from "../../message-client";
 import { buildCouponOaPreviewCard } from "../cards";
 import {
   assertCouponOaUserAllowed,
@@ -48,6 +51,7 @@ export interface CouponThreeSourceDispatcherDependencies {
   listActiveThreeSource(openId: string): Promise<CouponThreeSourcePilotDraft[]>;
   listActiveOa(openId: string): Promise<Array<{ recordId: string }>>;
   listActiveExcel(openId: string): Promise<Array<{ recordId: string }>>;
+  getMessageBody: typeof getFeishuMessageBody;
   downloadFile(input: {
     messageId: string;
     fileKey: string;
@@ -71,6 +75,7 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   listActiveThreeSource: listActiveCouponThreeSourcePilotDrafts,
   listActiveOa: listActiveCouponOaDrafts,
   listActiveExcel: listActiveCouponExcelPilotDrafts,
+  getMessageBody: getFeishuMessageBody,
   downloadFile: downloadFeishuMessageResource,
   sendCard: sendFeishuCard,
   getOaDraft: getCouponOaDraft,
@@ -88,6 +93,21 @@ function parseRevision(value: unknown): number | undefined {
 function stringValue(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text || undefined;
+}
+
+function fileMetadata(content: string): {
+  fileKey?: string;
+  fileName?: string;
+} {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return {
+      fileKey: stringValue(value.file_key),
+      fileName: stringValue(value.file_name),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function overlapCount(draft: CouponThreeSourcePilotDraft): number {
@@ -302,8 +322,8 @@ export function createCouponThreeSourceDispatcher(
   async function dispatchFile(input: {
     openId: string;
     messageId: string;
-    fileKey: string;
-    fileName: string;
+    fileKey?: string;
+    fileName?: string;
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
     if (!dependencies.isPilotEnabled()) return { handled: false };
@@ -344,9 +364,25 @@ export function createCouponThreeSourceDispatcher(
       return { handled: true, message: conflict };
     }
     try {
+      let fileKey = stringValue(input.fileKey);
+      let fileName = stringValue(input.fileName);
+      if (!fileKey) {
+        const original = await dependencies.getMessageBody({
+          messageId: input.messageId,
+        });
+        if (original.messageType !== "file") {
+          throw new Error("来源消息不是文件类型");
+        }
+        const metadata = fileMetadata(original.content);
+        fileKey = metadata.fileKey;
+        fileName = fileName ?? metadata.fileName;
+      }
+      if (!fileKey) {
+        throw new Error("来源文件未包含 file_key");
+      }
       const bytes = await dependencies.downloadFile({
         messageId: input.messageId,
-        fileKey: input.fileKey,
+        fileKey,
         type: "file",
       });
       const next = await dependencies.createService().receiveSource({
@@ -354,8 +390,8 @@ export function createCouponThreeSourceDispatcher(
         ownerOpenId: input.openId,
         expectedRevision: active[0].task.revision,
         messageId: input.messageId,
-        fileKey: input.fileKey,
-        fileName: input.fileName,
+        fileKey,
+        fileName: fileName ?? "未命名来源文件.xlsx",
         bytes,
       });
       await sendDraftState({

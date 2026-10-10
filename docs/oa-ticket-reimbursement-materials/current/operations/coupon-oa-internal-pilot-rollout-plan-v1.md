@@ -2,7 +2,7 @@
 
 > **状态**：上线治理基线；不是部署完成证明。
 > **日期**：2026-10-08
-> **适用架构**：[ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)
+> **适用架构**：[ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)；P0 本机长连接例外见 [ADR-0010](../../../adr/0010-timebox-local-long-connection-three-source-poc.md)。
 
 ## 1. 目标
 
@@ -13,7 +13,7 @@
 | `OA优惠券审批` | 仅导航到既有 OA；服务端不创建草稿或原生实例。 |
 | `OA优惠券填报` | 系统草稿与确认流程；在允许 native-submit 前仅可操作草稿。 |
 | `优惠券Excel试点` | 生成并冻结两份受控 Excel 后交接系统草稿；自身永不自动创建原生 OA。 |
-| `/OA优惠券提报`（仅 `direct-http-draft-poc`） | 单用户严选三源材料 → 标准附件 → OA 测试稿；不是 R1/R2/R3 路线，不创建原生 OA。 |
+| `/OA优惠券提报`（仅 `local-long-connection-draft-poc`） | 单用户严选三源材料 → 标准附件 → OA 测试稿；不是 R1/R2/R3 路线，不创建原生 OA。 |
 
 ## 2. 角色与原则
 
@@ -34,13 +34,13 @@
 | R4 严格 allowlist | 预批准的小范围用户 | 同 R3 | canary 结果获业务/OA/安全/运行 Owner 书面确认 | 扩大名单需重复审核；不含生产批准 |
 | R5 生产决策 | 不在本计划内 | 另行 ADR/技术选型后决定 | HTTP callback/持久化基础设施/合规等生产门禁 | — |
 
-### 3.1 `direct-http-draft-poc` 文档标签
+### 3.1 `local-long-connection-draft-poc` 文档标签
 
-`direct-http-draft-poc` 是 [ADR-0009](../../../adr/0009-timebox-direct-http-callback-for-three-source-draft-poc.md)定义的单用户、限时直接 HTTP 测试标签：飞书开发者服务器回调直接进入 Vercel `/api/feishu/process`，仅验证严选三源材料、标准附件和 OA 测试稿。
+`local-long-connection-draft-poc` 是 [ADR-0010](../../../adr/0010-timebox-local-long-connection-three-source-poc.md) 定义的单用户、限时本机长连接测试标签：测试 App 的唯一 `lark-cli` consumer 经 HMAC 进入 Vercel `/api/feishu/poc-bridge`，仅验证严选三源材料、标准附件和 OA 测试稿。
 
-它**不是** `FEISHU_RUNTIME_STAGE`、本表中的 release ring、R1/R2/R3 Gate 通过证明或 native-submit 授权。运行时仍处于 `local` legacy POC 边界：没有 durable receipt/outbox、异步 worker、可恢复重放或原生 OA 提交资格。完成该 POC 的唯一正向结论是“受限 Bot 子集能创建 OA 测试稿且没有创建原生实例”。
+它**不是** `FEISHU_RUNTIME_STAGE`、本表中的 release ring、R1/R2/R3 Gate 通过证明或 native-submit 授权。运行时仍处于 `local` legacy POC 边界：没有 durable receipt/outbox、异步 worker、可恢复重放或原生 OA 提交资格，且 CLI 可在 Vercel 成功前 ACK。完成该 POC 的唯一正向结论是“受限 Bot 子集能创建 OA 测试稿且没有创建原生实例”。
 
-直接 HTTP POC 的配置、测试、停止和证据要求见[运行手册](coupon-three-source-direct-http-poc-runbook-v1.md)。出现超时、重复、重启、Base/Drive 故障、事件加密或任何原生实例迹象时，立即关闭三源 pilot flag/事件订阅；不得按 R1/R2 的 bridge/outbox 流程假定可恢复。
+本机长连接 POC 的配置、测试、停止和证据要求见[运行手册](coupon-three-source-local-long-connection-poc-runbook-v1.md)。出现 forward failure/超时、重复、runner/Vercel 重启、Base/Drive/消息回读故障、双 consumer 或任何原生实例迹象时，立即关闭三源 pilot flag 并停止 runner；不得按 R1/R2 的 bridge/outbox 流程假定可恢复。
 
 ### G0 — 文档与责任
 

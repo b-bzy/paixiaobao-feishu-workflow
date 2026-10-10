@@ -3,7 +3,7 @@
 > **状态**：需求方已选择；待优惠券流程、应用与工程 Owner 审阅后执行。
 > **日期**：2026-10-10
 > **定位**：单一、限时、draft-only 的 Bot POC 交付计划；不是 R1-dev/R2/R3、正式发布或原生 OA 授权。
-> **运行手册**：[direct HTTP draft-only POC 运行手册](../../current/operations/coupon-three-source-direct-http-poc-runbook-v1.md)
+> **运行手册**：[本机长连接 draft-only POC 运行手册](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)
 > **长期路线**：[P1 耐久控制面 FDEV 台账](coupon-oa-feishu-dev-requirements-tracker-v1.md)
 
 ## 1. 目标
@@ -28,7 +28,7 @@
 | 业务模式与券型 | 仅 `严选`、常规满减券。 |
 | 名单 | 仅文本格式的 SKU；白名单必传，黑名单可选但必须明确确认无黑名单。 |
 | 用户与会话 | 一个严格 allowlist 用户、Bot 单聊、同一时刻一笔任务。 |
-| 事件接入 | 飞书开发者服务器回调 → Vercel `POST /api/feishu/process`；不使用本机长连接或常驻 bridge。 |
+| 事件接入 | 飞书长连接 → 本机唯一 `lark-cli` runner → HMAC Vercel `POST /api/feishu/poc-bridge`；不切换开发者服务器回调。 |
 | 产物 | 标准配券表、标准白名单、可选标准黑名单；源文件绝不进入 OA 附件。 |
 | OA | 只创建既有 OA 测试稿；`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false` 全程不变。 |
 | 验证 | 一次脱敏正常 E2E + 必要的失败停止验证；保留简短、脱敏的结论。 |
@@ -39,7 +39,7 @@ P0 先检查并复用下列已实现组件；除修复阻断 E2E 的缺陷外，
 
 | 已有组件 | P0 用法 |
 | --- | --- |
-| `server/api/feishu/process.post.ts` 与 `server/lib/feishu/events.ts` | 接收直接 HTTP 消息、文件和卡片回调。 |
+| `scripts/long-connection-bridge.mjs`、`server/api/feishu/poc-bridge.post.ts` 与 `server/lib/feishu/events.ts` | 单一临时长连接 runner、HMAC P0 ingress、三源限定消息/文件/card routing。 |
 | `server/lib/feishu/coupon-oa/three-source/dispatcher.ts` | 精确命令、材料、卡片 callback、owner/revision 和跨流程互斥。 |
 | `server/lib/feishu/coupon-oa/three-source/service.ts`、`store.ts`、`cards.ts` | 三源识别、Base 状态、标准产物和用户卡片。 |
 | `server/lib/coupon-oa/three-source/` | 确定性规则、canonical revision、名单交集和标准 Excel 生成。 |
@@ -60,12 +60,12 @@ P0 先检查并复用下列已实现组件；除修复阻断 E2E 的缺陷外，
 
 ### P0-2：配置最小测试环境
 
-- 在 Vercel 测试环境配置现有 App、OA 草稿、三源 Base/Drive 和单用户 allowlist 所需变量；不在代码、文档或聊天保存 secret。
+- 在 Vercel 测试环境配置现有 App、OA 草稿、三源 Base/Drive、单用户 allowlist 与独立 bridge HMAC 所需变量；不在代码、文档或聊天保存 secret。
 - 保持 `FEISHU_RUNTIME_STAGE=local`、三源 pilot 默认关闭、native-submit kill switch 为 `false`。
-- 在飞书测试 App 中选择开发者服务器回调，配置 `/api/feishu/process`、Verification Token、消息和卡片事件；关闭事件加密。
-- 停止/切换旧长连接 consumer，确保同一 App 只有一种活动事件接入方式。
+- 保持飞书测试 App 的长连接模式，订阅消息和 card callback；本机只启动一个以精确 `/api/feishu/poc-bridge` 为目标的 P0 runner。
+- 不配置开发者服务器回调、URL challenge 或第二个 consumer；runner 只能在明确测试窗口短暂运行。
 
-**完成标准：** Vercel 健康检查和飞书 URL challenge 通过；pilot flag 仍为关闭。
+**完成标准：** Vercel P0 bridge 对有效 HMAC 可达且对无效 HMAC fail closed；runner 可启动、pilot flag 仍为关闭。
 
 ### P0-3：执行一次受控 Bot E2E
 
@@ -122,6 +122,6 @@ P0 不取消安全边界，只将验证密度与副作用范围匹配到一个�
 ## 8. 文档关系
 
 - 本文是 P0 的唯一开发/交付计划。
-- [direct HTTP draft-only POC 运行手册](../../current/operations/coupon-three-source-direct-http-poc-runbook-v1.md)是 P0 的环境配置与 E2E 操作手册。
+- [本机长连接 draft-only POC 运行手册](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)是 P0 的环境配置与 E2E 操作手册。
 - [综合 Skill 飞书适配升级方案](coupon-oa-feishu-unified-skill-upgrade-plan-v1.md)保留完整 Skill 合同与长期架构作为 P1 目标。
 - [飞书开发版需求与进度台账](coupon-oa-feishu-dev-requirements-tracker-v1.md)和 FDEV 清单只管理 P1 耐久化/正式运行工作，不再作为 P0 的串行前置条件。

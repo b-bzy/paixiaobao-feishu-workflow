@@ -282,6 +282,75 @@ describe("three-source Bot dispatcher", () => {
     );
   });
 
+  it("keeps a single progress card while consecutive sources are pending", async () => {
+    const current = draft();
+    current.recognitions.couponTable = {
+      source: {
+        messageId: "om-coupon",
+        fileKey: "file-coupon",
+        fileName: "coupon.xlsx",
+        bytes: 10,
+        sha256: "a".repeat(64),
+      },
+      sourceHash: "a".repeat(64),
+      roleCandidates: [],
+      couponFieldCandidates: {},
+      listCandidates: [],
+      issues: [],
+      ai: {
+        runId: "run-coupon",
+        revision: current.task.revision,
+        sourceSha256: "a".repeat(64),
+        status: "pending",
+      },
+    };
+    const receiveSource: CouponThreeSourcePilotService["receiveSource"] = vi.fn(
+      async () => ({
+        ...current,
+        recognitions: {
+          ...current.recognitions,
+          whitelist: {
+            source: {
+              messageId: "om-whitelist",
+              fileKey: "file-whitelist",
+              fileName: "whitelist.xlsx",
+              bytes: 10,
+              sha256: "b".repeat(64),
+            },
+            sourceHash: "b".repeat(64),
+            roleCandidates: [],
+            couponFieldCandidates: {},
+            listCandidates: [],
+            issues: [],
+            ai: {
+              runId: "run-whitelist",
+              revision: current.task.revision,
+              sourceSha256: "b".repeat(64),
+              status: "pending" as const,
+            },
+          },
+        },
+      }),
+    );
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { receiveSource },
+    });
+    vi.mocked(values.downloadFile).mockResolvedValue(new Uint8Array([1, 2]));
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchFile({
+        openId: "ou_owner",
+        messageId: "om-whitelist",
+        fileKey: "file-whitelist",
+        fileName: "whitelist.xlsx",
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
   it("passes mapping choices to the revisioned service before generating artifacts", async () => {
     const current = draft();
     const source = {

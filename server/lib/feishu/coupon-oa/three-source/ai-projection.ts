@@ -43,6 +43,14 @@ function cardForDraft(
   return buildCouponThreeSourceMappingCard(draft);
 }
 
+function hasPendingAiRecognition(
+  draft: Awaited<ReturnType<typeof getCouponThreeSourcePilotDraft>>,
+): boolean {
+  return Object.values(draft.recognitions).some(
+    (recognition) => recognition?.ai?.status === "pending",
+  );
+}
+
 export function createCouponThreeSourceAiProjector(
   dependencies: CouponThreeSourceAiProjectionDependencies = defaultDependencies,
 ): CouponAiRecognitionProjector {
@@ -94,11 +102,16 @@ export function createCouponThreeSourceAiProjector(
         },
         run.revision,
       );
-      await dependencies.sendCard(
-        run.ownerOpenId,
-        cardForDraft(updated),
-        idempotencyKey,
-      );
+      // Several source roles can be recognized for the same revision. Do not
+      // append another progress card for each terminal run; the last run sends
+      // the single latest card after the whole recognition batch has settled.
+      if (!hasPendingAiRecognition(updated)) {
+        await dependencies.sendCard(
+          run.ownerOpenId,
+          cardForDraft(updated),
+          idempotencyKey,
+        );
+      }
     },
   };
 }

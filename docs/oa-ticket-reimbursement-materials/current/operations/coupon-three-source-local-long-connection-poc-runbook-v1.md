@@ -104,7 +104,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 
 1. 在明确窗口为唯一测试用户打开 `FEISHU_COUPON_THREE_SOURCE_PILOT_ENABLED=true`。
 2. 在 Bot 单聊发送精确 `/OA优惠券提报`，确认收到材料收集卡。
-3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。AI 开启时应先出现“AI 识别中”，worker 完成后再出现第二轮卡片。
+3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。AI 开启时，同一批连续上传只应出现一张“AI 识别中”；worker 完成整批识别后只应再出现一张最新第二轮卡片。
 4. 在第二轮确认唯一优惠券、未知券型、缺失字段、名单 Sheet/列和 OA 活动点位；多券时必须选一个，不能默认第一条。未提供黑名单时点“确认本次无黑名单”，有交集时作出明确决定。
 5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀；严选 P0 不要求 `calcImage`。
 6. 点击“确认并创建 OA 测试稿”。收到既有 OA 草稿预览卡即为本次成功终点。

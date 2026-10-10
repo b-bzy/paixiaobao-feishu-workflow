@@ -45,6 +45,31 @@ function draft(): CouponThreeSourcePilotDraft {
   };
 }
 
+function pendingWhitelist(): NonNullable<
+  CouponThreeSourcePilotDraft["recognitions"]["whitelist"]
+> {
+  return {
+    source: {
+      messageId: "message-2",
+      fileKey: "file-2",
+      fileName: "whitelist.xlsx",
+      bytes: 10,
+      sha256: "b".repeat(64),
+    },
+    sourceHash: "b".repeat(64),
+    roleCandidates: [],
+    couponFieldCandidates: {},
+    listCandidates: [],
+    issues: [],
+    ai: {
+      runId: "run-2",
+      revision: 2,
+      sourceSha256: "b".repeat(64),
+      status: "pending",
+    },
+  };
+}
+
 function run(): CouponAiRecognitionRun {
   return {
     id: "run-1",
@@ -106,6 +131,27 @@ describe("coupon three-source AI projection", () => {
     });
     await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
     expect(updateDraft).not.toHaveBeenCalled();
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it("does not append an intermediate card while another source is pending", async () => {
+    let current = draft();
+    current.recognitions.whitelist = pendingWhitelist();
+    const sendCard = vi.fn(async () => undefined);
+    const updateDraft = vi.fn(async (_draft, updates) => {
+      current = { ...current, ...updates };
+      return current;
+    });
+    const projector = createCouponThreeSourceAiProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: updateDraft as never,
+      sendCard,
+    });
+
+    await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
+
+    expect(current.recognitions.couponTable?.ai?.status).toBe("succeeded");
+    expect(current.recognitions.whitelist?.ai?.status).toBe("pending");
     expect(sendCard).not.toHaveBeenCalled();
   });
 });

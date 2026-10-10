@@ -128,6 +128,12 @@ function overlapCount(draft: CouponThreeSourcePilotDraft): number {
   ).length;
 }
 
+function hasPendingAiRecognition(draft: CouponThreeSourcePilotDraft): boolean {
+  return Object.values(draft.recognitions).some(
+    (recognition) => recognition?.ai?.status === "pending",
+  );
+}
+
 async function sendDraftState(input: {
   openId: string;
   draft: CouponThreeSourcePilotDraft;
@@ -150,11 +156,7 @@ async function sendDraftState(input: {
         recognition: draft.pendingRecognition,
       });
     }
-    if (
-      Object.values(draft.recognitions).some(
-        (recognition) => recognition?.ai?.status === "pending",
-      )
-    ) {
+    if (hasPendingAiRecognition(draft)) {
       return buildCouponThreeSourceRecognizingCard(draft);
     }
     if (!draft.task.sources.couponTable || !draft.task.sources.whitelist) {
@@ -446,12 +448,20 @@ export function createCouponThreeSourceDispatcher(
         fileName: fileName ?? "未命名来源文件.xlsx",
         bytes,
       });
-      await sendDraftState({
-        openId: input.openId,
-        draft: next,
-        dependencies,
-        idempotencyKey: input.idempotencyKey,
-      });
+      // Keep one visible progress card while a batch of source files is being
+      // recognized. Every file message has a distinct idempotency key, so
+      // sending here unconditionally would append one progress card per file.
+      if (
+        !hasPendingAiRecognition(active[0]) ||
+        !hasPendingAiRecognition(next)
+      ) {
+        await sendDraftState({
+          openId: input.openId,
+          draft: next,
+          dependencies,
+          idempotencyKey: input.idempotencyKey,
+        });
+      }
       return {
         handled: true,
         message: `Coupon three-source source received for ${next.pilotId}`,

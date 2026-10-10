@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  couponThreeSourceClearInvocation,
   couponThreeSourceInvocation,
   getCouponThreeSourceCommandIntakeGate,
   getCouponThreeSourceR2Gate,
+  isCouponThreeSourceClearInvocation,
   isCouponThreeSourceInvocation,
 } from "./config";
 
@@ -53,6 +55,14 @@ describe("coupon three-source R2 config", () => {
     expect(isCouponThreeSourceInvocation("OA优惠券填报")).toBe(false);
     expect(isCouponThreeSourceInvocation("OA优惠券三源填报")).toBe(false);
     expect(isCouponThreeSourceInvocation("我想 OA优惠券提报")).toBe(false);
+  });
+
+  it("recognizes only the exact clear command", () => {
+    expect(couponThreeSourceClearInvocation).toBe("clear");
+    expect(isCouponThreeSourceClearInvocation("/clear")).toBe(true);
+    expect(isCouponThreeSourceClearInvocation(" / c l e a r ")).toBe(true);
+    expect(isCouponThreeSourceClearInvocation("clear current")).toBe(false);
+    expect(isCouponThreeSourceClearInvocation("清空")).toBe(false);
   });
 
   it("is disabled by default before checking any runtime configuration", () => {

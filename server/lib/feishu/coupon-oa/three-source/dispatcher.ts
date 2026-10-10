@@ -8,12 +8,15 @@ import { buildCouponOaPreviewCard } from "../cards";
 import {
   assertCouponOaUserAllowed,
   isCouponOaDraftDemo,
+  isCouponOaDraftStoreConfigured,
   isCouponOaEnabled,
 } from "../config";
 import { missingCouponOaAttachments } from "../draft-service";
 import { getCouponOaDraft, listActiveCouponOaDrafts } from "../draft-store";
+import { isCouponExcelPilotEnabled } from "../excel-pilot-config";
 import { listActiveCouponExcelPilotDrafts } from "../excel-pilot-store";
 import {
+  buildCouponThreeSourceClearedCard,
   buildCouponThreeSourceCompletedCard,
   buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceIntakeCard,
@@ -26,7 +29,10 @@ import {
   buildCouponThreeSourceRuntimeBlockedCard,
   buildCouponThreeSourceUnavailableCard,
 } from "./cards";
-import { isCouponThreeSourceInvocation } from "./config";
+import {
+  isCouponThreeSourceClearInvocation,
+  isCouponThreeSourceInvocation,
+} from "./config";
 import { isCouponThreeSourcePilotEnabled } from "./pilot-config";
 import {
   type CouponThreeSourcePilotService,
@@ -46,6 +52,8 @@ export interface CouponThreeSourceDispatcherDependencies {
   isPilotEnabled(): boolean;
   isCouponOaEnabled(): boolean;
   isCouponOaDraftDemo(): boolean;
+  shouldCheckActiveOa(): boolean;
+  shouldCheckActiveExcel(): boolean;
   assertUserAllowed(openId: string): void;
   createService(): CouponThreeSourcePilotService;
   getDraft(recordId: string): Promise<CouponThreeSourcePilotDraft>;
@@ -70,6 +78,8 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   isPilotEnabled: isCouponThreeSourcePilotEnabled,
   isCouponOaEnabled,
   isCouponOaDraftDemo,
+  shouldCheckActiveOa: isCouponOaDraftStoreConfigured,
+  shouldCheckActiveExcel: isCouponExcelPilotEnabled,
   assertUserAllowed: assertCouponOaUserAllowed,
   createService: createDefaultCouponThreeSourcePilotService,
   getDraft: getCouponThreeSourcePilotDraft,
@@ -220,8 +230,12 @@ async function activeWorkflowConflict(input: {
   dependencies: CouponThreeSourceDispatcherDependencies;
 }): Promise<string | undefined> {
   const [oaDrafts, excelPilots] = await Promise.all([
-    input.dependencies.listActiveOa(input.openId),
-    input.dependencies.listActiveExcel(input.openId),
+    input.dependencies.shouldCheckActiveOa()
+      ? input.dependencies.listActiveOa(input.openId)
+      : Promise.resolve([]),
+    input.dependencies.shouldCheckActiveExcel()
+      ? input.dependencies.listActiveExcel(input.openId)
+      : Promise.resolve([]),
   ]);
   if (oaDrafts.length)
     return "当前存在未完成的优惠券 OA 草稿，不能同时启动三源提报";
@@ -286,7 +300,10 @@ export function createCouponThreeSourceDispatcher(
     text: string;
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
-    if (!isCouponThreeSourceInvocation(input.text)) return { handled: false };
+    const clearRequested = isCouponThreeSourceClearInvocation(input.text);
+    if (!clearRequested && !isCouponThreeSourceInvocation(input.text)) {
+      return { handled: false };
+    }
     if (!(await assertRuntimeAvailable({ ...input, dependencies }))) {
       return {
         handled: true,
@@ -294,6 +311,30 @@ export function createCouponThreeSourceDispatcher(
       };
     }
     try {
+      if (clearRequested) {
+        const active = await dependencies.listActiveThreeSource(input.openId);
+        const service = dependencies.createService();
+        for (const draft of active) {
+          await service.cancel({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: draft.task.revision,
+          });
+        }
+        await dependencies.sendCard(
+          input.openId,
+          buildCouponThreeSourceClearedCard({
+            clearedCount: active.length,
+          }),
+          input.idempotencyKey,
+        );
+        return {
+          handled: true,
+          message: active.length
+            ? `Cleared ${active.length} active coupon three-source pilots`
+            : "No active coupon three-source pilot to clear",
+        };
+      }
       const conflict = await activeWorkflowConflict({
         openId: input.openId,
         dependencies,

@@ -24,6 +24,12 @@ export function isCouponOaDraftDemo(): boolean {
   return getCouponOaMode() === "draft-demo";
 }
 
+export function isCouponOaDraftStoreConfigured(): boolean {
+  const appToken = process.env.FEISHU_BASE_APP_TOKEN?.trim();
+  const tableId = process.env.FEISHU_COUPON_DRAFT_TABLE_ID?.trim();
+  return Boolean(appToken && tableId && /^tbl[a-zA-Z0-9]+$/.test(tableId));
+}
+
 function nativeSubmitEnabled(): boolean {
   const value = process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED?.trim();
   if (!value || value === "false") return false;

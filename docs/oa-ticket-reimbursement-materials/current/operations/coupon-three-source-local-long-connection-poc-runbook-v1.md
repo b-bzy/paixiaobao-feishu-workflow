@@ -71,10 +71,12 @@ FEISHU_BRIDGE_KEY_ID=<与 Vercel 相同的测试 key ID>
 FEISHU_BRIDGE_SHARED_SECRET=<与 Vercel 相同的测试 secret>
 FEISHU_BRIDGE_EVENT_TYPES=im.message.receive_v1,card.action.trigger
 FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
+VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时填写>
 ```
 
 - 不设 `FEISHU_BRIDGE_ALLOW_HTTP=true`；P0 对 Vercel 必须 HTTPS。
 - P0 mode 要求精确 `/api/feishu/poc-bridge`；不能指向 `/api/feishu/bridge`、`/api/feishu/process`、任意 query/hash 或其它域名路径。
+- Preview 开启 Deployment Protection 时，本机 runner 必须从受控环境读取 `VERCEL_AUTOMATION_BYPASS_SECRET`。runner 仅把它放入 `x-vercel-protection-bypass` header；它不参与飞书 HMAC、不得复用 `FEISHU_BRIDGE_SHARED_SECRET`，也不得写入日志或聊天。
 - 通过受控本机环境保持测试 App/Bot 授权；不能使用生产 App 或不明来源凭据。
 
 ### 2.3 飞书测试 App
@@ -108,6 +110,8 @@ FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
 6. 点击“确认并创建 OA 测试稿”。收到既有 OA 草稿预览卡即为本次成功终点。
 7. **不点击**预览卡中的最终正式发送动作。核对 native kill switch 仍关闭，审批中心没有新增原生实例，草稿无 instance code/link。
 8. 立即关闭 pilot flag、停止 runner，并写入脱敏结论。
+
+若测试任务因错误卡片、错误材料或中断而无法继续，当前测试用户发送精确 `/clear`。确认收到“当前三源提报已清空”或“当前已是清空状态”后，再重新发送 `/OA优惠券提报` 并重新上传材料。`/clear` 只把活动任务标记为 `Canceled`，不会删除 Base/Drive 审计记录，也不会复用旧文件；不得通过手工删除 Base 行或 Drive 文件代替该恢复路径。
 
 ## 5. 停止与回滚
 

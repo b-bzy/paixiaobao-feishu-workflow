@@ -9,6 +9,7 @@ import {
   getCouponOaInitiateUrl,
   getCouponOaMode,
   isCouponOaDraftInvocation,
+  isCouponOaDraftStoreConfigured,
   isCouponOaEnabled,
   isCouponOaInvocation,
 } from "./config";
@@ -27,6 +28,8 @@ describe("coupon OA configuration", () => {
     process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS;
   const originalCouponOaAllowedOpenIds =
     process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
+  const originalBaseAppToken = process.env.FEISHU_BASE_APP_TOKEN;
+  const originalDraftTableId = process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
 
   afterEach(() => {
     restoreEnvironment("FEISHU_COUPON_OA_MODE", originalMode);
@@ -43,6 +46,21 @@ describe("coupon OA configuration", () => {
       "FEISHU_COUPON_OA_ALLOWED_OPEN_IDS",
       originalCouponOaAllowedOpenIds,
     );
+    restoreEnvironment("FEISHU_BASE_APP_TOKEN", originalBaseAppToken);
+    restoreEnvironment("FEISHU_COUPON_DRAFT_TABLE_ID", originalDraftTableId);
+  });
+
+  it("checks legacy draft conflicts only when its Base store is configured", () => {
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    delete process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
+    expect(isCouponOaDraftStoreConfigured()).toBe(false);
+
+    process.env.FEISHU_BASE_APP_TOKEN = "bas-test";
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "not-a-table";
+    expect(isCouponOaDraftStoreConfigured()).toBe(false);
+
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
+    expect(isCouponOaDraftStoreConfigured()).toBe(true);
   });
 
   it("defaults to disabled mode and only enables supported explicit modes", () => {

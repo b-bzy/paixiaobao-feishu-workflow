@@ -4,6 +4,7 @@ import {
 } from "../../../control-plane/runtime-config";
 
 export const couponThreeSourceInvocation = "OA优惠券提报";
+export const couponThreeSourceClearInvocation = "clear";
 
 export type CouponThreeSourceGateReason =
   | "disabled"
@@ -53,6 +54,12 @@ function normalizeInvocation(text: string): string {
 
 export function isCouponThreeSourceInvocation(text: string): boolean {
   return normalizeInvocation(text) === couponThreeSourceInvocation;
+}
+
+export function isCouponThreeSourceClearInvocation(text: string): boolean {
+  return (
+    normalizeInvocation(text).toLowerCase() === couponThreeSourceClearInvocation
+  );
 }
 
 function setting(name: string): string | undefined {

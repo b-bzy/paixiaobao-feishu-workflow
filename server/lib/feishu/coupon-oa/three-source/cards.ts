@@ -144,6 +144,24 @@ export function buildCouponThreeSourceRuntimeBlockedCard(): FeishuCard {
   });
 }
 
+export function buildCouponThreeSourceClearedCard(input: {
+  clearedCount: number;
+}): FeishuCard {
+  const cleared = input.clearedCount > 0;
+  return card({
+    title: cleared ? "当前三源提报已清空" : "当前已是清空状态",
+    subtitle: "可以重新发起 OA 优惠券提报",
+    template: "green",
+    content: [
+      cleared
+        ? `已结束 ${input.clearedCount} 笔未完成的三源提报。`
+        : "没有检测到未完成的三源提报。",
+      "原始记录和文件仅保留用于审计，不会被下一次提报复用。",
+      "请重新发送 `/OA优惠券提报`，并重新上传本次材料。",
+    ].join("\n"),
+  });
+}
+
 export function buildCouponThreeSourceIntakeCard(
   draft?: CouponThreeSourcePilotDraft,
 ): FeishuCard {

@@ -27,6 +27,8 @@ function draft(): CouponThreeSourcePilotDraft {
 
 function dependencies(input: {
   enabled?: boolean;
+  checkActiveOa?: boolean;
+  checkActiveExcel?: boolean;
   service?: Partial<CouponThreeSourcePilotService>;
   activeThreeSource?: CouponThreeSourcePilotDraft[];
   activeOa?: Array<{ recordId: string }>;
@@ -48,12 +50,14 @@ function dependencies(input: {
     isPilotEnabled: () => input.enabled ?? true,
     isCouponOaEnabled: () => true,
     isCouponOaDraftDemo: () => false,
+    shouldCheckActiveOa: () => input.checkActiveOa ?? true,
+    shouldCheckActiveExcel: () => input.checkActiveExcel ?? true,
     assertUserAllowed: () => undefined,
     createService,
     getDraft: async () => current[0] ?? draft(),
     listActiveThreeSource: async () => current,
-    listActiveOa: async () => input.activeOa ?? [],
-    listActiveExcel: async () => input.activeExcel ?? [],
+    listActiveOa: vi.fn(async () => input.activeOa ?? []),
+    listActiveExcel: vi.fn(async () => input.activeExcel ?? []),
     getMessageBody: vi.fn(),
     downloadFile: vi.fn(),
     sendCard,
@@ -108,6 +112,100 @@ describe("three-source Bot dispatcher", () => {
     );
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
       "收集三源材料",
+    );
+  });
+
+  it("does not query inactive legacy stores before starting three-source", async () => {
+    const opened = draft();
+    const startOrResume = vi.fn(async () => opened);
+    const { values } = dependencies({
+      checkActiveOa: false,
+      checkActiveExcel: false,
+      service: { startOrResume },
+    });
+    values.listActiveOa = vi.fn(async () => {
+      throw new Error("Feishu Base POC is not configured");
+    });
+    values.listActiveExcel = vi.fn(async () => {
+      throw new Error("Feishu Base POC is not configured");
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchText({
+        openId: "ou_owner",
+        text: "/OA优惠券提报",
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source pilot CTS-pilot opened",
+    });
+    expect(values.listActiveOa).not.toHaveBeenCalled();
+    expect(values.listActiveExcel).not.toHaveBeenCalled();
+  });
+
+  it("clears every active three-source draft without deleting its audit record", async () => {
+    const first = draft();
+    const second = {
+      ...draft(),
+      recordId: "rec-three-source-2",
+      pilotId: "CTS-pilot-2",
+    };
+    const cancel: CouponThreeSourcePilotService["cancel"] = vi.fn(
+      async (input) => ({
+        ...input.draft,
+        task: { ...input.draft.task, status: "Canceled" },
+      }),
+    );
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [first, second],
+      service: { cancel },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchText({
+        openId: "ou_owner",
+        text: "/clear",
+        idempotencyKey: "event-clear",
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Cleared 2 active coupon three-source pilots",
+    });
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        draft: first,
+        ownerOpenId: "ou_owner",
+        expectedRevision: first.task.revision,
+      }),
+    );
+    expect(values.listActiveOa).not.toHaveBeenCalled();
+    expect(values.listActiveExcel).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "当前三源提报已清空",
+    );
+  });
+
+  it("treats repeated clear commands as an idempotent success", async () => {
+    const cancel = vi.fn();
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [],
+      service: { cancel },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchText({ openId: "ou_owner", text: " / c l e a r " }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "No active coupon three-source pilot to clear",
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "当前已是清空状态",
     );
   });
 

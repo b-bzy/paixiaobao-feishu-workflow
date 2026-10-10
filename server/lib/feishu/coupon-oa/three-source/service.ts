@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { parseTieredIdentifierList } from "../../../coupon-oa/three-source/lists";
+import { PostgresCouponAiRecognitionRepository } from "../../../control-plane/postgres-coupon-ai-recognition-repository";
+import { getControlPlaneDatabase } from "../../../control-plane/postgres-sql-database";
+import { couponThreeSourceAiPromptVersion } from "../../../coupon-oa/three-source/ai-recognition";
+import { parseSingleCouponIdentifierList } from "../../../coupon-oa/three-source/lists";
 import {
-  extractRegularFullReductionInput,
+  confirmRegularFullReductionCoupon,
+  discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
   selectUniqueRole,
 } from "../../../coupon-oa/three-source/recognition";
@@ -19,12 +23,15 @@ import {
 import type { SourceRole } from "../../../coupon-oa/three-source/types";
 import {
   buildOaPrefillSnapshot,
-  buildSourceConfirmation,
-  createCanonicalPackage,
-  generateOfflineArtifacts,
+  createSingleCouponCanonicalPackage,
+  generateSingleCouponOfflineArtifacts,
 } from "../../../coupon-oa/three-source/workflow";
 import { uploadFeishuDriveFile } from "../../drive-client";
 import { downloadFeishuMessageResource } from "../../message-client";
+import {
+  getCouponThreeSourceAiConfig,
+  isCouponThreeSourceAiRecognitionEnabled,
+} from "./ai-config";
 import { loadCouponThreeSourceTemplates } from "./assets";
 import { handoffThreeSourcePilotToOaDraft } from "./handoff";
 import { getCouponThreeSourcePilotFolderToken } from "./pilot-config";
@@ -59,6 +66,11 @@ export interface CouponThreeSourcePilotDependencies {
   listActive: typeof listActiveCouponThreeSourcePilotDrafts;
   updateDraft: typeof updateCouponThreeSourcePilotDraft;
   handoff: typeof handoffThreeSourcePilotToOaDraft;
+  enqueueAiRecognition?(input: {
+    draft: CouponThreeSourcePilotDraft;
+    role: SourceRole;
+    source: CouponThreeSourceSourceReference;
+  }): Promise<{ runId: string } | undefined>;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -72,15 +84,6 @@ function storedRecognitionForRole(
   const recognition = draft.recognitions[role];
   if (!recognition) throw new Error(`缺少${role}材料的识别结果`);
   return recognition;
-}
-
-function sourceForRole(
-  draft: CouponThreeSourcePilotDraft,
-  role: SourceRole,
-): CouponThreeSourceSourceFile {
-  const source = draft.task.sources[role];
-  if (!source) throw new Error(`缺少${role}材料`);
-  return source;
 }
 
 function assertOwnerAndRevision(input: {
@@ -113,6 +116,37 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
     listActive: listActiveCouponThreeSourcePilotDrafts,
     updateDraft: updateCouponThreeSourcePilotDraft,
     handoff: handoffThreeSourcePilotToOaDraft,
+    async enqueueAiRecognition(input) {
+      if (!isCouponThreeSourceAiRecognitionEnabled()) return undefined;
+      const config = getCouponThreeSourceAiConfig();
+      const semanticKey = [
+        input.draft.recordId,
+        input.draft.task.revision,
+        input.role,
+        input.source.sha256,
+        config.model,
+        couponThreeSourceAiPromptVersion,
+      ].join(":");
+      const run = await new PostgresCouponAiRecognitionRepository(
+        getControlPlaneDatabase(),
+      ).enqueue({
+        semanticKey,
+        pilotRecordId: input.draft.recordId,
+        businessTaskId: input.draft.task.taskId,
+        ownerOpenId: input.draft.ownerOpenId,
+        revision: input.draft.task.revision,
+        sourceSlot: input.role,
+        sourceReference: {
+          messageId: input.source.messageId,
+          fileKey: input.source.fileKey,
+        },
+        sourceSha256: input.source.sha256,
+        sourceFileName: input.source.fileName,
+        model: config.model,
+        promptVersion: couponThreeSourceAiPromptVersion,
+      });
+      return { runId: run.id };
+    },
   };
 
 export function createDefaultCouponThreeSourcePilotService(): CouponThreeSourcePilotService {
@@ -176,7 +210,14 @@ export class CouponThreeSourcePilotService {
       fileName: source.fileName,
       bytes: input.bytes,
     });
-    const stored = toStoredWorkbookRecognition({ recognition, source });
+    const couponCandidates = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    const stored = toStoredWorkbookRecognition({
+      recognition,
+      source,
+      couponCandidates,
+    });
     try {
       const role = selectUniqueRole(recognition);
       return this.assignSource({
@@ -243,17 +284,9 @@ export class CouponThreeSourcePilotService {
   }): Promise<CouponThreeSourcePilotDraft> {
     assertOwnerAndRevision(input);
     if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
-    const coupon = sourceForRole(input.draft, "couponTable");
-    const task = replaceCouponThreeSourceSource({
-      task: input.draft.task,
-      ownerOpenId: input.ownerOpenId,
-      expectedRevision: input.expectedRevision,
-      source: coupon,
-    });
     return this.dependencies.updateDraft(
       input.draft,
       {
-        task,
         selections: { ...input.draft.selections, ...input.selections },
         coupon: undefined,
         whitelist: undefined,
@@ -317,35 +350,55 @@ export class CouponThreeSourcePilotService {
           storedRecognitionForRole(input.draft, "blacklist"),
         )
       : undefined;
-    const coupon = await extractRegularFullReductionInput({
+    for (const recognition of Object.values(input.draft.recognitions)) {
+      if (recognition?.ai?.status === "pending") {
+        throw new Error("AI 识别仍在进行，请等待最新卡片后再确认生成");
+      }
+    }
+    const storedCoupon = storedRecognitionForRole(input.draft, "couponTable");
+    const coupon = await confirmRegularFullReductionCoupon({
       recognition: couponRecognition,
+      ownerId: input.ownerOpenId,
+      revision: input.draft.task.revision,
+      couponCandidateId: input.draft.selections.couponCandidateId,
+      ownerConfirmedCouponType: input.draft.selections.couponType,
       fieldCandidateIds: input.draft.selections.couponFieldCandidateIds,
+      ownerFieldValues: {
+        ...input.draft.selections.ownerFieldValues,
+        activityPointPercent,
+      },
+      overrideReasons: input.draft.selections.overrideReasons,
+      aiRecognition: storedCoupon.ai?.result,
     });
     if (coupon.input.businessMode !== "严选") {
       throw new Error("三源 Bot 首期仅支持严选业务模式");
     }
-    const whitelist = await parseTieredIdentifierList({
+    const whitelist = await parseSingleCouponIdentifierList({
       recognition: whitelistRecognition,
       role: "whitelist",
-      ...input.draft.selections.whitelist,
+      confirmedCouponName: `满${coupon.input.thresholdYuan}减${coupon.input.discountAmountYuan}`,
+      identifierCandidateId:
+        input.draft.selections.whitelist?.identifierCandidateId,
+      selectedSheetName: input.draft.selections.whitelist?.selectedSheetName,
     });
     const blacklist = blacklistRecognition
-      ? await parseTieredIdentifierList({
+      ? await parseSingleCouponIdentifierList({
           recognition: blacklistRecognition,
           role: "blacklist",
-          ...input.draft.selections.blacklist,
+          confirmedCouponName: `满${coupon.input.thresholdYuan}减${coupon.input.discountAmountYuan}`,
+          identifierCandidateId:
+            input.draft.selections.blacklist?.identifierCandidateId,
+          selectedSheetName:
+            input.draft.selections.blacklist?.selectedSheetName,
         })
       : undefined;
-    const confirmation = buildSourceConfirmation({
-      ownerId: input.ownerOpenId,
-      revision: input.draft.task.revision,
-      coupon,
-      whitelist,
-      blacklistStatus: input.draft.task.blacklistStatus,
-      blacklist,
-    });
+    const overlapIds = blacklist
+      ? whitelist.entries
+          .map((entry) => entry.id)
+          .filter((id) => blacklist.entries.some((entry) => entry.id === id))
+      : [];
     const overlapDecision = input.draft.selections.overlapDecision;
-    if (confirmation.overlap.ids.length && !overlapDecision) {
+    if (overlapIds.length && !overlapDecision) {
       return this.dependencies.updateDraft(
         input.draft,
         {
@@ -368,32 +421,29 @@ export class CouponThreeSourcePilotService {
       ownerOpenId: input.ownerOpenId,
       expectedRevision: input.expectedRevision,
       overlap: {
-        sha256: confirmation.overlap.sha256,
-        count: confirmation.overlap.ids.length,
+        sha256: sha256(
+          new TextEncoder().encode(JSON.stringify([...overlapIds].sort())),
+        ),
+        count: overlapIds.length,
         decision: overlapDecision,
       },
     });
-    const revisionConfirmation = buildSourceConfirmation({
+    const packageValue = createSingleCouponCanonicalPackage({
       ownerId: input.ownerOpenId,
       revision: task.revision,
       coupon,
       whitelist,
       blacklistStatus: task.blacklistStatus,
       blacklist,
-    });
-    const packageValue = createCanonicalPackage({
-      confirmation: revisionConfirmation,
-      ownerId: input.ownerOpenId,
-      expectedRevision: task.revision,
       overlapDecision,
     });
     task = confirmCouponThreeSourceSources({
       task,
       ownerOpenId: input.ownerOpenId,
       expectedRevision: task.revision,
-      snapshotHash: revisionConfirmation.snapshotHash,
+      snapshotHash: packageValue.sourceConfirmationHash,
     });
-    const artifacts = await generateOfflineArtifacts({
+    const artifacts = await generateSingleCouponOfflineArtifacts({
       package: packageValue,
       templates: await this.dependencies.loadTemplates(),
     });
@@ -528,7 +578,7 @@ export class CouponThreeSourcePilotService {
       expectedRevision: input.expectedRevision,
       source,
     });
-    return this.dependencies.updateDraft(
+    let updated = await this.dependencies.updateDraft(
       input.draft,
       {
         task,
@@ -553,6 +603,38 @@ export class CouponThreeSourcePilotService {
       },
       input.expectedRevision,
     );
+    if (this.dependencies.enqueueAiRecognition) {
+      const recognitions = { ...updated.recognitions };
+      let enqueuedAny = false;
+      for (const [role, recognition] of Object.entries(recognitions)) {
+        if (!recognition) continue;
+        const enqueued = await this.dependencies.enqueueAiRecognition({
+          draft: updated,
+          role: role as SourceRole,
+          source: recognition.source,
+        });
+        if (!enqueued) continue;
+        enqueuedAny = true;
+        recognitions[role as SourceRole] = {
+          ...recognition,
+          ai: {
+            runId: enqueued.runId,
+            revision: updated.task.revision,
+            sourceSha256: recognition.sourceHash,
+            status: "pending",
+          },
+        };
+      }
+      if (!enqueuedAny) return updated;
+      updated = await this.dependencies.updateDraft(
+        updated,
+        {
+          recognitions,
+        },
+        updated.task.revision,
+      );
+    }
+    return updated;
   }
 
   private async loadRecognition(stored: StoredWorkbookRecognition) {

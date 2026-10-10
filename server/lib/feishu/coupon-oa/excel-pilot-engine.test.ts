@@ -14,9 +14,9 @@ import {
 } from "./excel-pilot-schema";
 
 const couponTemplatePath =
-  "docs/oa-ticket-reimbursement-materials/assets/templates/配券信息表-常规满减券.xlsx";
+  "docs/oa-ticket-reimbursement-materials/reference/templates/配券信息表-常规满减券.xlsx";
 const whitelistTemplatePath =
-  "docs/oa-ticket-reimbursement-materials/test-fixtures/coupon-oa-route-verification/商品明细白名单-自动填报演练.xlsx";
+  "docs/oa-ticket-reimbursement-materials/reference/fixtures/route-verification/商品明细白名单-自动填报演练.xlsx";
 
 const input = couponPilotInputSchema.parse({
   activityName: "内网试点满减活动",

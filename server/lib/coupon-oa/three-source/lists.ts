@@ -10,6 +10,7 @@ import type {
   OfflineSourceFile,
   OverlapDecision,
   OverlapSnapshot,
+  ParsedSingleCouponIdentifierList,
   ParsedTieredIdentifierList,
   SourceProvenance,
   WorkbookRecognition,
@@ -229,6 +230,111 @@ export async function parseTieredIdentifierList(
     role: input.role,
     sourceHash: hashValue,
     dimension: identifier.dimension,
+    entries,
+    issues,
+  };
+}
+
+export interface ParseSingleCouponIdentifierListInput {
+  recognition: WorkbookRecognition;
+  role: "whitelist" | "blacklist";
+  confirmedCouponName: string;
+  identifierCandidateId?: string;
+  selectedSheetName?: string;
+}
+
+/**
+ * Reads exactly one identifier column from exactly one owner-confirmed Sheet.
+ * The Sheet name is never treated as the coupon fact source.
+ */
+export async function parseSingleCouponIdentifierList(
+  input: ParseSingleCouponIdentifierListInput,
+): Promise<ParsedSingleCouponIdentifierList> {
+  const identifier = candidateById(
+    input.recognition.listCandidates,
+    input.identifierCandidateId,
+    "identifier",
+  );
+  if (
+    input.selectedSheetName &&
+    identifier.sheetName !== input.selectedSheetName
+  ) {
+    throw new Error("已选择的名单列不属于业务员确认的 Sheet");
+  }
+  if (identifier.dimension !== "SKU") {
+    throw new Error(`当前 P0 只支持 SKU 名单，不支持 ${identifier.dimension}`);
+  }
+  const confirmedCouponName = input.confirmedCouponName.trim();
+  if (!confirmedCouponName) throw new Error("必须先确认唯一优惠券名称");
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Buffer.from(input.recognition.source.bytes) as never,
+  );
+  const worksheet = workbook.getWorksheet(identifier.sheetName);
+  if (!worksheet) throw new Error("找不到已确认的名单 Sheet");
+  const idColumn = worksheet.getColumn(identifier.column).number;
+  const issues: string[] = [];
+  const entries: ParsedSingleCouponIdentifierList["entries"] = [];
+  const seen = new Set<string>();
+  const hashValue =
+    input.recognition.sourceHash || sourceHash(input.recognition.source);
+
+  for (
+    let rowNumber = identifier.headerRow + 1;
+    rowNumber <= worksheet.rowCount;
+    rowNumber += 1
+  ) {
+    const row = worksheet.getRow(rowNumber);
+    if (!row.hasValues) continue;
+    const cell = row.getCell(idColumn);
+    const raw = cellText(cell);
+    const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
+    if (!raw) continue;
+    if (isFormula(cell)) {
+      issues.push(`${location} 不能使用公式作为 SKU`);
+      continue;
+    }
+    if (/^[=+@-]/.test(raw)) {
+      issues.push(`${location} 不能以公式前缀开头`);
+      continue;
+    }
+    if (typeof cell.value === "number") {
+      issues.push(`${location} 是数值格式，无法确认前导零`);
+      continue;
+    }
+    if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
+      issues.push(`${location} 包含多个 SKU 或分隔符`);
+      continue;
+    }
+    if (seen.has(raw)) {
+      issues.push(`${location} 与前序 SKU 重复：${raw}`);
+      continue;
+    }
+    seen.add(raw);
+    entries.push({
+      id: raw,
+      provenance: provenance({
+        source: input.recognition.source,
+        sourceHash: hashValue,
+        worksheet,
+        row: rowNumber,
+        column: identifier.column,
+        rawValue: raw,
+        normalizedValue: raw,
+      }),
+    });
+  }
+  if (!entries.length && !issues.length) {
+    issues.push(`${worksheet.name} 未发现任何名单数据`);
+  }
+  return {
+    role: input.role,
+    sourceHash: hashValue,
+    dimension: identifier.dimension,
+    selectedSheetName: worksheet.name,
+    selectedColumn: identifier.column,
+    confirmedCouponName,
     entries,
     issues,
   };

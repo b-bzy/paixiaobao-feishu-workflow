@@ -30,6 +30,20 @@ export function legacyPocEnabled(): boolean {
 
 export function assertDurableRuntimeConfiguration(): void {
   const stage = getFeishuRuntimeStage();
+  if (isCouponThreeSourceAiRecognitionEnabled()) {
+    getCouponThreeSourceAiConfig();
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (!databaseUrl || !/^postgres(?:ql)?:\/\//iu.test(databaseUrl)) {
+      throw new Error(
+        "DATABASE_URL must be configured before P0 AI recognition is enabled",
+      );
+    }
+    if (!process.env.FEISHU_WORKER_ID?.trim()) {
+      throw new Error(
+        "FEISHU_WORKER_ID must be configured before P0 AI recognition is enabled",
+      );
+    }
+  }
   if (stage === "local") return;
   if (legacyPocEnabled()) {
     throw new Error("Legacy POC routes cannot run in a durable runtime stage");
@@ -57,3 +71,8 @@ export function assertDurableRuntimeConfiguration(): void {
     );
   }
 }
+
+import {
+  getCouponThreeSourceAiConfig,
+  isCouponThreeSourceAiRecognitionEnabled,
+} from "../feishu/coupon-oa/three-source/ai-config";

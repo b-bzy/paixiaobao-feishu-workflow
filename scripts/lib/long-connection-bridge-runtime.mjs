@@ -183,6 +183,21 @@ function requiredEventField(event, name, message) {
   return value;
 }
 
+function jsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function bridgeEventId(event) {
   const value =
     event?.event_id ??
@@ -242,11 +257,15 @@ export function createBridgeEventEnvelope({ eventType, event }) {
       "operator_id",
       "Feishu card event must include an operator ID",
     );
-    const actionName = requiredEventField(
-      event,
-      "action_name",
-      "Feishu card event must include an action name",
-    );
+    const actionValue = jsonObject(event?.action_value);
+    const actionName =
+      (typeof event?.action_name === "string" && event.action_name.trim()) ||
+      (typeof actionValue?.action === "string" && actionValue.action.trim());
+    if (!actionName) {
+      throw new BridgeConfigurationError(
+        "Feishu card event must include an action name",
+      );
+    }
     return {
       header: { event_id: eventId, event_type: eventType },
       action: {

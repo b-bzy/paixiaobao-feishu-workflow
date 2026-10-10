@@ -17,6 +17,12 @@
 | 飞书应用管理员 |  |
 | 平台/安全 Owner |  |
 | Bridge 运行 Owner / 值守人 |  |
+| 事件交付模式 | 长连接 bridge / 其他（需 ADR） |
+| 资源生命周期状态 | 未定位 / 候选已识别 / 已提交申请 / 已分配 / 宿主已验证 / Bridge 已验证 / R1 已批准 |
+| 企业资源申请 / ticket 引用 |  |
+| CMDB 资产 / 容器 namespace 引用 |  |
+| 部署 Git revision / artifact digest |  |
+| 资源发现 / hand-off 记录 |  |
 | 工程 / QA Owner |  |
 | 结论 | Go / No-go / 待补证据 |
 
@@ -47,7 +53,11 @@
 
 | 检查项 | Ring | Owner | 状态 | 证据/审阅/复核日期 |
 | --- | --- | --- | --- | --- |
-| 宿主为企业托管 VM/容器、非 root 服务账号和持久加密卷 | R1+ |  | ☐ |  |
+| 企业共享 Feishu/Lark bridge、企业 VM、受控容器或内部 worker 平台的资源发现已完成；负面结果也已记录 | R1+ |  | ☐ |  |
+| 日期化资源发现记录已列明资源状态、申请/ticket、候选、限制、下一动作和 Owner；“已分配”未被当作“已验证” | R1+ |  | ☐ |  |
+| 平台 Owner 已书面验收候选宿主、非 root 服务账号、加密持久卷、secret store、受限出网、时间同步和资源清理责任 | R1+ |  | ☐ |  |
+| Vercel 项目/域名/服务端环境变量写权限、值守和回退责任均由实际 Owner 验证；本地项目关联不作为证据 | R1+ |  | ☐ |  |
+| bridge 与 Nitro 部署使用已审阅的 Git revision、固定 artifact digest 和可回退 artifact；未提交工作区不作为部署输入 | R1+ |  | ☐ |  |
 | lark-cli 与凭据受管理、版本固定、轮换和回退已定义 | R1+ |  | ☐ |  |
 | 两类 consumer 由 supervisor 独立监控与退避重启 | R1+ |  | ☐ |  |
 | bridge 专用 HMAC、key ID、时钟窗口、nonce/replay 防护已验证 | R1+ |  | ☐ |  |

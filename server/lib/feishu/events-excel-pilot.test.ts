@@ -100,6 +100,8 @@ describe("coupon Excel pilot event isolation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.FEISHU_VERIFICATION_TOKEN = "verify-me";
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_test";
     vi.mocked(isCouponExcelPilotEnabled).mockReturnValue(true);
     vi.mocked(listActiveCouponExcelPilotDrafts).mockResolvedValue([pilot]);
     vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([]);

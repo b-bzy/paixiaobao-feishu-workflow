@@ -4,6 +4,7 @@ import {
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceNoBlacklistCard,
   buildCouponThreeSourcePreviewCard,
+  buildCouponThreeSourceRecognizingCard,
 } from "./cards";
 import type { CouponThreeSourcePilotDraft } from "./store";
 
@@ -115,13 +116,14 @@ function draft(): CouponThreeSourcePilotDraft {
 }
 
 describe("three-source Bot cards", () => {
-  it("asks for every ambiguous mapping and a default tier when the list has no tier column", () => {
+  it("asks for ambiguous fields and never infers a coupon from template tiers", () => {
     const card = buildCouponThreeSourceMappingCard(draft());
     const rendered = JSON.stringify(card);
 
     expect(rendered).toContain("coupon_activityName");
-    expect(rendered).toContain("whitelist_defaultTier");
-    expect(rendered).toContain("满999减60");
+    expect(rendered).toContain("couponType");
+    expect(rendered).not.toContain("whitelist_defaultTier");
+    expect(rendered).not.toContain("满999减60");
     expect(rendered).toContain(
       "coupon_three_source_mapping_confirm:rec-three-source:4",
     );
@@ -172,5 +174,56 @@ describe("three-source Bot cards", () => {
     expect(preview).toContain("coupon_three_source_final_confirm");
     expect(preview).toContain("不会自动提交正式 OA");
     expect(preview).not.toContain("calcImage");
+  });
+
+  it("suppresses generation while AI is pending", () => {
+    const current = draft();
+    const recognition = current.recognitions.couponTable;
+    if (!recognition) throw new Error("missing fixture recognition");
+    recognition.ai = {
+      runId: "run-1",
+      revision: 4,
+      sourceSha256: recognition.sourceHash,
+      status: "pending",
+    };
+    const rendered = JSON.stringify(
+      buildCouponThreeSourceRecognizingCard(current),
+    );
+    expect(rendered).toContain("AI 识别中");
+    expect(rendered).not.toContain("确认来源并生成标准附件");
+  });
+
+  it("requires explicit coupon selection for multiple candidates", () => {
+    const current = draft();
+    const recognition = current.recognitions.couponTable;
+    if (!recognition) throw new Error("missing fixture recognition");
+    recognition.couponCandidates = [
+      {
+        id: "coupon-1",
+        couponType: "regular_full_reduction",
+        displayName: "满100减20",
+        sourceHash: recognition.sourceHash,
+        sheetName: "Sheet1",
+        row: 2,
+        evidenceCells: ["A2"],
+        fieldCandidateIds: {},
+        source: "deterministic",
+      },
+      {
+        id: "coupon-2",
+        couponType: "unknown",
+        displayName: "待确认券",
+        sourceHash: recognition.sourceHash,
+        sheetName: "Sheet1",
+        row: 3,
+        evidenceCells: ["A3"],
+        fieldCandidateIds: {},
+        source: "ai",
+      },
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("couponCandidateId");
+    expect(rendered).toContain("couponType");
+    expect(rendered).not.toContain('"selected":true');
   });
 });

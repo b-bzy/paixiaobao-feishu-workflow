@@ -263,4 +263,67 @@ describe("CouponThreeSourcePilotService", () => {
     ).rejects.toThrow("仅支持严选");
     expect(uploadArtifact).toHaveBeenCalledTimes(2);
   });
+
+  it("queues recognition after persisting a source and records pending state", async () => {
+    const coupon = await strictCouponBytes();
+    let draft: CouponThreeSourcePilotDraft | undefined;
+    const enqueueAiRecognition = vi.fn(async () => ({ runId: "run-1" }));
+    const dependencies: CouponThreeSourcePilotDependencies = {
+      downloadSource: async () => coupon,
+      uploadArtifact: vi.fn(),
+      folderToken: () => "unused",
+      loadTemplates,
+      createDraft: async (input) => {
+        draft = {
+          recordId: "record-ai",
+          pilotId: "pilot-ai",
+          ownerOpenId: input.ownerOpenId,
+          task: input.task,
+          schemaVersion: "coupon-three-source-pilot-v1",
+          recognitions: {},
+          selections: {},
+          artifacts: [],
+          processedMessageIds: [],
+          validationIssues: [],
+        };
+        return draft;
+      },
+      getDraft: async () => {
+        if (!draft) throw new Error("missing draft");
+        return draft;
+      },
+      listActive: async () => (draft ? [draft] : []),
+      updateDraft: async (current, updates, expectedRevision) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        draft = { ...current, ...updates };
+        return draft;
+      },
+      handoff: vi.fn(),
+      enqueueAiRecognition,
+    };
+    const service = new CouponThreeSourcePilotService(dependencies);
+    let current = await service.startOrResume("ou_owner");
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "message-1",
+      fileKey: "file-1",
+      fileName: "coupon.xlsx",
+      bytes: coupon,
+    });
+    expect(enqueueAiRecognition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "couponTable",
+        draft: expect.objectContaining({ recordId: "record-ai" }),
+      }),
+    );
+    expect(current.recognitions.couponTable?.ai).toMatchObject({
+      runId: "run-1",
+      revision: current.task.revision,
+      status: "pending",
+    });
+  });
 });

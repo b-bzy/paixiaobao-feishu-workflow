@@ -8,7 +8,7 @@
     "dev:admin": "pnpm --filter miaoda-admin dev",
     "dev:events": "node scripts/long-connection-bridge.mjs",
     "dev:coupon-three-source:p0": "FEISHU_BRIDGE_P0_MODE=true node scripts/long-connection-bridge.mjs",
-    "build": "nitro build && node scripts/inject-edge-callback.mjs",
+    "build": "nitro build",
     "build:admin": "pnpm --filter miaoda-admin build",
     "prepare": "nitro prepare",
     "typecheck": "pnpm typecheck:server && pnpm typecheck:admin",
@@ -19,24 +19,30 @@
     "test": "vitest run",
     "test:control-plane": "vitest run server/lib/control-plane",
     "test:control-plane:postgres": "vitest run server/lib/control-plane/postgres-command-intake.integration.test.ts",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
     "db:migrate:control-plane": "node scripts/migrate-control-plane.mjs",
     "db:migrate:control-plane:test": "node scripts/migrate-control-plane-test.mjs",
     "verify:feishu-dev-release-baseline": "node scripts/verify-feishu-dev-release-baseline.mjs",
-    "run:feishu-dev-release-baseline:hermetic": "node scripts/run-feishu-dev-release-baseline-hermetic.mjs"
+    "run:feishu-dev-release-baseline:hermetic": "node scripts/run-feishu-dev-release-baseline-hermetic.mjs",
+    "test:coupon-three-source:offline": "vitest run server/lib/coupon-oa/three-source/offline.test.ts",
+    "test:coupon-activity-copy": "vitest run scripts/lib/coupon-activity-copy.test.mjs",
+    "run:coupon-three-source:local-case": "node scripts/run-coupon-three-source-local-case.mjs",
+    "recognize:coupon-three-source:deepseek": "node scripts/recognize-coupon-three-source-deepseek.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
     "h3": "1.15.11",
     "nitropack": "^2.13.2",
+    "pg": "^8.23.1",
     "undici": "^8.11.2",
-    "zod": "^4.3.6",
-    "pg": "^8.23.1"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.6",
     "@types/node": "^24.12.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.0",
-    "@types/pg": "^8.23.1"
+    "vitest": "^4.1.0"
   }
 }

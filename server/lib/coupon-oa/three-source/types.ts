@@ -1,6 +1,7 @@
 import type {
   MultiTierSkuListWorkbookManifest,
   MultiTierSkuSheetName,
+  SingleCouponSkuListWorkbookManifest,
 } from "~/lib/excel-template-engine/template-manifests";
 import type {
   RegularFullReductionComputedValues,
@@ -10,6 +11,13 @@ import type {
 export const threeSourceRuleVersion = "three-source-offline-v1";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
+export type CouponType = "regular_full_reduction";
+export type CouponTypeResolutionStatus =
+  | "unique"
+  | "ambiguous"
+  | "unknown"
+  | "multiple_coupons"
+  | "unsupported";
 export type IdentifierDimension = "SKU" | "SPU" | "MERCHANT_ID";
 export type BlacklistStatus =
   | "uploaded"
@@ -36,6 +44,10 @@ export interface SourceProvenance {
   rawValue: string;
   normalizedValue: string;
   ruleVersion: typeof threeSourceRuleVersion;
+  sourceKind?: "workbook" | "ownerSupplement";
+  ownerId?: string;
+  revision?: number;
+  overrideReason?: string;
 }
 
 export interface SourceRoleCandidate {
@@ -55,6 +67,7 @@ export type CouponFieldKey =
   | "channels"
   | "thresholdYuan"
   | "discountAmountYuan"
+  | "activityPointPercent"
   | "totalQuantity"
   | "grantQuantityPerClaim"
   | "dailyClaimLimit"
@@ -109,8 +122,77 @@ export interface WorkbookRecognition {
 
 export interface ConfirmedCouponSource {
   input: RegularFullReductionInput;
-  provenance: Record<CouponFieldKey, SourceProvenance>;
+  provenance: Partial<Record<CouponFieldKey, SourceProvenance>>;
   sourceHash: string;
+  couponCandidateId?: string;
+  couponType?: CouponType;
+  activityPointPercent?: number;
+}
+
+export interface CouponCandidate {
+  id: string;
+  couponType: CouponType | "unknown" | "unsupported";
+  displayName: string;
+  sourceHash: string;
+  sheetName: string;
+  row: number;
+  evidenceCells: string[];
+  fieldCandidateIds: Partial<Record<CouponFieldKey, string>>;
+  source: "deterministic" | "ai";
+}
+
+export interface CouponTypeResolution {
+  status: CouponTypeResolutionStatus;
+  couponType?: CouponType;
+  candidates: CouponCandidate[];
+  issues: string[];
+}
+
+export interface AiAuditSummary {
+  provider: "deepseek";
+  model: string;
+  promptVersion: string;
+  status: "succeeded" | "failed" | "outcome_unknown" | "disabled";
+  requestSha256?: string;
+  responseSha256?: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  fallbackReason?: string;
+}
+
+export interface AiSourceRoleCandidate {
+  role: SourceRole;
+  confidence: number;
+  reasons: string[];
+  evidenceCells: string[];
+}
+
+export interface AiCouponFieldCandidate {
+  key: CouponFieldKey;
+  sheetName: string;
+  headerCell: string;
+  valueCell: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface AiListCandidate {
+  role: "whitelist" | "blacklist" | "unknown";
+  dimension: IdentifierDimension;
+  sheetName: string;
+  headerCell: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface ValidatedAiRecognition {
+  sourceHash: string;
+  roleCandidates: AiSourceRoleCandidate[];
+  couponCandidates: CouponCandidate[];
+  fieldCandidates: AiCouponFieldCandidate[];
+  listCandidates: AiListCandidate[];
+  issues: string[];
 }
 
 export interface TieredIdentifierEntry {
@@ -124,6 +206,22 @@ export interface ParsedTieredIdentifierList {
   sourceHash: string;
   dimension: IdentifierDimension;
   entries: TieredIdentifierEntry[];
+  issues: string[];
+}
+
+export interface SingleCouponIdentifierEntry {
+  id: string;
+  provenance: SourceProvenance;
+}
+
+export interface ParsedSingleCouponIdentifierList {
+  role: "whitelist" | "blacklist";
+  sourceHash: string;
+  dimension: IdentifierDimension;
+  selectedSheetName: string;
+  selectedColumn: string;
+  confirmedCouponName: string;
+  entries: SingleCouponIdentifierEntry[];
   issues: string[];
 }
 
@@ -150,6 +248,9 @@ export interface CanonicalPackage {
   sourceConfirmationHash: string;
   coupon: ConfirmedCouponSource;
   computed: RegularFullReductionComputedValues;
+  couponName?: string;
+  whitelist?: ParsedSingleCouponIdentifierList;
+  blacklist?: ParsedSingleCouponIdentifierList;
   whitelistByTier: Record<MultiTierSkuSheetName, string[]>;
   blacklistByTier?: Record<MultiTierSkuSheetName, string[]>;
   blacklistStatus: BlacklistStatus;
@@ -162,7 +263,10 @@ export interface OfflineArtifact {
   bytes: Uint8Array;
   sha256: string;
   rowCount: number;
-  template: MultiTierSkuListWorkbookManifest | { id: string; version: string };
+  template:
+    | MultiTierSkuListWorkbookManifest
+    | SingleCouponSkuListWorkbookManifest
+    | { id: string; version: string };
 }
 
 export interface RenderedCouponScreenshot {

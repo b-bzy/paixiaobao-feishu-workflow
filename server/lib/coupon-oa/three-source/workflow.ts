@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import {
   generateMultiTierSkuListWorkbook,
   generateRegularFullReductionWorkbook,
+  generateSingleCouponSkuListWorkbook,
 } from "../../excel-template-engine";
 import {
   multiTierSkuBlacklistManifest,
   multiTierSkuWhitelistManifest,
   regularFullReductionManifest,
+  singleCouponSkuBlacklistManifest,
+  singleCouponSkuWhitelistManifest,
 } from "../../excel-template-engine/template-manifests";
 import { computeRegularFullReductionValues } from "../calculation";
 import {
@@ -21,6 +24,7 @@ import type {
   OaPrefillSnapshot,
   OfflineArtifact,
   OverlapDecision,
+  ParsedSingleCouponIdentifierList,
   ParsedTieredIdentifierList,
   RenderedCouponScreenshot,
   SourceConfirmation,
@@ -279,6 +283,188 @@ export async function generateOfflineArtifacts(input: {
       sha256: blacklistWorkbook.sha256,
       rowCount: blacklistWorkbook.rowCount,
       template: multiTierSkuBlacklistManifest,
+    });
+  }
+  return artifacts;
+}
+
+function singleListOverlap(
+  whitelist: ParsedSingleCouponIdentifierList,
+  blacklist: ParsedSingleCouponIdentifierList | undefined,
+): { ids: string[]; sha256: string } {
+  if (!blacklist) {
+    return { ids: [], sha256: stableHash("single-list:no-blacklist") };
+  }
+  const blacklistIds = new Set(blacklist.entries.map((entry) => entry.id));
+  const ids = whitelist.entries
+    .map((entry) => entry.id)
+    .filter((id) => blacklistIds.has(id))
+    .sort((left, right) => left.localeCompare(right, "en"));
+  return { ids: [...new Set(ids)], sha256: stableHash(ids) };
+}
+
+function assertSingleList(
+  list: ParsedSingleCouponIdentifierList,
+  label: string,
+): void {
+  if (list.dimension !== "SKU") throw new Error(`${label}必须是 SKU 维度`);
+  if (!list.entries.length) throw new Error(`${label}不能是空名单`);
+  if (list.issues.length) {
+    throw new Error(`${label}存在未解决的数据问题：${list.issues.join("；")}`);
+  }
+}
+
+export function createSingleCouponCanonicalPackage(input: {
+  ownerId: string;
+  revision: number;
+  coupon: ConfirmedCouponSource;
+  whitelist: ParsedSingleCouponIdentifierList;
+  blacklistStatus: BlacklistStatus;
+  blacklist?: ParsedSingleCouponIdentifierList;
+  overlapDecision?: OverlapDecision;
+}): CanonicalPackage {
+  assertSingleList(input.whitelist, "白名单");
+  if (input.blacklistStatus === "absent_pending_confirmation") {
+    throw new Error("必须明确确认“本次无黑名单”后才能继续");
+  }
+  if (input.blacklistStatus === "uploaded") {
+    if (!input.blacklist) throw new Error("已上传黑名单但缺少解析结果");
+    assertSingleList(input.blacklist, "黑名单");
+  } else if (input.blacklist) {
+    throw new Error("非 uploaded 状态不能附带黑名单");
+  }
+  const overlap = singleListOverlap(input.whitelist, input.blacklist);
+  if (overlap.ids.length && !input.overlapDecision) {
+    throw new Error("白黑名单存在重叠 SKU，必须由业务员选择处理方式");
+  }
+  if (input.overlapDecision === "source_replacement_required") {
+    throw new Error("业务员要求返回修改源文件，不能生成标准附件");
+  }
+  const conflicts = new Set(overlap.ids);
+  const whitelist =
+    input.overlapDecision === "blacklist_wins"
+      ? {
+          ...input.whitelist,
+          entries: input.whitelist.entries.filter(
+            (entry) => !conflicts.has(entry.id),
+          ),
+        }
+      : input.whitelist;
+  const blacklist =
+    input.blacklist && input.overlapDecision === "whitelist_wins"
+      ? {
+          ...input.blacklist,
+          entries: input.blacklist.entries.filter(
+            (entry) => !conflicts.has(entry.id),
+          ),
+        }
+      : input.blacklist;
+  const computed = computeRegularFullReductionValues(input.coupon.input);
+  const compatibilityTiers = multiTierSkuWhitelistManifest.sheets.reduce(
+    (result, tier) => {
+      result[tier] = [];
+      return result;
+    },
+    {} as CanonicalPackage["whitelistByTier"],
+  );
+  compatibilityTiers[multiTierSkuWhitelistManifest.sheets[0]] =
+    whitelist.entries.map((entry) => entry.id);
+  const compatibilityBlacklist = blacklist
+    ? multiTierSkuBlacklistManifest.sheets.reduce(
+        (result, tier) => {
+          result[tier] = [];
+          return result;
+        },
+        {} as NonNullable<CanonicalPackage["blacklistByTier"]>,
+      )
+    : undefined;
+  if (compatibilityBlacklist && blacklist) {
+    compatibilityBlacklist[multiTierSkuBlacklistManifest.sheets[0]] =
+      blacklist.entries.map((entry) => entry.id);
+  }
+  return {
+    ownerId: input.ownerId,
+    revision: input.revision,
+    sourceConfirmationHash: stableHash({
+      ownerId: input.ownerId,
+      revision: input.revision,
+      couponSourceHash: input.coupon.sourceHash,
+      couponCandidateId: input.coupon.couponCandidateId,
+      whitelistSourceHash: whitelist.sourceHash,
+      whitelistIds: whitelist.entries.map((entry) => entry.id),
+      blacklistSourceHash: blacklist?.sourceHash,
+      blacklistIds: blacklist?.entries.map((entry) => entry.id),
+      overlap,
+    }),
+    coupon: input.coupon,
+    computed,
+    couponName: computed.couponName,
+    whitelist,
+    blacklist,
+    whitelistByTier: compatibilityTiers,
+    blacklistByTier: compatibilityBlacklist,
+    blacklistStatus: input.blacklistStatus,
+    overlap: { ...overlap, decision: input.overlapDecision },
+  };
+}
+
+export async function generateSingleCouponOfflineArtifacts(input: {
+  package: CanonicalPackage;
+  templates: OfflineArtifactTemplates;
+}): Promise<OfflineArtifact[]> {
+  if (!input.package.whitelist || !input.package.couponName) {
+    throw new Error("单券标准附件缺少已确认名单或券名");
+  }
+  const couponWorkbook = await generateRegularFullReductionWorkbook({
+    templateBytes: input.templates.regularFullReductionTemplateBytes,
+    data: input.package.coupon.input,
+    computed: input.package.computed,
+    revision: input.package.revision,
+  });
+  const whitelistWorkbook = await generateSingleCouponSkuListWorkbook({
+    templateBytes: input.templates.whitelistTemplateBytes,
+    manifest: singleCouponSkuWhitelistManifest,
+    couponName: input.package.couponName,
+    ids: input.package.whitelist.entries.map((entry) => entry.id),
+    activityName: input.package.coupon.input.activityName,
+    revision: input.package.revision,
+    role: "whitelist",
+  });
+  const artifacts: OfflineArtifact[] = [
+    {
+      role: "couponTable",
+      fileName: couponWorkbook.fileName,
+      bytes: couponWorkbook.bytes,
+      sha256: couponWorkbook.sha256,
+      rowCount: couponWorkbook.rowCount,
+      template: regularFullReductionManifest,
+    },
+    {
+      role: "productWhitelist",
+      fileName: whitelistWorkbook.fileName,
+      bytes: whitelistWorkbook.bytes,
+      sha256: whitelistWorkbook.sha256,
+      rowCount: whitelistWorkbook.rowCount,
+      template: singleCouponSkuWhitelistManifest,
+    },
+  ];
+  if (input.package.blacklist) {
+    const blacklistWorkbook = await generateSingleCouponSkuListWorkbook({
+      templateBytes: input.templates.blacklistTemplateBytes,
+      manifest: singleCouponSkuBlacklistManifest,
+      couponName: input.package.couponName,
+      ids: input.package.blacklist.entries.map((entry) => entry.id),
+      activityName: input.package.coupon.input.activityName,
+      revision: input.package.revision,
+      role: "blacklist",
+    });
+    artifacts.push({
+      role: "productBlacklist",
+      fileName: blacklistWorkbook.fileName,
+      bytes: blacklistWorkbook.bytes,
+      sha256: blacklistWorkbook.sha256,
+      rowCount: blacklistWorkbook.rowCount,
+      template: singleCouponSkuBlacklistManifest,
     });
   }
   return artifacts;

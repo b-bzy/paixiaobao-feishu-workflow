@@ -16,6 +16,8 @@ export const couponPilotInputSchema = z
     activityName: requiredText.max(200),
     activityBackground: requiredText.max(4000),
     businessMode: z.enum(["严选", "寄卖", "pop"]),
+    /** OA point is a business-confirmed value, not a derived coupon discount. */
+    activityPointPercent: z.number().positive().max(100).finite().optional(),
     applicantName: requiredText.max(200),
     activityStartAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     activityEndAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

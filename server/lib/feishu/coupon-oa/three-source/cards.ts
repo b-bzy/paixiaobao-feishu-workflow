@@ -1,8 +1,9 @@
 import type {
+  CouponCandidate,
   CouponFieldCandidate,
+  CouponFieldKey,
   ListColumnCandidate,
 } from "../../../coupon-oa/three-source/types";
-import { multiTierSkuSheetNames } from "../../../excel-template-engine/template-manifests";
 import type { FeishuCard } from "../../expense-poc";
 import type {
   CouponThreeSourcePilotDraft,
@@ -223,18 +224,117 @@ export function buildCouponThreeSourceNoBlacklistCard(
   });
 }
 
+export function buildCouponThreeSourceRecognizingCard(
+  draft: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  const pending = Object.entries(draft.recognitions)
+    .filter(([, recognition]) => recognition?.ai?.status === "pending")
+    .map(([role, recognition]) => `- ${role}：${recognition?.source.fileName}`);
+  return card({
+    title: "AI 识别中",
+    subtitle: "候选识别完成后再进行第二轮确认",
+    template: "blue",
+    elements: [
+      {
+        tag: "markdown",
+        content: [
+          "DeepSeek 当前只识别候选，不会生成表格或创建 OA。",
+          ...pending,
+          "请等待最新卡片；失败时系统会回退到人工补充。",
+        ].join("\n"),
+      },
+      cancelButton(draft),
+    ],
+  });
+}
+
+function combinedCouponCandidates(
+  recognition: StoredWorkbookRecognition | undefined,
+): CouponCandidate[] {
+  if (!recognition) return [];
+  const result = [...(recognition.couponCandidates ?? [])];
+  for (const candidate of recognition.ai?.result?.couponCandidates ?? []) {
+    if (
+      !result.some(
+        (item) =>
+          item.sheetName === candidate.sheetName && item.row === candidate.row,
+      )
+    ) {
+      result.push(candidate);
+    }
+  }
+  return result;
+}
+
+const ownerSupplementKeys = [
+  "activityName",
+  "activityBackground",
+  "businessMode",
+  "applicantName",
+  "activityStartAt",
+  "activityEndAt",
+  "channels",
+  "thresholdYuan",
+  "discountAmountYuan",
+  "totalQuantity",
+  "grantQuantityPerClaim",
+  "dailyClaimLimit",
+  "claimWindow",
+  "useWindow",
+  "expectedClaimRate",
+  "expectedUseRate",
+  "platformBearingRatio",
+  "estimatedGmvYuan",
+  "claimRule",
+  "allowGift",
+  "promotionMode",
+  "overDeduction",
+] as const satisfies readonly CouponFieldKey[];
+
+const optionalOwnerSupplementKeys = [
+  "publicPromotionChannels",
+  "overDeductionReason",
+] as const satisfies readonly CouponFieldKey[];
+
+function missingOwnerFields(
+  recognition: StoredWorkbookRecognition | undefined,
+): CouponFieldKey[] {
+  if (!recognition) return [...ownerSupplementKeys];
+  return ownerSupplementKeys.filter(
+    (key) =>
+      !recognition.couponFieldCandidates[key]?.some((candidate) =>
+        candidate.sampleValues.some((value) => value.trim()),
+      ) &&
+      !recognition.ai?.result?.fieldCandidates.some(
+        (candidate) => candidate.key === key,
+      ),
+  );
+}
+
 export function buildCouponThreeSourceMappingCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
   const coupon = draft.recognitions.couponTable;
   const whitelist = draft.recognitions.whitelist;
   const blacklist = draft.recognitions.blacklist;
+  const coupons = combinedCouponCandidates(coupon);
+  const hasUnknownCoupon = coupons.some(
+    (candidate) => candidate.couponType === "unknown",
+  );
+  const onlyUnsupported =
+    coupons.length > 0 &&
+    coupons.every((candidate) => candidate.couponType === "unsupported");
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
       content: [
-        "第 3 步：确认活动点位及存在歧义的来源列。",
-        "未显示的字段或列已经唯一识别；提交此表单会冻结新的 revision 并清除旧预览。",
+        "第二轮：确认唯一优惠券、活动点位、缺失字段和名单 Sheet。",
+        "AI 只提供候选；提交后才会由确定性模板引擎生成标准附件。",
+        ...(onlyUnsupported
+          ? [
+              "当前只识别到 P0 不支持的券型，请结束并改用受支持的常规满减券材料。",
+            ]
+          : []),
       ].join("\n"),
     },
     {
@@ -242,6 +342,40 @@ export function buildCouponThreeSourceMappingCard(
       name: "coupon_three_source_mapping_submit",
       vertical_spacing: "12px",
       elements: [
+        ...(coupons.length === 0 || hasUnknownCoupon
+          ? [
+              {
+                tag: "select_static",
+                name: "couponType",
+                placeholder: plainText("请确认优惠券类型"),
+                required: true,
+                width: "fill",
+                options: [
+                  {
+                    text: plainText("常规满减券"),
+                    value: "regular_full_reduction",
+                  },
+                ],
+              },
+            ]
+          : []),
+        ...(coupons.length > 1
+          ? [
+              {
+                tag: "select_static",
+                name: "couponCandidateId",
+                placeholder: plainText("检测到多券，请选择本次唯一优惠券"),
+                required: true,
+                width: "fill",
+                options: coupons.map((candidate) => ({
+                  text: plainText(
+                    `${candidate.displayName}（${candidate.sheetName}!第${candidate.row}行）`,
+                  ),
+                  value: candidate.id,
+                })),
+              },
+            ]
+          : []),
         {
           tag: "input",
           name: "activityPointPercent",
@@ -260,23 +394,53 @@ export function buildCouponThreeSourceMappingCard(
               required: true,
             }),
           ),
+        ...missingOwnerFields(coupon).map((key) => ({
+          tag: "input",
+          name: `owner_${key}`,
+          label: plainText(`补充字段 ${key}：`),
+          input_type: "text",
+          required: true,
+          width: "fill",
+        })),
+        ...optionalOwnerSupplementKeys
+          .filter(
+            (key) =>
+              !coupon?.couponFieldCandidates[key]?.some((candidate) =>
+                candidate.sampleValues.some((value) => value.trim()),
+              ) &&
+              !coupon?.ai?.result?.fieldCandidates.some(
+                (candidate) => candidate.key === key,
+              ),
+          )
+          .map((key) => ({
+            tag: "input",
+            name: `owner_${key}`,
+            label: plainText(`按业务条件补充 ${key}：`),
+            input_type: "text",
+            required: false,
+            width: "fill",
+          })),
         ...listCandidateElements("whitelist", whitelist),
         ...listCandidateElements("blacklist", blacklist),
-        {
-          tag: "button",
-          name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}`,
-          text: plainText("确认映射，核对来源并生成标准附件"),
-          type: "primary_filled",
-          width: "fill",
-          form_action_type: "submit",
-        },
+        ...(!onlyUnsupported
+          ? [
+              {
+                tag: "button",
+                name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}`,
+                text: plainText("确认来源并生成标准附件"),
+                type: "primary_filled",
+                width: "fill",
+                form_action_type: "submit",
+              },
+            ]
+          : []),
       ],
     },
     cancelButton(draft),
   ];
   return card({
     title: "确认来源映射",
-    subtitle: "第 3 步：活动点位与字段映射",
+    subtitle: "第二轮：异常、缺失字段与来源确认",
     template: "orange",
     elements,
   });
@@ -290,9 +454,6 @@ function listCandidateElements(
   const identifier = recognition.listCandidates.filter(
     (candidate) => candidate.kind === "identifier",
   );
-  const tier = recognition.listCandidates.filter(
-    (candidate) => candidate.kind === "tier",
-  );
   return [
     ...(identifier.length > 1
       ? [
@@ -304,32 +465,25 @@ function listCandidateElements(
           }),
         ]
       : []),
-    ...(tier.length > 1
+    ...(identifier.length > 1
       ? [
-          candidateSelect({
-            name: `${prefix}_tierCandidateId`,
-            label: `${prefix === "whitelist" ? "白名单" : "黑名单"}券档列`,
-            candidates: tier,
+          {
+            tag: "select_static",
+            name: `${prefix}_selectedSheetName`,
+            placeholder: plainText(
+              `请选择${prefix === "whitelist" ? "白名单" : "黑名单"} Sheet`,
+            ),
             required: true,
-          }),
+            width: "fill",
+            options: [
+              ...new Set(identifier.map((candidate) => candidate.sheetName)),
+            ].map((sheetName) => ({
+              text: plainText(sheetName),
+              value: sheetName,
+            })),
+          },
         ]
-      : tier.length === 0
-        ? [
-            {
-              tag: "select_static",
-              name: `${prefix}_defaultTier`,
-              placeholder: plainText(
-                `请选择${prefix === "whitelist" ? "白名单" : "黑名单"}统一券档`,
-              ),
-              required: true,
-              width: "fill",
-              options: multiTierSkuSheetNames.map((tierName) => ({
-                text: plainText(tierName),
-                value: tierName,
-              })),
-            },
-          ]
-        : []),
+      : []),
   ];
 }
 

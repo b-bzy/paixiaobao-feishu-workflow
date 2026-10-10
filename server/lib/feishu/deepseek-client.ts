@@ -15,7 +15,7 @@ export type DeepSeekCouponExtraction = z.infer<
 const systemPrompt = `你是内部优惠券 Excel 试点的字段提取器。只提取用户明确提供的信息，绝不补猜。
 返回严格 JSON 对象，格式为：
 {"fields": {"字段key": 值}, "missingFields": ["缺少的字段key"], "ambiguousFields": ["有歧义的字段key"], "unparsedText": "未识别的内容"}。
-支持字段：activityName, activityBackground, businessMode, applicantName, activityStartAt, activityEndAt, channels, thresholdYuan, discountAmountYuan, totalQuantity, grantQuantityPerClaim, dailyClaimLimit, claimWindow, useWindow, expectedClaimRate, expectedUseRate, platformBearingRatio, estimatedGmvYuan, claimRule, allowGift, promotionMode, publicPromotionChannels, overDeduction, overDeductionReason。
+支持字段：activityName, activityBackground, businessMode, activityPointPercent, applicantName, activityStartAt, activityEndAt, channels, thresholdYuan, discountAmountYuan, totalQuantity, grantQuantityPerClaim, dailyClaimLimit, claimWindow, useWindow, expectedClaimRate, expectedUseRate, platformBearingRatio, estimatedGmvYuan, claimRule, allowGift, promotionMode, publicPromotionChannels, overDeduction, overDeductionReason。
 channels 只能输出 JD、PAIPAI 数组。百分比可输出小数或带百分号字符串。不要输出任何未提供字段，不要输出解释文字。`;
 
 export async function extractCouponPilotFields(

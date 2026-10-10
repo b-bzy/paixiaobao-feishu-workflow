@@ -18,7 +18,7 @@
 
 它使用本机长连接是为了保持测试 App 的现有事件模式，**不是**因为本机 runner 已具备可靠交付能力。`lark-cli` 可能在转发完成前 ACK；电脑休眠、断网、runner 停止或 HTTP 失败可能造成已确认事件丢失。任何这种事件均停止而非重发。
 
-禁止：真实原生 OA 创建、最终发送、多人/群聊、批量、R1/R2/R3/FDEV 完成声称、长期常驻、worker tick、持久化/retry/DLQ 声称，或把本地 Claude Code Skill 当作运行时代码。
+禁止：真实原生 OA 创建、最终发送、多人/群聊、批量、R1/R2/R3/FDEV 完成声称、长期常驻、把本地 Claude Code Skill 当作运行时代码，或把 P0 AI effect 的局部持久化表述为完整事件可靠性。仅当本节 AI Gate 全部满足时，允许 worker tick 处理 `coupon_three_source_ai_recognition`；它不修复本机 runner 可能丢事件的限制。
 
 ## 1. 固定范围
 
@@ -31,6 +31,7 @@
 | 产物 | 标准配券表、标准白名单、可选标准黑名单；源文件不进入 OA 附件。 |
 | OA | 只创建既有 OA 测试稿；`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`。 |
 | 恢复 | 不保证。forward failure、timeout、重复或未知状态一律停止并人工核对。 |
+| AI | 默认关闭；启用时只识别候选。第二轮 owner 确认后由确定性模板生成，DeepSeek 不参与生成。 |
 
 ## 2. 部署前配置
 
@@ -52,6 +53,10 @@
 | `FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS` | 留空或仅测试用户；native kill switch 仍必须关闭。 |
 | `FEISHU_COUPON_OA_APPROVAL_CODE`、`FEISHU_COUPON_DRAFT_TABLE_ID` | 已验证的隔离 OA 测试稿配置。 |
 | `FEISHU_COUPON_THREE_SOURCE_PILOT_*` | 已创建的专属 Base/表/Drive；`..._PILOT_ENABLED=false` 直到测试窗口。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED` | 默认 `false`。只有完成迁移、worker、隐私与 kill-switch 核对后才可在单次窗口设为 `true`。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS` | 默认 `45000`，允许范围 1000–120000。 |
+| `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` | 只在 AI Gate 开启时需要；base URL 必须是官方 HTTPS endpoint。实际值不得进入聊天、日志或文档。 |
+| `DATABASE_URL`、`FEISHU_WORKER_ID`、`CONTROL_PLANE_TICK_TOKEN` | AI Gate 开启时必须配置；用于 migration 0005、durable effect 与受保护 tick。 |
 
 `FEISHU_VERIFICATION_TOKEN` 不参与 P0 bridge 的 HMAC 合同，也不需要配置 URL challenge；保留已有值不会授权此路径。
 
@@ -83,12 +88,13 @@ FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
 
 1. 使用只含 P0 long-connection scope 的 Git revision 部署 Vercel；不得发布当前脏工作区或 P1 control-plane 文件。
 2. 复核 Vercel 中 native kill switch 为 `false`、三源 pilot 为 `false`，并确认 `/api/feishu/poc-bridge` 对无效 HMAC fail closed。
-3. 在 Mac 确认单 consumer 后启动：
+3. 若本次不测 AI，确认 AI 开关仍为 `false`，跳过 migration/tick。若本次明确测试 AI，先执行 `pnpm db:migrate:control-plane`，确认 `0005_coupon_ai_recognition_runs.sql` 已应用，再对受保护的 control-plane tick 做无业务副作用健康检查；任一失败都关闭 AI 开关。
+4. 在 Mac 确认单 consumer 后启动：
    ```bash
    pnpm dev:coupon-three-source:p0
    ```
    日志只能显示目标 host、event type 和脱敏 ID；若看到 secret、完整 payload、完整 open ID 或附件内容，立刻停止。
-4. runner 的启动/HTTP 成功不代表可恢复，也不代表业务成功。启动后保持 pilot flag 关闭，直到明确记录测试窗口。
+5. runner 的启动/HTTP 成功不代表可恢复，也不代表业务成功。启动后保持 pilot flag 关闭，直到明确记录测试窗口。
 
 ## 4. 单次 E2E
 
@@ -96,8 +102,8 @@ FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
 
 1. 在明确窗口为唯一测试用户打开 `FEISHU_COUPON_THREE_SOURCE_PILOT_ENABLED=true`。
 2. 在 Bot 单聊发送精确 `/OA优惠券提报`，确认收到材料收集卡。
-3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。
-4. 完成材料角色、歧义字段/名单列、OA 活动点位；未提供黑名单时点“确认本次无黑名单”，有交集时作出明确决定。
+3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。AI 开启时应先出现“AI 识别中”，worker 完成后再出现第二轮卡片。
+4. 在第二轮确认唯一优惠券、未知券型、缺失字段、名单 Sheet/列和 OA 活动点位；多券时必须选一个，不能默认第一条。未提供黑名单时点“确认本次无黑名单”，有交集时作出明确决定。
 5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀；严选 P0 不要求 `calcImage`。
 6. 点击“确认并创建 OA 测试稿”。收到既有 OA 草稿预览卡即为本次成功终点。
 7. **不点击**预览卡中的最终正式发送动作。核对 native kill switch 仍关闭，审批中心没有新增原生实例，草稿无 instance code/link。
@@ -110,10 +116,11 @@ FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=10000
 处理顺序：
 
 1. 保持 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`；有疑义先关闭所有 coupon pilot flag。
-2. Ctrl-C 停止本机 runner，确认其 child consumer 已退出。
-3. 不把飞书 ACK、runner stdout、HTTP 200 或卡片重试解释为已安全处理。
-4. 人工核对已有 Base/Drive 标准产物和 OA 测试稿；不得以“补偿”为由创建真实 OA。
-5. 只保留脱敏的窗口、revision、事件类型、状态、hash 前缀和动作，不记录 secret、签名、完整 payload、file key、完整 open ID 或附件内容。
+2. 立即设置 `FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED=false`，停止新的 AI effect；已是终态但尚未投影的 run 只允许人工核对，不得重新外发。
+3. Ctrl-C 停止本机 runner，确认其 child consumer 已退出。
+4. 不把飞书 ACK、runner stdout、HTTP 200 或卡片重试解释为已安全处理。
+5. 人工核对已有 Base/Drive 标准产物和 OA 测试稿；不得以“补偿”为由创建真实 OA。
+6. 只保留脱敏的窗口、revision、事件类型、状态、hash 前缀和动作，不记录 secret、签名、完整 payload、file key、完整 open ID、prompt/response 或附件内容。
 
 ## 6. 证据与退出
 

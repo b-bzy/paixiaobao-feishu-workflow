@@ -6,18 +6,22 @@ import {
 } from "../calculation";
 import type {
   ConfirmedCouponSource,
+  CouponCandidate,
   CouponFieldCandidate,
   CouponFieldKey,
+  CouponType,
+  CouponTypeResolution,
   IdentifierDimension,
   ListColumnCandidate,
   OfflineSourceFile,
   SourceProvenance,
   SourceRole,
+  ValidatedAiRecognition,
   WorkbookRecognition,
 } from "./types";
 import { threeSourceRuleVersion } from "./types";
 
-const HEADER_ALIASES: Record<CouponFieldKey, readonly string[]> = {
+const HEADER_ALIASES: Partial<Record<CouponFieldKey, readonly string[]>> = {
   activityName: ["活动名称", "活动名"],
   activityBackground: ["活动背景", "活动说明", "活动简介"],
   businessMode: ["业务模式"],
@@ -27,6 +31,7 @@ const HEADER_ALIASES: Record<CouponFieldKey, readonly string[]> = {
   channels: ["用券渠道", "配置渠道"],
   thresholdYuan: ["满减门槛", "限额", "门槛"],
   discountAmountYuan: ["优惠面额", "面额", "优惠金额"],
+  activityPointPercent: ["活动点位", "活动点位（%）", "活动点位%"],
   totalQuantity: ["总申请数量", "申请数量", "总数量"],
   grantQuantityPerClaim: ["单次发放到账张数", "单次到账张数"],
   dailyClaimLimit: ["每日领取次数", "日领取次数"],
@@ -373,17 +378,387 @@ export interface ExtractRegularFullReductionInput {
   fieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
 }
 
+const REGULAR_FIELD_KEYS = (
+  Object.keys(HEADER_ALIASES) as CouponFieldKey[]
+).filter((key) => key !== "activityPointPercent");
+
+function candidateForRow(
+  recognition: WorkbookRecognition,
+  worksheet: ExcelJS.Worksheet,
+  headerRow: number,
+  row: number,
+  candidates: Partial<Record<CouponFieldKey, CouponFieldCandidate>>,
+): CouponCandidate {
+  const thresholdCandidate = candidates.thresholdYuan;
+  const discountCandidate = candidates.discountAmountYuan;
+  const threshold = thresholdCandidate
+    ? cellText(worksheet.getRow(row).getCell(thresholdCandidate.column))
+    : "";
+  const discount = discountCandidate
+    ? cellText(worksheet.getRow(row).getCell(discountCandidate.column))
+    : "";
+  const displayName =
+    threshold && discount
+      ? `满${threshold}减${discount}`
+      : `${worksheet.name} 第 ${row} 行`;
+  return {
+    id: candidateId(
+      recognition.sourceHash,
+      "coupon-row",
+      worksheet.name,
+      row,
+      String(headerRow),
+    ),
+    couponType: "regular_full_reduction",
+    displayName,
+    sourceHash: recognition.sourceHash,
+    sheetName: worksheet.name,
+    row,
+    evidenceCells: Object.values(candidates)
+      .map((candidate) => `${candidate.column}${row}`)
+      .filter((address) => Boolean(cellText(worksheet.getCell(address)))),
+    fieldCandidateIds: Object.fromEntries(
+      Object.entries(candidates).map(([key, candidate]) => [key, candidate.id]),
+    ),
+    source: "deterministic",
+  };
+}
+
+export async function discoverRegularFullReductionCoupons(input: {
+  recognition: WorkbookRecognition;
+  fieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
+}): Promise<CouponCandidate[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Buffer.from(input.recognition.source.bytes) as never,
+  );
+  const grouped = new Map<
+    string,
+    Partial<Record<CouponFieldKey, CouponFieldCandidate>>
+  >();
+  for (const key of REGULAR_FIELD_KEYS) {
+    const candidates = input.recognition.couponFieldCandidates[key] ?? [];
+    const explicitlySelected = input.fieldCandidateIds?.[key];
+    const selected = explicitlySelected
+      ? candidates.filter((candidate) => candidate.id === explicitlySelected)
+      : candidates;
+    for (const candidate of selected) {
+      const groupKey = `${candidate.sheetName}\u0000${candidate.headerRow}`;
+      const fields = grouped.get(groupKey) ?? {};
+      if (!fields[key] || explicitlySelected) fields[key] = candidate;
+      grouped.set(groupKey, fields);
+    }
+  }
+
+  const discovered: CouponCandidate[] = [];
+  for (const [groupKey, fields] of grouped) {
+    const [sheetName, headerRowText] = groupKey.split("\u0000");
+    const headerRow = Number(headerRowText);
+    const worksheet = workbook.getWorksheet(sheetName);
+    if (!worksheet) continue;
+    for (let row = headerRow + 1; row <= worksheet.rowCount; row += 1) {
+      const populated = Object.values(fields).filter((candidate) =>
+        Boolean(cellText(worksheet.getRow(row).getCell(candidate.column))),
+      ).length;
+      if (populated < 2) continue;
+      discovered.push(
+        candidateForRow(input.recognition, worksheet, headerRow, row, fields),
+      );
+    }
+  }
+  return discovered;
+}
+
+export function resolveCouponType(input: {
+  candidates: CouponCandidate[];
+  ownerConfirmedCouponType?: CouponType;
+}): CouponTypeResolution {
+  if (input.candidates.length > 1) {
+    return {
+      status: "multiple_coupons",
+      candidates: input.candidates,
+      issues: ["同一提报识别到多个优惠券，必须由业务员选择一个"],
+    };
+  }
+  const supported = input.candidates.filter(
+    (candidate) => candidate.couponType === "regular_full_reduction",
+  );
+  const unsupported = input.candidates.filter(
+    (candidate) => candidate.couponType === "unsupported",
+  );
+  if (unsupported.length && !supported.length) {
+    return {
+      status: "unsupported",
+      candidates: input.candidates,
+      issues: ["识别到当前 P0 不支持的优惠券类型"],
+    };
+  }
+  if (supported.length === 1) {
+    return {
+      status: "unique",
+      couponType: "regular_full_reduction",
+      candidates: supported,
+      issues: [],
+    };
+  }
+  if (input.ownerConfirmedCouponType === "regular_full_reduction") {
+    return {
+      status: "unique",
+      couponType: "regular_full_reduction",
+      candidates: input.candidates,
+      issues: [],
+    };
+  }
+  return {
+    status: "unknown",
+    candidates: input.candidates,
+    issues: ["无法识别优惠券类型，需要业务员确认"],
+  };
+}
+
+function normalizedOwnerValue(key: CouponFieldKey, value: unknown): unknown {
+  if (key === "channels") {
+    return Array.isArray(value)
+      ? value
+      : normalizeChannels(String(value ?? ""));
+  }
+  if (key === "publicPromotionChannels") {
+    return Array.isArray(value)
+      ? value
+      : String(value ?? "")
+          .split(/[、，,；;]/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+  }
+  if (
+    [
+      "thresholdYuan",
+      "discountAmountYuan",
+      "totalQuantity",
+      "grantQuantityPerClaim",
+      "dailyClaimLimit",
+      "estimatedGmvYuan",
+      "activityPointPercent",
+    ].includes(key)
+  ) {
+    return typeof value === "number" ? value : number(String(value ?? ""));
+  }
+  if (
+    ["expectedClaimRate", "expectedUseRate", "platformBearingRatio"].includes(
+      key,
+    )
+  ) {
+    return typeof value === "number"
+      ? value
+      : normalizeRegularRatio(String(value ?? ""));
+  }
+  return typeof value === "string" ? value.trim() : value;
+}
+
+export interface ConfirmRegularFullReductionCouponInput {
+  recognition: WorkbookRecognition;
+  ownerId: string;
+  revision: number;
+  couponCandidateId?: string;
+  ownerConfirmedCouponType?: CouponType;
+  fieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
+  ownerFieldValues?: Partial<Record<CouponFieldKey, unknown>>;
+  overrideReasons?: Partial<Record<CouponFieldKey, string>>;
+  aiRecognition?: ValidatedAiRecognition;
+}
+
+export async function confirmRegularFullReductionCoupon(
+  input: ConfirmRegularFullReductionCouponInput,
+): Promise<ConfirmedCouponSource> {
+  const deterministic = await discoverRegularFullReductionCoupons(input);
+  const aiCandidates =
+    input.aiRecognition?.sourceHash === input.recognition.sourceHash
+      ? input.aiRecognition.couponCandidates
+      : [];
+  const discovered = [...deterministic];
+  for (const candidate of aiCandidates) {
+    if (
+      !discovered.some(
+        (item) =>
+          item.sheetName === candidate.sheetName && item.row === candidate.row,
+      )
+    ) {
+      discovered.push(candidate);
+    }
+  }
+  const resolution = resolveCouponType({
+    candidates: discovered,
+    ownerConfirmedCouponType: input.ownerConfirmedCouponType,
+  });
+  if (resolution.status === "unsupported" || resolution.status === "unknown") {
+    throw new Error(resolution.issues.join("；"));
+  }
+  let selected: CouponCandidate | undefined;
+  if (input.couponCandidateId) {
+    selected = discovered.find(
+      (candidate) => candidate.id === input.couponCandidateId,
+    );
+    if (!selected) throw new Error("已选择的优惠券候选不存在或已过期");
+  } else if (discovered.length === 1) {
+    selected = discovered[0];
+  } else if (discovered.length > 1) {
+    throw new Error("识别到多个优惠券，必须明确选择其中一个");
+  } else {
+    throw new Error("未找到可绑定来源行的优惠券候选");
+  }
+  if (selected.couponType === "unsupported") {
+    throw new Error("所选优惠券类型不在当前 P0 支持范围内");
+  }
+  if (
+    selected.couponType === "unknown" &&
+    input.ownerConfirmedCouponType !== "regular_full_reduction"
+  ) {
+    throw new Error("所选优惠券仍需业务员确认类型");
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Buffer.from(input.recognition.source.bytes) as never,
+  );
+  const worksheet = workbook.getWorksheet(selected.sheetName);
+  if (!worksheet) throw new Error("已选择的优惠券来源 Sheet 不存在");
+  const provenance: Partial<Record<CouponFieldKey, SourceProvenance>> = {};
+  const values: Partial<Record<CouponFieldKey, unknown>> = {};
+
+  for (const key of REGULAR_FIELD_KEYS) {
+    const candidateIdValue =
+      input.fieldCandidateIds?.[key] ?? selected.fieldCandidateIds[key];
+    const candidates = input.recognition.couponFieldCandidates[key] ?? [];
+    const candidate = candidateIdValue
+      ? candidates.find((item) => item.id === candidateIdValue)
+      : candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    if (candidate && candidate.sheetName !== selected.sheetName) {
+      throw new Error(`字段 ${key} 与已选择优惠券不在同一 Sheet`);
+    }
+    const aiCandidate =
+      !candidate && input.aiRecognition
+        ? input.aiRecognition.fieldCandidates.find(
+            (item) =>
+              item.key === key &&
+              item.sheetName === selected.sheetName &&
+              Number(item.valueCell.match(/\d+$/)?.[0]) === selected.row,
+          )
+        : undefined;
+    const aiColumn = aiCandidate?.valueCell.match(/^[A-Z]+/)?.[0];
+    const source = candidate
+      ? sourceCell(
+          worksheet,
+          selected.row,
+          candidate.column,
+          input.recognition.sourceHash,
+          input.recognition.source.fileName,
+        )
+      : aiColumn
+        ? sourceCell(
+            worksheet,
+            selected.row,
+            aiColumn,
+            input.recognition.sourceHash,
+            input.recognition.source.fileName,
+          )
+        : undefined;
+    const ownerProvided = Object.hasOwn(input.ownerFieldValues ?? {}, key);
+    if (ownerProvided) {
+      if (source?.rawValue && !input.overrideReasons?.[key]?.trim()) {
+        throw new Error(`覆盖来源字段 ${key} 时必须填写原因`);
+      }
+      const ownerValue = normalizedOwnerValue(
+        key,
+        input.ownerFieldValues?.[key],
+      );
+      values[key] = ownerValue;
+      provenance[key] = {
+        sourceHash: input.recognition.sourceHash,
+        fileName: input.recognition.source.fileName,
+        sheetName: selected.sheetName,
+        row: selected.row,
+        column: candidate?.column ?? "OWNER",
+        cell: candidate ? `${candidate.column}${selected.row}` : "OWNER",
+        rawValue: String(input.ownerFieldValues?.[key] ?? ""),
+        normalizedValue: String(ownerValue ?? ""),
+        ruleVersion: threeSourceRuleVersion,
+        sourceKind: "ownerSupplement",
+        ownerId: input.ownerId,
+        revision: input.revision,
+        overrideReason: input.overrideReasons?.[key]?.trim() || undefined,
+      };
+    } else if (source?.rawValue) {
+      values[key] = normalizedOwnerValue(key, source.rawValue);
+      provenance[key] = { ...source, sourceKind: "workbook" };
+    }
+  }
+
+  const parsed = regularFullReductionInputSchema.safeParse({
+    ...values,
+    couponType: "东券",
+    productLimitType: "限SKU",
+    claimRiskControl: "0级以下用户可领",
+  });
+  if (!parsed.success) {
+    throw new Error(
+      `配券表字段不符合常规满减券规则：${parsed.error.issues.map((issue) => `${issue.path.join(".")} ${issue.message}`).join("；")}`,
+    );
+  }
+
+  const activityPointRaw = input.ownerFieldValues?.activityPointPercent;
+  const activityPointPercent = normalizedOwnerValue(
+    "activityPointPercent",
+    activityPointRaw,
+  );
+  if (
+    typeof activityPointPercent !== "number" ||
+    !Number.isFinite(activityPointPercent) ||
+    activityPointPercent <= 0
+  ) {
+    throw new Error("活动点位必须由业务员确认且为正数");
+  }
+  provenance.activityPointPercent = {
+    sourceHash: input.recognition.sourceHash,
+    fileName: input.recognition.source.fileName,
+    sheetName: selected.sheetName,
+    row: selected.row,
+    column: "OWNER",
+    cell: "OWNER",
+    rawValue: String(activityPointRaw),
+    normalizedValue: String(activityPointPercent),
+    ruleVersion: threeSourceRuleVersion,
+    sourceKind: "ownerSupplement",
+    ownerId: input.ownerId,
+    revision: input.revision,
+  };
+  return {
+    input: parsed.data,
+    provenance,
+    sourceHash: input.recognition.sourceHash,
+    couponCandidateId: selected.id,
+    couponType: "regular_full_reduction",
+    activityPointPercent,
+  };
+}
+
 export async function extractRegularFullReductionInput(
   input: ExtractRegularFullReductionInput,
 ): Promise<ConfirmedCouponSource> {
   const { recognition } = input;
-  const keys = Object.keys(HEADER_ALIASES) as CouponFieldKey[];
+  const keys = (Object.keys(HEADER_ALIASES) as CouponFieldKey[]).filter(
+    (key) => key !== "activityPointPercent",
+  );
   const candidates = Object.fromEntries(
     keys.map((key) => [
       key,
       selectFieldCandidate(recognition, key, input.fieldCandidateIds?.[key]),
     ]),
-  ) as Record<CouponFieldKey, CouponFieldCandidate>;
+  ) as Record<
+    Exclude<CouponFieldKey, "activityPointPercent">,
+    CouponFieldCandidate
+  >;
   const headerRows = new Set(
     Object.values(candidates).map((candidate) => candidate.headerRow),
   );
@@ -424,8 +799,12 @@ export async function extractRegularFullReductionInput(
         recognition.source.fileName,
       ),
     ]),
-  ) as Record<CouponFieldKey, SourceProvenance>;
-  const value = (key: CouponFieldKey) => provenance[key].rawValue;
+  ) as Partial<Record<CouponFieldKey, SourceProvenance>>;
+  const value = (key: CouponFieldKey): string => {
+    const source = provenance[key];
+    if (!source) throw new Error(`配券表缺少字段来源：${key}`);
+    return source.rawValue;
+  };
   const parsed = regularFullReductionInputSchema.safeParse({
     activityName: value("activityName"),
     activityBackground: value("activityBackground"),

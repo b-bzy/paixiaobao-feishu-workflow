@@ -127,6 +127,45 @@ describe("long connection bridge runtime", () => {
     });
   });
 
+  it("reads the action name from the current CLI action_value payload", () => {
+    expect(
+      createBridgeEventEnvelope({
+        eventType: "card.action.trigger",
+        event: {
+          action_value:
+            '{"action":"coupon_three_source_no_blacklist_confirm","pilotRecordId":"rec-pilot","revision":3}',
+          event_id: "evt-current-cli-card",
+          operator_id: "ou-owner",
+        },
+      }),
+    ).toEqual({
+      header: {
+        event_id: "evt-current-cli-card",
+        event_type: "card.action.trigger",
+      },
+      action: {
+        form_value: undefined,
+        name: "coupon_three_source_no_blacklist_confirm",
+        value:
+          '{"action":"coupon_three_source_no_blacklist_confirm","pilotRecordId":"rec-pilot","revision":3}',
+      },
+      operator: { open_id: "ou-owner" },
+    });
+  });
+
+  it("fails closed when neither card action field contains an action name", () => {
+    expect(() =>
+      createBridgeEventEnvelope({
+        eventType: "card.action.trigger",
+        event: {
+          action_value: '{"pilotRecordId":"rec-pilot","revision":3}',
+          event_id: "evt-card-without-action",
+          operator_id: "ou-owner",
+        },
+      }),
+    ).toThrow("action name");
+  });
+
   it("fails closed when a CLI event lacks its stable ID", () => {
     expect(() =>
       createBridgeEventEnvelope({

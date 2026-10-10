@@ -1,4 +1,4 @@
-import { multiTierSkuSheetNames } from "../../../excel-template-engine/template-manifests";
+import type { CouponFieldKey } from "../../../coupon-oa/three-source/types";
 import { sendFeishuCard } from "../../client";
 import {
   downloadFeishuMessageResource,
@@ -21,6 +21,7 @@ import {
   buildCouponThreeSourceNoBlacklistCard,
   buildCouponThreeSourceOverlapCard,
   buildCouponThreeSourcePreviewCard,
+  buildCouponThreeSourceRecognizingCard,
   buildCouponThreeSourceRoleCard,
   buildCouponThreeSourceRuntimeBlockedCard,
   buildCouponThreeSourceUnavailableCard,
@@ -139,6 +140,13 @@ async function sendDraftState(input: {
         recognition: draft.pendingRecognition,
       });
     }
+    if (
+      Object.values(draft.recognitions).some(
+        (recognition) => recognition?.ai?.status === "pending",
+      )
+    ) {
+      return buildCouponThreeSourceRecognizingCard(draft);
+    }
     if (!draft.task.sources.couponTable || !draft.task.sources.whitelist) {
       return buildCouponThreeSourceIntakeCard(draft);
     }
@@ -235,33 +243,36 @@ function mappingSelections(form: Record<string, unknown>) {
         : [];
     }),
   );
+  const ownerFieldValues = Object.fromEntries(
+    Object.entries(form).flatMap(([name, value]) => {
+      const fieldValue = stringValue(value);
+      return name.startsWith("owner_") && fieldValue
+        ? [[name.slice("owner_".length) as CouponFieldKey, fieldValue]]
+        : [];
+    }),
+  ) as Partial<Record<CouponFieldKey, unknown>>;
+  const couponType = stringValue(form.couponType);
+  if (couponType && couponType !== "regular_full_reduction") {
+    throw new Error("当前 P0 只支持常规满减券");
+  }
   const listSelection = (prefix: "whitelist" | "blacklist") => {
-    const defaultTier = stringValue(form[`${prefix}_defaultTier`]);
-    if (
-      defaultTier &&
-      !multiTierSkuSheetNames.includes(
-        defaultTier as (typeof multiTierSkuSheetNames)[number],
-      )
-    ) {
-      throw new Error("请选择已登记的统一券档");
-    }
     return {
       identifierCandidateId: stringValue(
         form[`${prefix}_identifierCandidateId`],
       ),
-      tierCandidateId: stringValue(form[`${prefix}_tierCandidateId`]),
-      ...(defaultTier
-        ? {
-            defaultTier: defaultTier as (typeof multiTierSkuSheetNames)[number],
-          }
-        : {}),
+      selectedSheetName: stringValue(form[`${prefix}_selectedSheetName`]),
     };
   };
   return {
     activityPointPercent,
+    ...(couponType ? { couponType: "regular_full_reduction" as const } : {}),
+    ...(stringValue(form.couponCandidateId)
+      ? { couponCandidateId: stringValue(form.couponCandidateId) }
+      : {}),
     ...(Object.keys(couponFieldCandidateIds).length
       ? { couponFieldCandidateIds }
       : {}),
+    ...(Object.keys(ownerFieldValues).length ? { ownerFieldValues } : {}),
     whitelist: listSelection("whitelist"),
     blacklist: listSelection("blacklist"),
   };

@@ -367,7 +367,21 @@ Feishu transport
 
 ## 12. 变更记录
 
+### 12.1 P0 DeepSeek 候选识别增量（默认关闭）
+
+三源 P0 已增加以下代码边界，但不代表部署环境已启用或完成真实联调：
+
+- `ai-recognition.ts` 将整本工作簿的非空单元格序列化为一次请求，公式只作为标记数据，不执行；严格 schema 和来源坐标校验后才形成候选。
+- `deepseek-chat-gateway.ts` 只访问官方 HTTPS endpoint，设置超时与 1 MiB 响应上限，对上下文拒绝、429、超时、网络、无效 JSON 和超大响应分类；密钥不进入错误或审计。
+- `coupon_ai_recognition_runs` 与 durable effect 用语义键限制每个 source/revision/model/prompt version 一次外发。终态先持久化，再投影 Base/Card；投影重试不得再次调用 DeepSeek。
+- Base P0 draft 只保存结构化候选、审计摘要和 owner 选择。owner、revision 或 source hash 变化时丢弃旧投影。
+- 第二轮使用稳定 candidate ID 绑定具体 Sheet/行；缺字段记录 `ownerSupplement` provenance，覆盖非空源值必须附原因。活动点位不能从优惠比例推导。
+- 名单生成器校验原模板 SHA-256，仅保留并重命名一个蓝本 Sheet，写入文本 SKU 后重新打开校验。
+
+该增量由 [ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) 约束。`FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED` 默认 `false`；AI 关闭或失败时保留确定性识别和 owner 人工补充路径。它不改变 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`、源文件不得进入 OA 附件或 P0 单用户限制。
+
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-10 | v1.2 | 增加默认关闭的 P0 DeepSeek 候选识别、第二轮单券确认、单 Sheet 名单生成与 durable effect 边界 | 代码完成本地验证；仍待外部 P0 验证 |
 | 2026-10-10 | v1.1 | 记录默认关闭的严选三源适配器及直接 HTTP draft-only POC 边界；明确它不满足耐久或 native-submit Gate | 基于当前 server 三源实现和 ADR-0009 更新 |
 | 2026-10-08 | v1.0 | 首次建立当前功能结构、状态机、文件边界、技术债与分阶段重构基线 | 基于 `main` 的已实现代码和已有诊断记录整理 |

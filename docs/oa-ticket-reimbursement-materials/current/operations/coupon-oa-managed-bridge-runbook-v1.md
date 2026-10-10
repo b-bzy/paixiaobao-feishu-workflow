@@ -3,6 +3,18 @@
 > **状态**：内网试点运行要求；上线前必须由运行 Owner 演练。
 > **不适用**：本地 `pnpm dev:events`、`scripts/long-connection-bridge.mjs`、开发 shell 或个人电脑。
 
+## 0. 资源交接与环境边界
+
+本手册只在企业运行资源已由平台/运行 Owner 验收后适用。资源发现、申请、部署前配置和 R1 host-only preflight 见[企业托管 bridge 资源发现与部署前交接指南](coupon-oa-managed-bridge-provisioning-guide-v1.md)；本次已知状态和后续企业资源查找应追加到[日期化资源发现记录](../../records/durable-control-plane/coupon-r1-managed-bridge-resource-discovery-2026-10-10.md)。
+
+| 环境 | 入口与宿主 | 本手册是否允许启动 bridge | 阶段边界 |
+| --- | --- | --- | --- |
+| R0 本地开发 | 个人电脑上的 `lark-cli` / `pnpm dev:events` | 否 | 仅调试和脱敏验证；不是试点服务。 |
+| R1 托管 bridge 测试 | 企业 VM / 受控容器 / 已批准共享 bridge → 签名 Nitro ingress | 是，但必须先通过资源交接、artifact、HMAC、receipt/outbox、监控和恢复验证 | 仅事件接收与恢复测试；不开放业务试点或 native OA。 |
+| R2 draft-only | 已通过 R1 的企业 bridge 与受控服务端资源 | 是，且仍须按本手册值守 | 仅严格 allowlist 的草稿和受控产物；禁止原生 OA 创建。 |
+
+Vercel/Nitro 只承载 bridge 的受签名 HTTP ingress 和业务处理面，不运行 `lark-cli` 长连接。主机已分配、Vercel 项目已关联、HTTP 可达或本地 app 已授权都不是 R1 准入证据；任一前置项缺失时保持 No-go，不能启动本手册所述运行链路。
+
 ## 1. 责任与边界
 
 | 责任 | Owner | 要求 |

@@ -3,6 +3,8 @@ export const couponExcelTemplateIds = [
   "coupon-sku-whitelist-pilot-v1",
   "coupon-multi-tier-sku-whitelist-v1",
   "coupon-multi-tier-sku-blacklist-v1",
+  "coupon-single-sku-whitelist-v1",
+  "coupon-single-sku-blacklist-v1",
 ] as const;
 
 export type CouponExcelTemplateId = (typeof couponExcelTemplateIds)[number];
@@ -70,6 +72,17 @@ export interface MultiTierSkuListWorkbookManifest {
   dataEndRow: 3000;
 }
 
+export interface SingleCouponSkuListWorkbookManifest {
+  id: "coupon-single-sku-whitelist-v1" | "coupon-single-sku-blacklist-v1";
+  version: "v1";
+  assetName: string;
+  sha256: string;
+  blueprintSheet: MultiTierSkuSheetName;
+  header: "sku";
+  dataStartRow: 2;
+  dataEndRow: 3000;
+}
+
 const multiTierSkuTemplateSha256 =
   "62b7b56d6fe5e94a98d44726f84b95209e62fc466a052ecbf08e2fc0b5cffd1c";
 
@@ -94,3 +107,27 @@ export const multiTierSkuBlacklistManifest: MultiTierSkuListWorkbookManifest = {
   dataStartRow: 2,
   dataEndRow: 3000,
 };
+
+export const singleCouponSkuWhitelistManifest: SingleCouponSkuListWorkbookManifest =
+  {
+    id: "coupon-single-sku-whitelist-v1",
+    version: "v1",
+    assetName: "商品明细白名单-多券档SKU-v1.xlsx",
+    sha256: multiTierSkuTemplateSha256,
+    blueprintSheet: "满999减60",
+    header: "sku",
+    dataStartRow: 2,
+    dataEndRow: 3000,
+  };
+
+export const singleCouponSkuBlacklistManifest: SingleCouponSkuListWorkbookManifest =
+  {
+    id: "coupon-single-sku-blacklist-v1",
+    version: "v1",
+    assetName: "商品明细黑名单-多券档SKU-v1.xlsx",
+    sha256: multiTierSkuTemplateSha256,
+    blueprintSheet: "满999减60",
+    header: "sku",
+    dataStartRow: 2,
+    dataEndRow: 3000,
+  };

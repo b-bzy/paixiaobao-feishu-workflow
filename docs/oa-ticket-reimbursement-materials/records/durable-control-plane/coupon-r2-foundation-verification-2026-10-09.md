@@ -19,6 +19,12 @@
 | 环境 | macOS / darwin-arm64，本地开发机 |
 | 外部副作用 | 已启动本地 PostgreSQL 17（healthy），未连接飞书、Base、Drive、renderer 或 Approval；MinIO 镜像拉取受本机 Docker mirror 的 403 阻断；未部署 |
 
+## 1.1 与 FDEV-001 release baseline 的关系
+
+本记录是执行当时工作区的本地验证证据，**不是** clean release baseline：第 1 节记录的 `Git HEAD` 和 120 个待提交路径不能作为 FDEV-001 或任何 Dev App/bridge/canary 的 release ref。
+
+[FDEV-001 Dev release baseline 候选清单](fdev-001-dev-release-baseline-v1.md)已单独建立为默认 No-go 模板。它的 clean commit/tag、protected-ref、工具链/migration 指纹、重复命令、Test-Plan/QA 结果与三方 🥇均为 **Not yet recorded**；在用户明确授权 commit/tag 且 FDEV-001 完成独立生命周期前，本记录只能作为 foundation 输入。
+
 ## 2. 本轮发现与修复
 
 ### CP-LEASE-001：过期 leased 作业无法被重新认领
@@ -71,14 +77,14 @@ OR (state = 'leased' AND lease_expires_at <= now)
 
 | 编号 | 命令 | 结果 | 范围 |
 | --- | --- | --- | --- |
-| V12 | `pnpm test:control-plane` | 18 files / 56 tests 通过；1 file / 2 PostgreSQL integration tests 按预期 skip | ingress receipt、command intake transaction、task/effect idempotency、worker/effect lease、runtime lease/config、authenticated tick fail-closed behavior |
+| V12 | `pnpm test:control-plane` | 18 files / 56 tests 通过；1 file / 5 PostgreSQL integration tests 按预期 skip | ingress receipt、command intake transaction、task/effect idempotency、worker/effect lease、runtime lease/config、authenticated tick fail-closed behavior |
 | V13 | `pnpm exec vitest run server/lib/feishu/bridge-ingress.test.ts server/lib/feishu/bridge-auth.test.ts` | 通过，2 files / 12 tests | HMAC、body size、durable 202/duplicate、无同步 POC handler、fail-closed config |
 | V14 | `pnpm typecheck:server` | 通过 | 本次新增 server TypeScript |
-| V15 | `pnpm test` | 50 files / 236 tests 通过；1 file / 2 PostgreSQL integration tests 按预期 skip | 当前完整 Vitest 回归，包含本 slice 的 ingress/worker/effect contracts |
+| V15 | `pnpm test` | 50 files / 236 tests 通过；1 file / 5 PostgreSQL integration tests 按预期 skip | 当前完整 Vitest 回归，包含本 slice 的 ingress/worker/effect contracts |
 | V16 | `pnpm build` | 通过 | 当前 Nitro server build |
 | V17 | `pnpm lint` | 通过；5 条既有 admin warning | 本次 server/bridge 文件无 error；warning 见 §4 |
 | V18 | `git diff --check` | 通过 | 无空白错误 |
-| V19 | `CONTROL_PLANE_TEST_DATABASE_URL=postgresql://… pnpm test:control-plane:postgres` | 通过，1 file / 3 tests | disposable schema 中重复执行所有 migration；验证 delivery 去重、receipt→worker→task/audit/effect/outcome 事务、同 owner 并发 create-or-resume、真实 `SKIP LOCKED` 竞争与 stale lease reclaim/fencing |
+| V19 | `CONTROL_PLANE_TEST_DATABASE_URL=postgresql://… pnpm test:control-plane:postgres` | 通过，1 file / 5 tests | disposable schema 中重复执行所有 migration；验证 delivery 去重、receipt→worker→task/audit/effect/outcome 事务、同 owner 并发 create-or-resume、fake card gateway 的完整 worker tick、`outcome_unknown` 后新数据库连接模拟重启时不重发、真实 `SKIP LOCKED` 竞争与 stale lease reclaim/fencing |
 | V20 | `DATABASE_URL=postgresql://… pnpm db:migrate:control-plane`（第二次） | 通过 | 四个 migration 均报告 `already applied`，runner hash/版本保护有效 |
 
 这些仍主要是 unit/SQL contract tests；V19 补充了列出的本地 PostgreSQL 事务/锁证据，但不构成真实 bridge ACK 或任何 Feishu side effect 的证明。
@@ -131,4 +137,4 @@ OR (state = 'leased' AND lease_expires_at <= now)
 
 > **默认关闭的 R0/W1 foundation、durable command-intake 与 card-effect intent 在列出的 unit/SQL-contract 测试范围内通过验证。**
 
-它不能表述为 R1/R2 ready、飞书已打通、真实任务可运行或 OA 可创建。下一项阻断工作是补齐真实 PostgreSQL 的 rollback/task-CAS/effect-recovery 故障演练，并解决本机 MinIO mirror 403 后完成对象存储 adapter 验证；随后才可验证受支持 Feishu bridge 的“先持久化、后 ACK”契约。对象存储、Base/Drive、renderer 和 Approval 仍不属于 command-only slice。
+它不能表述为 R1-dev ready、R2 ready、飞书已打通、真实任务可运行或 OA 可创建。后续整改的唯一顺序、依赖与验收口径见[飞书开发版需求与进度台账](../../proposals/three-source/coupon-oa-feishu-dev-requirements-tracker-v1.md)：先完成 FDEV-001 的可复现 clean baseline 🥇，之后才依次处理 durable bridge、effect fencing、完整性绑定、对账、观测、数据治理、Dev 环境预检与 R1-dev canary。对象存储、PostgreSQL fault injection、Base/Drive、renderer 和 Approval 仍留在正式 R2/R3 的后续需求，不得由本记录提前宣告通过。

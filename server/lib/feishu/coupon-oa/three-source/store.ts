@@ -5,14 +5,18 @@ import {
   couponThreeSourceTaskSchemaVersion,
 } from "../../../coupon-oa/three-source/task";
 import type {
+  AiAuditSummary,
   CanonicalPackage,
   ConfirmedCouponSource,
+  CouponCandidate,
   CouponFieldKey,
+  CouponType,
   ListColumnCandidate,
   OaPrefillSnapshot,
   OverlapDecision,
-  ParsedTieredIdentifierList,
+  ParsedSingleCouponIdentifierList,
   SourceRoleCandidate,
+  ValidatedAiRecognition,
   WorkbookRecognition,
 } from "../../../coupon-oa/three-source/types";
 import { getTenantAccessToken } from "../../client";
@@ -36,12 +40,26 @@ export interface CouponThreeSourceSourceReference {
 export interface StoredWorkbookRecognition
   extends Omit<WorkbookRecognition, "source"> {
   source: CouponThreeSourceSourceReference;
+  couponCandidates?: CouponCandidate[];
+  ai?: {
+    runId: string;
+    revision: number;
+    sourceSha256: string;
+    status: "pending" | "succeeded" | "failed" | "outcome_unknown";
+    result?: ValidatedAiRecognition;
+    audit?: AiAuditSummary;
+    fallbackCode?: string;
+  };
 }
 
 export interface CouponThreeSourcePilotSelections {
   couponFieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
-  whitelist?: ListColumnSelection;
-  blacklist?: ListColumnSelection;
+  couponType?: CouponType;
+  couponCandidateId?: string;
+  ownerFieldValues?: Partial<Record<CouponFieldKey, unknown>>;
+  overrideReasons?: Partial<Record<CouponFieldKey, string>>;
+  whitelist?: ListColumnSelection & { selectedSheetName?: string };
+  blacklist?: ListColumnSelection & { selectedSheetName?: string };
   activityPointPercent?: number;
   overlapDecision?: OverlapDecision;
 }
@@ -58,8 +76,8 @@ export interface CouponThreeSourcePilotDraft {
   pendingRecognition?: StoredWorkbookRecognition;
   selections: CouponThreeSourcePilotSelections;
   coupon?: ConfirmedCouponSource;
-  whitelist?: ParsedTieredIdentifierList;
-  blacklist?: ParsedTieredIdentifierList;
+  whitelist?: ParsedSingleCouponIdentifierList;
+  blacklist?: ParsedSingleCouponIdentifierList;
   package?: CanonicalPackage;
   artifacts: FrozenThreeSourceArtifact[];
   oaPrefill?: OaPrefillSnapshot;
@@ -307,6 +325,7 @@ export async function updateCouponThreeSourcePilotDraft(
 export function toStoredWorkbookRecognition(input: {
   recognition: WorkbookRecognition;
   source: CouponThreeSourceSourceReference;
+  couponCandidates?: CouponCandidate[];
 }): StoredWorkbookRecognition {
   return {
     source: input.source,
@@ -315,5 +334,6 @@ export function toStoredWorkbookRecognition(input: {
     couponFieldCandidates: input.recognition.couponFieldCandidates,
     listCandidates: input.recognition.listCandidates as ListColumnCandidate[],
     issues: input.recognition.issues,
+    couponCandidates: input.couponCandidates,
   };
 }

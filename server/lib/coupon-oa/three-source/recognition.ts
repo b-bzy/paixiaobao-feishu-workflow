@@ -567,6 +567,15 @@ export interface ConfirmRegularFullReductionCouponInput {
   aiRecognition?: ValidatedAiRecognition;
 }
 
+export class MultipleCouponCandidatesError extends Error {
+  readonly code = "multiple_coupon_candidates";
+
+  constructor(readonly candidates: CouponCandidate[]) {
+    super("识别到多个优惠券，必须明确选择其中一个");
+    this.name = "MultipleCouponCandidatesError";
+  }
+}
+
 export async function confirmRegularFullReductionCoupon(
   input: ConfirmRegularFullReductionCouponInput,
 ): Promise<ConfirmedCouponSource> {
@@ -602,7 +611,7 @@ export async function confirmRegularFullReductionCoupon(
   } else if (discovered.length === 1) {
     selected = discovered[0];
   } else if (discovered.length > 1) {
-    throw new Error("识别到多个优惠券，必须明确选择其中一个");
+    throw new MultipleCouponCandidatesError(discovered);
   } else {
     throw new Error("未找到可绑定来源行的优惠券候选");
   }

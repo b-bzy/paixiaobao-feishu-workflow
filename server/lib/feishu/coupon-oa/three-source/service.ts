@@ -7,6 +7,7 @@ import {
   confirmRegularFullReductionCoupon,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
+  MultipleCouponCandidatesError,
   selectUniqueRole,
 } from "../../../coupon-oa/three-source/recognition";
 import {
@@ -20,7 +21,10 @@ import {
   saveCouponThreeSourceArtifacts,
   setCouponThreeSourceOverlap,
 } from "../../../coupon-oa/three-source/task";
-import type { SourceRole } from "../../../coupon-oa/three-source/types";
+import type {
+  ConfirmedCouponSource,
+  SourceRole,
+} from "../../../coupon-oa/three-source/types";
 import {
   buildOaPrefillSnapshot,
   createSingleCouponCanonicalPackage,
@@ -356,20 +360,48 @@ export class CouponThreeSourcePilotService {
       }
     }
     const storedCoupon = storedRecognitionForRole(input.draft, "couponTable");
-    const coupon = await confirmRegularFullReductionCoupon({
-      recognition: couponRecognition,
-      ownerId: input.ownerOpenId,
-      revision: input.draft.task.revision,
-      couponCandidateId: input.draft.selections.couponCandidateId,
-      ownerConfirmedCouponType: input.draft.selections.couponType,
-      fieldCandidateIds: input.draft.selections.couponFieldCandidateIds,
-      ownerFieldValues: {
-        ...input.draft.selections.ownerFieldValues,
-        activityPointPercent,
-      },
-      overrideReasons: input.draft.selections.overrideReasons,
-      aiRecognition: storedCoupon.ai?.result,
-    });
+    let coupon: ConfirmedCouponSource;
+    try {
+      coupon = await confirmRegularFullReductionCoupon({
+        recognition: couponRecognition,
+        ownerId: input.ownerOpenId,
+        revision: input.draft.task.revision,
+        couponCandidateId: input.draft.selections.couponCandidateId,
+        ownerConfirmedCouponType: input.draft.selections.couponType,
+        fieldCandidateIds: input.draft.selections.couponFieldCandidateIds,
+        ownerFieldValues: {
+          ...input.draft.selections.ownerFieldValues,
+          activityPointPercent,
+        },
+        overrideReasons: input.draft.selections.overrideReasons,
+        aiRecognition: storedCoupon.ai?.result,
+      });
+    } catch (error) {
+      if (!(error instanceof MultipleCouponCandidatesError)) throw error;
+      const deterministicCandidates = error.candidates.filter(
+        (candidate) => candidate.source === "deterministic",
+      );
+      return this.dependencies.updateDraft(
+        input.draft,
+        {
+          recognitions: {
+            ...input.draft.recognitions,
+            couponTable: {
+              ...storedCoupon,
+              couponCandidates: deterministicCandidates,
+            },
+          },
+          validationIssues: [
+            ...input.draft.validationIssues.filter(
+              (issue) => !issue.startsWith("识别到多个优惠券"),
+            ),
+            "识别到多个优惠券，请明确选择本次唯一优惠券",
+          ],
+          failureReason: undefined,
+        },
+        input.expectedRevision,
+      );
+    }
     if (coupon.input.businessMode !== "严选") {
       throw new Error("三源 Bot 首期仅支持严选业务模式");
     }

@@ -5,6 +5,7 @@ import {
   confirmRegularFullReductionCoupon,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
+  type MultipleCouponCandidatesError,
   resolveCouponType,
 } from "./recognition";
 import type { OfflineSourceFile } from "./types";
@@ -126,7 +127,10 @@ describe("single coupon confirmation", () => {
         revision: 1,
         ownerFieldValues: { activityPointPercent: 6 },
       }),
-    ).rejects.toThrow("必须明确选择其中一个");
+    ).rejects.toMatchObject({
+      code: "multiple_coupon_candidates",
+      candidates,
+    } satisfies Partial<MultipleCouponCandidatesError>);
 
     const selected = await confirmRegularFullReductionCoupon({
       recognition,

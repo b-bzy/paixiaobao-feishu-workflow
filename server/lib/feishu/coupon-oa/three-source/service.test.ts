@@ -81,6 +81,22 @@ async function whitelistBytes(): Promise<Uint8Array> {
   return workbookBytes(workbook);
 }
 
+async function multipleCouponBytes(): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.from(await strictCouponBytes()) as never);
+  const sheet = workbook.getWorksheet("配券材料");
+  if (!sheet) throw new Error("missing coupon fixture sheet");
+  const source = sheet.getRow(2);
+  const duplicate = sheet.getRow(3);
+  for (let column = 1; column <= 24; column += 1) {
+    duplicate.getCell(column).value = source.getCell(column).value;
+  }
+  duplicate.getCell(1).value = "严选测试活动 B";
+  duplicate.getCell(8).value = "1999";
+  duplicate.getCell(9).value = "120";
+  return workbookBytes(workbook);
+}
+
 async function loadTemplates() {
   const directory = join(
     process.cwd(),
@@ -262,6 +278,103 @@ describe("CouponThreeSourcePilotService", () => {
       }),
     ).rejects.toThrow("仅支持严选");
     expect(uploadArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the second-round card candidates instead of failing generation", async () => {
+    const coupon = await multipleCouponBytes();
+    const whitelist = await whitelistBytes();
+    const sources = new Map([
+      ["om-coupon:file-coupon", coupon],
+      ["om-whitelist:file-whitelist", whitelist],
+    ]);
+    let draft: CouponThreeSourcePilotDraft | undefined;
+    const uploadArtifact = vi.fn();
+    const dependencies: CouponThreeSourcePilotDependencies = {
+      downloadSource: async (source) => {
+        const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
+        if (!bytes) throw new Error("unexpected source download");
+        return bytes;
+      },
+      uploadArtifact,
+      folderToken: () => "unused",
+      loadTemplates,
+      createDraft: async (input) => {
+        draft = {
+          recordId: "rec-multiple-coupons",
+          pilotId: "CTS-multiple-coupons",
+          ownerOpenId: input.ownerOpenId,
+          task: input.task,
+          schemaVersion: "coupon-three-source-pilot-v1",
+          recognitions: {},
+          selections: {},
+          artifacts: [],
+          processedMessageIds: [],
+          validationIssues: [],
+        };
+        return draft;
+      },
+      getDraft: async () => {
+        if (!draft) throw new Error("missing draft");
+        return draft;
+      },
+      listActive: async () => (draft ? [draft] : []),
+      updateDraft: async (current, updates, expectedRevision) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        draft = { ...current, ...updates };
+        return draft;
+      },
+      handoff: vi.fn(),
+    };
+    const service = new CouponThreeSourcePilotService(dependencies);
+
+    let current = await service.startOrResume("ou_owner");
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-coupon",
+      fileKey: "file-coupon",
+      fileName: "多券配券表.xlsx",
+      bytes: coupon,
+    });
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "商品白名单.xlsx",
+      bytes: whitelist,
+    });
+    current = await service.confirmNoBlacklist({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "no-blacklist",
+    });
+    current = await service.updateSelections({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      selections: { activityPointPercent: 6 },
+      operationId: "set-point",
+    });
+    current = await service.confirmSourcesAndGenerate({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "refresh-candidates",
+    });
+
+    expect(current.task.status).toBe("AwaitingSourceConfirmation");
+    expect(current.recognitions.couponTable?.couponCandidates).toHaveLength(2);
+    expect(current.validationIssues).toContain(
+      "识别到多个优惠券，请明确选择本次唯一优惠券",
+    );
+    expect(current.artifacts).toEqual([]);
+    expect(uploadArtifact).not.toHaveBeenCalled();
   });
 
   it("queues recognition after persisting a source and records pending state", async () => {

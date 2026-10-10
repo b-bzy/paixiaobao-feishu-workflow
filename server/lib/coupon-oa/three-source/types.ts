@@ -12,6 +12,22 @@ export const threeSourceRuleVersion = "three-source-offline-v1";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
 export type CouponType = "regular_full_reduction";
+export type CouponTemplateKind =
+  | "regular_full_reduction"
+  | "regular_discount"
+  | "plus_full_reduction"
+  | "plus_discount"
+  | "campaign_regular_full_reduction"
+  | "campaign_regular_discount"
+  | "campaign_plus_full_reduction"
+  | "campaign_plus_discount"
+  | "redemption_full_reduction"
+  | "redemption_discount";
+export type CouponTemplateResolutionStatus =
+  | "unique_template"
+  | "ambiguous_template"
+  | "unknown_template"
+  | "unsupported_template";
 export type CouponTypeResolutionStatus =
   | "unique"
   | "ambiguous"
@@ -32,6 +48,31 @@ export type OverlapDecision =
 export interface OfflineSourceFile {
   fileName: string;
   bytes: Uint8Array;
+}
+
+export interface CouponTemplateCandidate {
+  templateKind: CouponTemplateKind;
+  score: number;
+  supported: boolean;
+  headerRow: number;
+  sheetName: string;
+  evidenceCells: string[];
+  reasons: string[];
+  fileNameHint?: string;
+}
+
+export interface CouponTierRowReference {
+  sheetName: string;
+  row: number;
+  evidenceCells: string[];
+}
+
+export interface CouponTemplateResolution {
+  status: CouponTemplateResolutionStatus;
+  templateKind?: CouponTemplateKind;
+  candidates: CouponTemplateCandidate[];
+  tierRows: CouponTierRowReference[];
+  issues: string[];
 }
 
 export interface SourceProvenance {

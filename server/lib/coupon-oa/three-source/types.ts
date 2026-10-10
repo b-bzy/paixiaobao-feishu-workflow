@@ -170,6 +170,13 @@ export interface ConfirmedCouponSource {
   activityPointPercent?: number;
 }
 
+export interface ConfirmedCouponSetSource {
+  templateKind: "regular_full_reduction";
+  sourceHash: string;
+  activityPointPercent: number;
+  tiers: ConfirmedCouponSource[];
+}
+
 export interface CouponCandidate {
   id: string;
   couponType: CouponType | "unknown" | "unsupported";

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { parseSingleCouponIdentifierList } from "./lists";
 import {
   confirmRegularFullReductionCoupon,
+  confirmRegularFullReductionCouponSet,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
-  type MultipleCouponCandidatesError,
   resolveCouponType,
 } from "./recognition";
 import type { OfflineSourceFile } from "./types";
@@ -109,7 +109,7 @@ describe("single coupon confirmation", () => {
     });
   });
 
-  it("does not default to the first row when multiple coupons exist", async () => {
+  it("confirms multiple full-reduction rows as one ordered tier set", async () => {
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([
         couponRow("活动A", "100", "20"),
@@ -119,27 +119,21 @@ describe("single coupon confirmation", () => {
     const candidates = await discoverRegularFullReductionCoupons({
       recognition,
     });
-    expect(resolveCouponType({ candidates }).status).toBe("multiple_coupons");
-    await expect(
-      confirmRegularFullReductionCoupon({
-        recognition,
-        ownerId: "owner-1",
-        revision: 1,
-        ownerFieldValues: { activityPointPercent: 6 },
-      }),
-    ).rejects.toMatchObject({
-      code: "multiple_coupon_candidates",
-      candidates,
-    } satisfies Partial<MultipleCouponCandidatesError>);
-
-    const selected = await confirmRegularFullReductionCoupon({
+    const confirmed = await confirmRegularFullReductionCouponSet({
       recognition,
       ownerId: "owner-1",
       revision: 1,
-      couponCandidateId: candidates[1].id,
       ownerFieldValues: { activityPointPercent: 6 },
     });
-    expect(selected.input.activityName).toBe("活动B");
+    expect(confirmed.tiers.map((tier) => tier.input.activityName)).toEqual([
+      "活动A",
+      "活动B",
+    ]);
+    expect(confirmed.tiers.map((tier) => tier.input.thresholdYuan)).toEqual([
+      100,
+      200,
+    ]);
+    expect(confirmed.activityPointPercent).toBe(6);
   });
 
   it("requires owner confirmation for activity point and override reasons", async () => {

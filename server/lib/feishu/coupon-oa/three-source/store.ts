@@ -7,6 +7,7 @@ import {
 import type {
   AiAuditSummary,
   CanonicalPackage,
+  ConfirmedCouponSetSource,
   ConfirmedCouponSource,
   CouponCandidate,
   CouponFieldKey,
@@ -76,6 +77,7 @@ export interface CouponThreeSourcePilotDraft {
   pendingRecognition?: StoredWorkbookRecognition;
   selections: CouponThreeSourcePilotSelections;
   coupon?: ConfirmedCouponSource;
+  couponSet?: ConfirmedCouponSetSource;
   whitelist?: ParsedSingleCouponIdentifierList;
   blacklist?: ParsedSingleCouponIdentifierList;
   package?: CanonicalPackage;
@@ -155,6 +157,7 @@ function state(
     pendingRecognition: input.pendingRecognition,
     selections: input.selections,
     coupon: input.coupon,
+    couponSet: input.couponSet,
     whitelist: input.whitelist,
     blacklist: input.blacklist,
     package: input.package,

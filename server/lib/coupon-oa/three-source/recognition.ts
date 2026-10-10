@@ -6,6 +6,7 @@ import {
 } from "../calculation";
 import type {
   ConfirmedCouponSource,
+  ConfirmedCouponSetSource,
   CouponCandidate,
   CouponFieldCandidate,
   CouponFieldKey,
@@ -749,6 +750,67 @@ export async function confirmRegularFullReductionCoupon(
     couponCandidateId: selected.id,
     couponType: "regular_full_reduction",
     activityPointPercent,
+  };
+}
+
+export async function confirmRegularFullReductionCouponSet(
+  input: Omit<ConfirmRegularFullReductionCouponInput, "couponCandidateId">,
+): Promise<ConfirmedCouponSetSource> {
+  const deterministic = await discoverRegularFullReductionCoupons(input);
+  const aiCandidates =
+    input.aiRecognition?.sourceHash === input.recognition.sourceHash
+      ? input.aiRecognition.couponCandidates
+      : [];
+  const candidates = [...deterministic];
+  for (const candidate of aiCandidates) {
+    if (
+      !candidates.some(
+        (item) =>
+          item.sheetName === candidate.sheetName && item.row === candidate.row,
+      )
+    ) {
+      candidates.push(candidate);
+    }
+  }
+  const supported = candidates
+    .filter(
+      (candidate) =>
+        candidate.couponType === "regular_full_reduction" ||
+        (candidate.couponType === "unknown" &&
+          input.ownerConfirmedCouponType === "regular_full_reduction"),
+    )
+    .sort((left, right) =>
+      left.sheetName === right.sheetName
+        ? left.row - right.row
+        : left.sheetName.localeCompare(right.sheetName, "zh-CN"),
+    );
+  if (!supported.length) {
+    throw new Error("未找到当前 P0 支持的常规满减券档");
+  }
+  if (candidates.some((candidate) => candidate.couponType === "unsupported")) {
+    throw new Error("同一配券表识别到不同模板类型，不能混合生成");
+  }
+  const tiers: ConfirmedCouponSource[] = [];
+  for (const candidate of supported) {
+    tiers.push(
+      await confirmRegularFullReductionCoupon({
+        ...input,
+        couponCandidateId: candidate.id,
+      }),
+    );
+  }
+  const activityPointPercent = tiers[0].activityPointPercent;
+  if (
+    typeof activityPointPercent !== "number" ||
+    tiers.some((tier) => tier.activityPointPercent !== activityPointPercent)
+  ) {
+    throw new Error("同一提报的活动点位必须一致");
+  }
+  return {
+    templateKind: "regular_full_reduction",
+    sourceHash: input.recognition.sourceHash,
+    activityPointPercent,
+    tiers,
   };
 }
 

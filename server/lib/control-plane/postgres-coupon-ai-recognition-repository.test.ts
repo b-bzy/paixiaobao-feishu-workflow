@@ -57,7 +57,7 @@ function row() {
 }
 
 describe("PostgresCouponAiRecognitionRepository", () => {
-  it("atomically inserts a semantic run and one nullable-task effect", async () => {
+  it("persists recognition state before activating its effect", async () => {
     const database = new RecordingDatabase([
       { rows: [row()], rowCount: 1 },
       { rowCount: 1 },
@@ -66,7 +66,7 @@ describe("PostgresCouponAiRecognitionRepository", () => {
     const repository = new PostgresCouponAiRecognitionRepository(database, {
       id: () => ids.shift() ?? "unexpected",
     });
-    const run = await repository.enqueue({
+    const run = await repository.prepare({
       semanticKey: "draft:1:couponTable:hash:model:prompt",
       pilotRecordId: "record-1",
       businessTaskId: "CTS-1",
@@ -81,6 +81,9 @@ describe("PostgresCouponAiRecognitionRepository", () => {
     });
     expect(run.id).toBe("run-1");
     expect(database.transactions).toBe(1);
+    expect(database.calls).toHaveLength(1);
+
+    await repository.activate(run);
     expect(database.calls).toHaveLength(2);
     expect(database.calls[1].statement).toContain("NULL");
     expect(database.calls[1].statement).toContain("effect_receipts");
@@ -96,7 +99,7 @@ describe("PostgresCouponAiRecognitionRepository", () => {
     const repository = new PostgresCouponAiRecognitionRepository(database, {
       id: () => "new-id",
     });
-    const run = await repository.enqueue({
+    const run = await repository.prepare({
       semanticKey: "draft:1:couponTable:hash:model:prompt",
       pilotRecordId: "record-1",
       businessTaskId: "CTS-1",
@@ -110,6 +113,8 @@ describe("PostgresCouponAiRecognitionRepository", () => {
       promptVersion: "coupon-three-source-p0-ai-v1",
     });
     expect(run.id).toBe("run-1");
+    expect(database.calls).toHaveLength(2);
+    await repository.activate(run);
     expect(database.calls).toHaveLength(3);
   });
 });

@@ -57,6 +57,8 @@ function run(status: CouponAiRecognitionRun["status"]): CouponAiRecognitionRun {
 function repository(initial: CouponAiRecognitionRun) {
   let current = initial;
   const value: CouponAiRecognitionRepository = {
+    prepare: vi.fn(),
+    activate: vi.fn(),
     enqueue: vi.fn(),
     get: vi.fn(async () => current),
     saveTerminalResult: vi.fn(async (input) => {

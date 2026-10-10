@@ -177,7 +177,14 @@ export function buildCouponThreeSourceIntakeCard(
     template: "blue",
     ...(draft
       ? {
-          elements: [{ tag: "markdown", content }, cancelButton(draft)],
+          elements: [
+            { tag: "markdown", content },
+            button(draft, {
+              action: "coupon_three_source_recognition_start",
+              text: "材料已上传完毕，开始统一识别",
+            }),
+            cancelButton(draft),
+          ],
         }
       : { content }),
   });
@@ -402,6 +409,23 @@ export function buildCouponThreeSourceMappingCard(
           required: true,
           width: "fill",
         },
+        ...(draft.task.blacklistStatus === "absent_pending_confirmation"
+          ? [
+              {
+                tag: "select_static",
+                name: "blacklistDecision",
+                placeholder: plainText("请确认本次是否无商品黑名单"),
+                required: true,
+                width: "fill",
+                options: [
+                  {
+                    text: plainText("确认本次无商品黑名单"),
+                    value: "absent_confirmed",
+                  },
+                ],
+              },
+            ]
+          : []),
         ...Object.entries(coupon?.couponFieldCandidates ?? {})
           .filter(([, candidates]) => candidates.length > 1)
           .map(([key, candidates]) =>

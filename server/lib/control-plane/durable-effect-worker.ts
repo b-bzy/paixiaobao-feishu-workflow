@@ -18,7 +18,10 @@ export class DurableEffectWorker {
   constructor(
     private readonly repository: DurableEffectRepository,
     private readonly handlers: Readonly<Record<string, DurableEffectHandler>>,
-    private readonly options: { maxAttempts?: number } = {},
+    private readonly options: {
+      maxAttempts?: number;
+      serializationKey?: (effect: DurableEffect) => string | undefined;
+    } = {},
   ) {}
 
   async runOnce(input: {
@@ -33,9 +36,22 @@ export class DurableEffectWorker {
     outcomeUnknown: number;
   }> {
     const effects = await this.repository.claim(input);
-    const outcomes = await Promise.all(
-      effects.map((effect) => this.process(effect)),
-    );
+    const groups = new Map<string, DurableEffect[]>();
+    for (const effect of effects) {
+      const key = this.options.serializationKey?.(effect) ?? effect.id;
+      groups.set(key, [...(groups.get(key) ?? []), effect]);
+    }
+    const outcomes = (
+      await Promise.all(
+        [...groups.values()].map(async (group) => {
+          const groupOutcomes: DurableEffectResult["kind"][] = [];
+          for (const effect of group) {
+            groupOutcomes.push(await this.process(effect));
+          }
+          return groupOutcomes;
+        }),
+      )
+    ).flat();
     return outcomes.reduce(
       (summary, outcome) => ({
         claimed: summary.claimed + 1,

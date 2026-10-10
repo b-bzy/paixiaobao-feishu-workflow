@@ -70,11 +70,12 @@ export interface CouponThreeSourcePilotDependencies {
   listActive: typeof listActiveCouponThreeSourcePilotDrafts;
   updateDraft: typeof updateCouponThreeSourcePilotDraft;
   handoff: typeof handoffThreeSourcePilotToOaDraft;
-  enqueueAiRecognition?(input: {
+  prepareAiRecognition?(input: {
     draft: CouponThreeSourcePilotDraft;
     role: SourceRole;
     source: CouponThreeSourceSourceReference;
-  }): Promise<{ runId: string } | undefined>;
+  }): Promise<StoredWorkbookRecognition["ai"] | undefined>;
+  activateAiRecognition?(runId: string): Promise<void>;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -120,7 +121,7 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
     listActive: listActiveCouponThreeSourcePilotDrafts,
     updateDraft: updateCouponThreeSourcePilotDraft,
     handoff: handoffThreeSourcePilotToOaDraft,
-    async enqueueAiRecognition(input) {
+    async prepareAiRecognition(input) {
       if (!isCouponThreeSourceAiRecognitionEnabled()) return undefined;
       const config = getCouponThreeSourceAiConfig();
       const semanticKey = [
@@ -133,7 +134,7 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
       ].join(":");
       const run = await new PostgresCouponAiRecognitionRepository(
         getControlPlaneDatabase(),
-      ).enqueue({
+      ).prepare({
         semanticKey,
         pilotRecordId: input.draft.recordId,
         businessTaskId: input.draft.task.taskId,
@@ -149,7 +150,23 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
         model: config.model,
         promptVersion: couponThreeSourceAiPromptVersion,
       });
-      return { runId: run.id };
+      return {
+        runId: run.id,
+        revision: run.revision,
+        sourceSha256: run.sourceSha256,
+        status: run.status,
+        result: run.result,
+        audit: run.audit,
+        fallbackCode: run.fallbackCode,
+      };
+    },
+    async activateAiRecognition(runId) {
+      const repository = new PostgresCouponAiRecognitionRepository(
+        getControlPlaneDatabase(),
+      );
+      const run = await repository.get(runId);
+      if (!run) throw new Error("AI recognition run was not found");
+      await repository.activate(run);
     },
   };
 
@@ -304,6 +321,69 @@ export class CouponThreeSourcePilotService {
       },
       input.expectedRevision,
     );
+  }
+
+  async startAiRecognition(input: {
+    draft: CouponThreeSourcePilotDraft;
+    ownerOpenId: string;
+    expectedRevision: number;
+    operationId: string;
+  }): Promise<CouponThreeSourcePilotDraft> {
+    assertOwnerAndRevision(input);
+    if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
+    if (input.draft.pendingRecognition) {
+      throw new Error("请先确认无法唯一识别的材料角色");
+    }
+    if (
+      !input.draft.task.sources.couponTable ||
+      !input.draft.task.sources.whitelist
+    ) {
+      throw new Error("请先上传配券表和商品白名单，再开始统一识别");
+    }
+    if (
+      !this.dependencies.prepareAiRecognition ||
+      !this.dependencies.activateAiRecognition
+    ) {
+      return input.draft;
+    }
+
+    const recognitions = { ...input.draft.recognitions };
+    const sourceRoles = Object.keys(input.draft.task.sources) as SourceRole[];
+    if (sourceRoles.some((role) => !recognitions[role])) {
+      throw new Error("当前 revision 缺少来源识别结果，请重新上传材料");
+    }
+    const currentBatch = sourceRoles.every((role) => {
+      const recognition = recognitions[role];
+      return (
+        recognition?.ai?.revision === input.draft.task.revision &&
+        recognition.ai.sourceSha256 === recognition.sourceHash
+      );
+    });
+    if (currentBatch) {
+      await this.activatePendingRecognitions(recognitions);
+      return input.draft;
+    }
+
+    for (const [role, recognition] of Object.entries(recognitions)) {
+      if (!recognition) continue;
+      const prepared = await this.dependencies.prepareAiRecognition({
+        draft: input.draft,
+        role: role as SourceRole,
+        source: recognition.source,
+      });
+      if (!prepared) continue;
+      recognitions[role as SourceRole] = {
+        ...recognition,
+        ai: prepared,
+      };
+    }
+    const updated = await this.dependencies.updateDraft(
+      input.draft,
+      { recognitions },
+      input.expectedRevision,
+    );
+    await this.activatePendingRecognitions(updated.recognitions);
+    return updated;
   }
 
   async confirmNoBlacklist(input: {
@@ -610,14 +690,19 @@ export class CouponThreeSourcePilotService {
       expectedRevision: input.expectedRevision,
       source,
     });
-    let updated = await this.dependencies.updateDraft(
+    return this.dependencies.updateDraft(
       input.draft,
       {
         task,
-        recognitions: {
-          ...input.draft.recognitions,
-          [input.role]: input.recognition,
-        },
+        recognitions: Object.fromEntries(
+          Object.entries({
+            ...input.draft.recognitions,
+            [input.role]: input.recognition,
+          }).map(([role, recognition]) => [
+            role,
+            recognition ? { ...recognition, ai: undefined } : recognition,
+          ]),
+        ),
         pendingRecognition: undefined,
         selections: {},
         coupon: undefined,
@@ -635,38 +720,16 @@ export class CouponThreeSourcePilotService {
       },
       input.expectedRevision,
     );
-    if (this.dependencies.enqueueAiRecognition) {
-      const recognitions = { ...updated.recognitions };
-      let enqueuedAny = false;
-      for (const [role, recognition] of Object.entries(recognitions)) {
-        if (!recognition) continue;
-        const enqueued = await this.dependencies.enqueueAiRecognition({
-          draft: updated,
-          role: role as SourceRole,
-          source: recognition.source,
-        });
-        if (!enqueued) continue;
-        enqueuedAny = true;
-        recognitions[role as SourceRole] = {
-          ...recognition,
-          ai: {
-            runId: enqueued.runId,
-            revision: updated.task.revision,
-            sourceSha256: recognition.sourceHash,
-            status: "pending",
-          },
-        };
-      }
-      if (!enqueuedAny) return updated;
-      updated = await this.dependencies.updateDraft(
-        updated,
-        {
-          recognitions,
-        },
-        updated.task.revision,
-      );
+  }
+
+  private async activatePendingRecognitions(
+    recognitions: CouponThreeSourcePilotDraft["recognitions"],
+  ): Promise<void> {
+    if (!this.dependencies.activateAiRecognition) return;
+    for (const recognition of Object.values(recognitions)) {
+      if (recognition?.ai?.status !== "pending") continue;
+      await this.dependencies.activateAiRecognition(recognition.ai.runId);
     }
-    return updated;
   }
 
   private async loadRecognition(stored: StoredWorkbookRecognition) {

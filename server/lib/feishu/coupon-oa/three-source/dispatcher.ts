@@ -21,7 +21,6 @@ import {
   buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceIntakeCard,
   buildCouponThreeSourceMappingCard,
-  buildCouponThreeSourceNoBlacklistCard,
   buildCouponThreeSourceOverlapCard,
   buildCouponThreeSourcePreviewCard,
   buildCouponThreeSourceRecognizingCard,
@@ -161,9 +160,6 @@ async function sendDraftState(input: {
     }
     if (!draft.task.sources.couponTable || !draft.task.sources.whitelist) {
       return buildCouponThreeSourceIntakeCard(draft);
-    }
-    if (draft.task.blacklistStatus === "absent_pending_confirmation") {
-      return buildCouponThreeSourceNoBlacklistCard(draft);
     }
     if (
       draft.validationIssues.some((issue) => issue.includes("白黑名单存在重叠"))
@@ -448,13 +444,9 @@ export function createCouponThreeSourceDispatcher(
         fileName: fileName ?? "未命名来源文件.xlsx",
         bytes,
       });
-      // Keep one visible progress card while a batch of source files is being
-      // recognized. Every file message has a distinct idempotency key, so
-      // sending here unconditionally would append one progress card per file.
-      if (
-        !hasPendingAiRecognition(active[0]) ||
-        !hasPendingAiRecognition(next)
-      ) {
+      // Unambiguous uploads are collected silently. The owner starts one
+      // recognition batch from the intake card after all files are present.
+      if (next.pendingRecognition) {
         await sendDraftState({
           openId: input.openId,
           draft: next,
@@ -519,18 +511,33 @@ export function createCouponThreeSourceDispatcher(
       if (draft.ownerOpenId !== input.openId) {
         throw new Error("只有当前三源提报创建人可以继续操作");
       }
-      if (draft.task.revision !== revision) {
+      const expectedRevision =
+        action === "coupon_three_source_recognition_start"
+          ? draft.task.revision
+          : revision;
+      if (
+        action !== "coupon_three_source_recognition_start" &&
+        draft.task.revision !== revision
+      ) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
       }
       const service = dependencies.createService();
       const id = operationId({
         action,
         recordId,
-        revision,
+        revision: expectedRevision,
         idempotencyKey: input.idempotencyKey,
       });
       let next: CouponThreeSourcePilotDraft;
       switch (action) {
+        case "coupon_three_source_recognition_start":
+          next = await service.startAiRecognition({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision,
+            operationId: id,
+          });
+          break;
         case "coupon_three_source_role_confirm": {
           const role = stringValue(value.role);
           if (
@@ -543,26 +550,48 @@ export function createCouponThreeSourceDispatcher(
           next = await service.selectPendingRole({
             draft,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision,
             role,
             operationId: id,
           });
-          break;
+          await dependencies.sendCard(
+            input.openId,
+            buildCouponThreeSourceIntakeCard(next),
+            input.idempotencyKey,
+          );
+          return {
+            handled: true,
+            message: "Coupon three-source source role confirmed",
+          };
         }
         case "coupon_three_source_no_blacklist_confirm":
           next = await service.confirmNoBlacklist({
             draft,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision,
             operationId: id,
           });
           break;
         case "coupon_three_source_mapping_confirm": {
           const selections = mappingSelections(input.form ?? {});
+          let ready = draft;
+          if (draft.task.blacklistStatus === "absent_pending_confirmation") {
+            if (
+              stringValue(input.form?.blacklistDecision) !== "absent_confirmed"
+            ) {
+              throw new Error("请明确确认本次无商品黑名单");
+            }
+            ready = await service.confirmNoBlacklist({
+              draft,
+              ownerOpenId: input.openId,
+              expectedRevision,
+              operationId: `${id}:no-blacklist`,
+            });
+          }
           const updated = await service.updateSelections({
-            draft,
+            draft: ready,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision: ready.task.revision,
             selections,
             operationId: id,
           });
@@ -590,7 +619,7 @@ export function createCouponThreeSourceDispatcher(
           const updated = await service.updateSelections({
             draft,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision,
             selections: { overlapDecision: decision },
             operationId: id,
           });
@@ -606,7 +635,7 @@ export function createCouponThreeSourceDispatcher(
           next = await service.confirmFinalPreview({
             draft,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision,
             operationId: id,
           });
           if (!next.oaDraftRecordId) {
@@ -632,7 +661,7 @@ export function createCouponThreeSourceDispatcher(
           next = await service.cancel({
             draft,
             ownerOpenId: input.openId,
-            expectedRevision: revision,
+            expectedRevision,
           });
           break;
         default:

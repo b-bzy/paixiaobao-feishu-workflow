@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
+  buildCouponThreeSourceIntakeCard,
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceNoBlacklistCard,
   buildCouponThreeSourcePreviewCard,
@@ -116,8 +117,18 @@ function draft(): CouponThreeSourcePilotDraft {
 }
 
 describe("three-source Bot cards", () => {
+  it("starts one recognition batch only after the owner finishes uploading", () => {
+    const current = draft();
+    const rendered = JSON.stringify(buildCouponThreeSourceIntakeCard(current));
+
+    expect(rendered).toContain("材料已上传完毕，开始统一识别");
+    expect(rendered).toContain("coupon_three_source_recognition_start");
+  });
+
   it("asks for ambiguous fields and never infers a coupon from template tiers", () => {
-    const card = buildCouponThreeSourceMappingCard(draft());
+    const current = draft();
+    current.task.blacklistStatus = "absent_pending_confirmation";
+    const card = buildCouponThreeSourceMappingCard(current);
     const rendered = JSON.stringify(card);
 
     expect(rendered).toContain("coupon_activityName");
@@ -127,6 +138,8 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain(
       "coupon_three_source_mapping_confirm:rec-three-source:4",
     );
+    expect(rendered).toContain("blacklistDecision");
+    expect(rendered).toContain("确认本次无商品黑名单");
   });
 
   it("keeps no-blacklist and final draft creation as explicit revision-bound actions", () => {

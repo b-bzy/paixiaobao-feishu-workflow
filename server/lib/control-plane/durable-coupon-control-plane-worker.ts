@@ -161,6 +161,15 @@ export function createDurableCouponControlPlaneWorker(input: {
   const effectWorker = new DurableEffectWorker(
     new PostgresDurableEffectRepository(input.database),
     handlers,
+    {
+      serializationKey(effect) {
+        if (effect.kind !== couponAiRecognitionEffectKind) return undefined;
+        const businessTaskId = effect.requestPayload.businessTaskId;
+        return typeof businessTaskId === "string" && businessTaskId
+          ? `coupon-ai:${businessTaskId}`
+          : undefined;
+      },
+    },
   );
   return new DurableCouponControlPlaneWorker(
     workflowWorker,

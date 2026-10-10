@@ -37,6 +37,20 @@ export interface CouponAiRecognitionRun {
 }
 
 export interface CouponAiRecognitionRepository {
+  prepare(input: {
+    semanticKey: string;
+    pilotRecordId: string;
+    businessTaskId: string;
+    ownerOpenId: string;
+    revision: number;
+    sourceSlot: CouponAiRecognitionRun["sourceSlot"];
+    sourceReference: Record<string, unknown>;
+    sourceSha256: string;
+    sourceFileName: string;
+    model: string;
+    promptVersion: string;
+  }): Promise<CouponAiRecognitionRun>;
+  activate(run: CouponAiRecognitionRun): Promise<void>;
   enqueue(input: {
     semanticKey: string;
     pilotRecordId: string;
@@ -166,6 +180,14 @@ export class PostgresCouponAiRecognitionRepository
   async enqueue(
     input: Parameters<CouponAiRecognitionRepository["enqueue"]>[0],
   ): Promise<CouponAiRecognitionRun> {
+    const run = await this.prepare(input);
+    await this.activate(run);
+    return run;
+  }
+
+  async prepare(
+    input: Parameters<CouponAiRecognitionRepository["prepare"]>[0],
+  ): Promise<CouponAiRecognitionRun> {
     if (!input.semanticKey.trim())
       throw new Error("AI semantic key is required");
     if (!Number.isSafeInteger(input.revision) || input.revision < 1) {
@@ -207,27 +229,30 @@ export class PostgresCouponAiRecognitionRepository
       }
       if (!run) throw new Error("AI recognition run was not persisted");
 
-      const payload = {
-        version: "coupon-ai-recognition-effect-v1",
-        runId: run.id,
-        businessTaskId: run.businessTaskId,
-      };
-      await transaction.query(
-        `INSERT INTO effect_receipts (
-           id, task_id, kind, semantic_key, request_sha256,
-           request_payload, state
-         ) VALUES ($1, NULL, $2, $3, $4, $5::jsonb, 'queued')
-         ON CONFLICT (kind, semantic_key) DO NOTHING`,
-        [
-          this.makeId(),
-          couponAiRecognitionEffectKind,
-          `coupon-ai:${run.semanticKey}`,
-          sha256(stableJson(payload)),
-          JSON.stringify(payload),
-        ],
-      );
       return run;
     });
+  }
+
+  async activate(run: CouponAiRecognitionRun): Promise<void> {
+    const payload = {
+      version: "coupon-ai-recognition-effect-v1",
+      runId: run.id,
+      businessTaskId: run.businessTaskId,
+    };
+    await this.database.query(
+      `INSERT INTO effect_receipts (
+         id, task_id, kind, semantic_key, request_sha256,
+         request_payload, state
+       ) VALUES ($1, NULL, $2, $3, $4, $5::jsonb, 'queued')
+       ON CONFLICT (kind, semantic_key) DO NOTHING`,
+      [
+        this.makeId(),
+        couponAiRecognitionEffectKind,
+        `coupon-ai:${run.semanticKey}`,
+        sha256(stableJson(payload)),
+        JSON.stringify(payload),
+      ],
+    );
   }
 
   get(runId: string): Promise<CouponAiRecognitionRun | undefined> {

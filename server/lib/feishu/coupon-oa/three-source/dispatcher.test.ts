@@ -351,6 +351,164 @@ describe("three-source Bot dispatcher", () => {
     expect(sendCard).not.toHaveBeenCalled();
   });
 
+  it("starts one batch from the original intake card at the current revision", async () => {
+    const current = draft();
+    current.task.revision = 3;
+    const couponSource = {
+      role: "couponTable" as const,
+      messageId: "om-coupon",
+      fileKey: "file-coupon",
+      fileName: "coupon.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    const whitelistSource = {
+      role: "whitelist" as const,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "whitelist.xlsx",
+      bytes: 10,
+      sha256: "b".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: couponSource,
+      whitelist: whitelistSource,
+    };
+    current.recognitions = {
+      couponTable: {
+        source: couponSource,
+        sourceHash: "a".repeat(64),
+        roleCandidates: [],
+        couponFieldCandidates: {},
+        listCandidates: [],
+        issues: [],
+        ai: {
+          runId: "run-coupon",
+          revision: current.task.revision,
+          sourceSha256: "a".repeat(64),
+          status: "pending",
+        },
+      },
+      whitelist: {
+        source: whitelistSource,
+        sourceHash: "b".repeat(64),
+        roleCandidates: [],
+        couponFieldCandidates: {},
+        listCandidates: [],
+        issues: [],
+        ai: {
+          runId: "run-whitelist",
+          revision: current.task.revision,
+          sourceSha256: "b".repeat(64),
+          status: "pending",
+        },
+      },
+    };
+    const startAiRecognition: CouponThreeSourcePilotService["startAiRecognition"] =
+      vi.fn(async () => current);
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { startAiRecognition },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_recognition_start",
+        value: {
+          pilotRecordId: current.recordId,
+          revision: 1,
+        },
+        idempotencyKey: "event-start-ai",
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(startAiRecognition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: current,
+        expectedRevision: 3,
+        operationId: "event-start-ai",
+      }),
+    );
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain("AI 识别中");
+  });
+
+  it("confirms no blacklist inside the single mapping submission", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.sources = {
+      couponTable: {
+        role: "couponTable",
+        messageId: "om-coupon",
+        fileKey: "file-coupon",
+        fileName: "coupon.xlsx",
+        bytes: 10,
+        sha256: "a".repeat(64),
+      },
+      whitelist: {
+        role: "whitelist",
+        messageId: "om-whitelist",
+        fileKey: "file-whitelist",
+        fileName: "whitelist.xlsx",
+        bytes: 10,
+        sha256: "b".repeat(64),
+      },
+    };
+    const confirmed = {
+      ...current,
+      task: {
+        ...current.task,
+        revision: 6,
+        blacklistStatus: "absent_confirmed" as const,
+      },
+    };
+    const confirmNoBlacklist: CouponThreeSourcePilotService["confirmNoBlacklist"] =
+      vi.fn(async () => confirmed);
+    const updated = {
+      ...confirmed,
+      task: { ...confirmed.task, revision: 7 },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async () => updated);
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn(async () => ({
+        ...updated,
+        task: {
+          ...updated.task,
+          status: "AwaitingFinalConfirmation" as const,
+        },
+      }));
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: {
+        confirmNoBlacklist,
+        updateSelections,
+        confirmSourcesAndGenerate,
+      },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await dispatcher.dispatchCallback({
+      openId: "ou_owner",
+      action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+      form: {
+        activityPointPercent: "6",
+        blacklistDecision: "absent_confirmed",
+      },
+    });
+
+    expect(confirmNoBlacklist).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 5 }),
+    );
+    expect(updateSelections).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: confirmed, expectedRevision: 6 }),
+    );
+    expect(confirmSourcesAndGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: updated, expectedRevision: 7 }),
+    );
+  });
+
   it("passes mapping choices to the revisioned service before generating artifacts", async () => {
     const current = draft();
     const source = {

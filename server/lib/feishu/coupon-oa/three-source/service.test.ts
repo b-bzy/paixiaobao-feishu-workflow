@@ -377,10 +377,29 @@ describe("CouponThreeSourcePilotService", () => {
     expect(uploadArtifact).not.toHaveBeenCalled();
   });
 
-  it("queues recognition after persisting a source and records pending state", async () => {
+  it("waits for explicit completion before activating one recognition batch", async () => {
     const coupon = await strictCouponBytes();
+    const whitelist = await whitelistBytes();
     let draft: CouponThreeSourcePilotDraft | undefined;
-    const enqueueAiRecognition = vi.fn(async () => ({ runId: "run-1" }));
+    const prepareAiRecognition: NonNullable<
+      CouponThreeSourcePilotDependencies["prepareAiRecognition"]
+    > = vi.fn(async (input) => ({
+      runId: `run-${input.role}`,
+      revision: input.draft.task.revision,
+      sourceSha256: input.source.sha256,
+      status: "pending" as const,
+    }));
+    const activateAiRecognition = vi.fn(async () => undefined);
+    const updateDraftImpl: CouponThreeSourcePilotDependencies["updateDraft"] =
+      async (current, updates, expectedRevision) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        const next = { ...current, ...updates };
+        draft = next;
+        return next;
+      };
+    const updateDraft = vi.fn(updateDraftImpl);
     const dependencies: CouponThreeSourcePilotDependencies = {
       downloadSource: async () => coupon,
       uploadArtifact: vi.fn(),
@@ -406,15 +425,10 @@ describe("CouponThreeSourcePilotService", () => {
         return draft;
       },
       listActive: async () => (draft ? [draft] : []),
-      updateDraft: async (current, updates, expectedRevision) => {
-        if (current.task.revision !== expectedRevision) {
-          throw new Error("stale revision");
-        }
-        draft = { ...current, ...updates };
-        return draft;
-      },
+      updateDraft,
       handoff: vi.fn(),
-      enqueueAiRecognition,
+      prepareAiRecognition,
+      activateAiRecognition,
     };
     const service = new CouponThreeSourcePilotService(dependencies);
     let current = await service.startOrResume("ou_owner");
@@ -427,16 +441,43 @@ describe("CouponThreeSourcePilotService", () => {
       fileName: "coupon.xlsx",
       bytes: coupon,
     });
-    expect(enqueueAiRecognition).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "couponTable",
-        draft: expect.objectContaining({ recordId: "record-ai" }),
-      }),
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "message-2",
+      fileKey: "file-2",
+      fileName: "whitelist.xlsx",
+      bytes: whitelist,
+    });
+    expect(prepareAiRecognition).not.toHaveBeenCalled();
+    expect(activateAiRecognition).not.toHaveBeenCalled();
+    expect(current.recognitions.couponTable?.ai).toBeUndefined();
+
+    current = await service.startAiRecognition({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "start-ai",
+    });
+
+    expect(prepareAiRecognition).toHaveBeenCalledTimes(2);
+    expect(activateAiRecognition).toHaveBeenCalledTimes(2);
+    expect(updateDraft.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      activateAiRecognition.mock.invocationCallOrder[0] ?? 0,
     );
     expect(current.recognitions.couponTable?.ai).toMatchObject({
-      runId: "run-1",
-      revision: current.task.revision,
+      runId: "run-couponTable",
       status: "pending",
     });
+
+    await service.startAiRecognition({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "start-ai-retry",
+    });
+    expect(prepareAiRecognition).toHaveBeenCalledTimes(2);
+    expect(activateAiRecognition).toHaveBeenCalledTimes(4);
   });
 });

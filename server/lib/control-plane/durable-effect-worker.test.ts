@@ -134,4 +134,42 @@ describe("DurableEffectWorker", () => {
       }),
     );
   });
+
+  it("serializes effects with the same business key", async () => {
+    const first = {
+      ...effect,
+      id: "effect-1",
+      leaseToken: "lease-1",
+      requestPayload: { businessTaskId: "CTS-1" },
+    };
+    const second = {
+      ...effect,
+      id: "effect-2",
+      leaseToken: "lease-2",
+      requestPayload: { businessTaskId: "CTS-1" },
+    };
+    const effects = repository([first, second]);
+    let active = 0;
+    let maximumActive = 0;
+    const worker = new DurableEffectWorker(
+      effects,
+      {
+        coupon_three_source_intake_card: async () => {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await Promise.resolve();
+          active -= 1;
+          return { kind: "succeeded" };
+        },
+      },
+      {
+        serializationKey: (item) => String(item.requestPayload.businessTaskId),
+      },
+    );
+
+    await worker.runOnce({ workerId: "worker-1", limit: 2, leaseMs: 60_000 });
+
+    expect(maximumActive).toBe(1);
+    expect(effects.complete).toHaveBeenCalledTimes(2);
+  });
 });

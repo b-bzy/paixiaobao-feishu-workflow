@@ -13,6 +13,15 @@ function number(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function percent(value: unknown): number | undefined {
+  const normalized = text(value).replace(/,/g, "").replace(/%$/, "");
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100
+    ? parsed
+    : undefined;
+}
+
 export function parseCouponApplicationDraftForm(
   form: Record<string, unknown>,
 ): CouponOaDraftValues {
@@ -34,12 +43,23 @@ export function parseCouponApplicationDraftForm(
   if (!["是", "否"].includes(overDeduction)) {
     throw new Error("是否超扣点必须是是或否");
   }
+  if (text(form.activityPointPercent) && !number(form.activityPointPercent)) {
+    throw new Error("活动点位必须为大于 0 的数值");
+  }
+  if (
+    text(form.platformBearingPercent) &&
+    percent(form.platformBearingPercent) === undefined
+  ) {
+    throw new Error("平台承担比例必须为 0 到 100 之间的数值");
+  }
 
   return {
     applicationType: "优惠券申请",
     businessMode: businessMode as CouponOaDraftValues["businessMode"],
     activityName: text(form.activityName),
     activityBackground: text(form.activityBackground),
+    activityPointPercent: number(form.activityPointPercent),
+    platformBearingPercent: percent(form.platformBearingPercent),
     overDeduction: overDeduction as "是" | "否",
     overDeductionReason: text(form.overDeductionReason),
     estimatedGmvYuan: number(form.estimatedGmvYuan),

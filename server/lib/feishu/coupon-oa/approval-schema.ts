@@ -147,6 +147,18 @@ export type CouponModificationValues = z.infer<
 >;
 export type CouponOaValues = CouponApplicationValues | CouponModificationValues;
 
+export interface CouponOaIdentitySnapshot {
+  /** The owner that completed the final confirmation. */
+  openId: string;
+  /** Feishu's immutable user ID required by the contact control. */
+  userId: string;
+  displayName: string;
+  /** The approved department selected from the confirmers' directory profile. */
+  departmentOpenId: string;
+  departmentName?: string;
+  resolvedAt: string;
+}
+
 /** A mutable system-side draft may be incomplete until its owner confirms it. */
 export interface CouponOaDraftValues {
   applicationType: "优惠券申请" | "优惠券修改";
@@ -162,6 +174,8 @@ export interface CouponOaDraftValues {
   channels?: string[];
   activityStartAt?: string;
   activityEndAt?: string;
+  /** Resolved by the server at final confirmation; never accepted from a card. */
+  identitySnapshot?: CouponOaIdentitySnapshot;
   calcImageFileCodes?: string[];
   couponTableFileCodes?: string[];
   productWhitelistFileCodes?: string[];

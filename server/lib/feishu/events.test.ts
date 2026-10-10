@@ -116,7 +116,13 @@ describe("handleFeishuPocEvent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateCouponApplicationDraft).mockReset();
-    delete process.env.FEISHU_COUPON_OA_MODE;
+    process.env.FEISHU_RUNTIME_STAGE = "local";
+    process.env.FEISHU_LEGACY_POC_ENABLED = "false";
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS =
+      "ou_submitter";
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_submitter";
     process.env.FEISHU_VERIFICATION_TOKEN = "verify-me";
     process.env.FEISHU_COUPON_OA_INITIATE_URL =
       "https://applink.feishu.cn/client/mini_program/open?appId=cli_coupon";
@@ -168,6 +174,71 @@ describe("handleFeishuPocEvent", () => {
     expect(
       JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
     ).toContain("保存草稿并上传材料");
+  });
+
+  it("handles the disabled three-source command before legacy workflow lookup", async () => {
+    const result = await handleFeishuPocEvent(
+      couponOaEvent("/OA优惠券提报", "event-three-source"),
+    );
+
+    expect(result).toEqual({
+      kind: "handled",
+      message: "Coupon three-source pilot is unavailable",
+    });
+    expect(listActiveCouponOaDrafts).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+    ).toContain("暂未开放");
+    expect(sendFeishuCard).toHaveBeenCalledWith(
+      "ou_submitter",
+      expect.objectContaining({ schema: "2.0" }),
+      "event-three-source",
+    );
+  });
+
+  it("does not execute a legacy synchronous route in a durable runtime stage", async () => {
+    process.env.FEISHU_RUNTIME_STAGE = "r2-draft-only";
+
+    await expect(
+      handleFeishuPocEvent(couponOaEvent("OA优惠券填报")),
+    ).resolves.toEqual({
+      kind: "ignored",
+      reason:
+        "Legacy synchronous Feishu POC routes are disabled outside local runtime",
+    });
+    expect(listActiveCouponOaDrafts).not.toHaveBeenCalled();
+    expect(sendFeishuCard).not.toHaveBeenCalled();
+  });
+
+  it("does not start a coupon workflow when the mode is omitted", async () => {
+    delete process.env.FEISHU_COUPON_OA_MODE;
+
+    await handleFeishuPocEvent(couponOaEvent("OA优惠券填报"));
+
+    expect(saveCouponOaDraft).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+    ).toContain("当前环境未开放优惠券 OA 工作流");
+  });
+
+  it("rejects an unverified public ingress before any side effect", async () => {
+    delete process.env.FEISHU_VERIFICATION_TOKEN;
+
+    await expect(
+      handleFeishuPocEvent(couponOaEvent("OA优惠券填报")),
+    ).rejects.toThrow("FEISHU_VERIFICATION_TOKEN is not configured");
+    expect(sendFeishuCard).not.toHaveBeenCalled();
+    expect(saveCouponOaDraft).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicitly trusted bridge ingress without a public token", async () => {
+    delete process.env.FEISHU_VERIFICATION_TOKEN;
+
+    await handleFeishuPocEvent(couponOaEvent("OA优惠券填报"), {
+      trustedIngress: "bridge",
+    });
+
+    expect(sendFeishuCard).toHaveBeenCalledOnce();
   });
 
   it("persists entered fields as a system draft and requests attachments", async () => {
@@ -321,28 +392,8 @@ describe("handleFeishuPocEvent", () => {
     ).toContain("当前模式仅验证固定字段自动写入 Base");
   });
 
-  it("uses the original message body to process an attachment", async () => {
-    vi.mocked(getFeishuMessageBody).mockResolvedValue({
-      messageType: "file",
-      content: '{"file_key":"file-key","file_name":"配券信息表.xlsx"}',
-    });
+  it("does not promote source files from the legacy OA workflow", async () => {
     vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([couponDraft]);
-    vi.mocked(downloadFeishuMessageResource).mockResolvedValue(
-      new Uint8Array([1, 2, 3]),
-    );
-    vi.mocked(uploadCouponApprovalFile).mockResolvedValue("approval-file-code");
-    vi.mocked(classifyCouponOaAttachment).mockReturnValue({
-      role: "couponTable",
-      fileName: "配券信息表.xlsx",
-      fileCode: "approval-file-code",
-      bytes: 3,
-      sha256: "hash",
-    });
-    vi.mocked(attachCouponOaFile).mockReturnValue({
-      values: couponDraft.values,
-      attachments: [],
-    });
-    vi.mocked(updateCouponOaDraft).mockResolvedValue(couponDraft);
 
     await expect(
       handleFeishuPocEvent({
@@ -358,17 +409,17 @@ describe("handleFeishuPocEvent", () => {
       }),
     ).resolves.toEqual({
       kind: "handled",
-      message: "Coupon OA attachment saved to COA-draft",
+      message: "Coupon OA source attachment promotion is disabled",
     });
 
-    expect(getFeishuMessageBody).toHaveBeenCalledWith({
-      messageId: "om_attachment",
-    });
-    expect(downloadFeishuMessageResource).toHaveBeenCalledWith({
-      messageId: "om_attachment",
-      fileKey: "file-key",
-      type: "file",
-    });
+    expect(getFeishuMessageBody).not.toHaveBeenCalled();
+    expect(downloadFeishuMessageResource).not.toHaveBeenCalled();
+    expect(uploadCouponApprovalFile).not.toHaveBeenCalled();
+    expect(attachCouponOaFile).not.toHaveBeenCalled();
+    expect(classifyCouponOaAttachment).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+    ).toContain("原始附件直传审批已禁用");
   });
 
   it("expires a stale OA draft before processing an attachment", async () => {

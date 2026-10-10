@@ -1,9 +1,15 @@
 # 优惠券 OA 综合 Skill 飞书适配升级方案 v1
 
-> **状态**：待业务、流程、模板、应用与技术 Owner 评审；本文件是从本地三源验证升级到飞书内网测试的实施方案，不代表 Bot 路线已经上线或 native-submit 已开放。
+> **状态**：本文件现为 **P1** 完整 Skill 合同与长期架构目标；需求方当前优先执行更小的 [P0 最快 Bot POC](coupon-three-source-fast-poc-delivery-plan-v1.md)。P1 仍待业务、流程、模板、应用与技术 Owner 评审，不代表 Bot 路线已经上线或 native-submit 已开放。
 > **日期**：2026-10-09
 > **唯一目标命令**：`/OA优惠券提报`
-> **关联**：[综合 Skill](../../../../.claude/skills/OA优惠券提报/SKILL.md) · [三源 PRD](coupon-oa-three-source-workflow-prd-v1.md) · [三源离线测试](coupon-oa-three-source-offline-test-plan-v1.md) · [内网试点 rollout](../../current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md) · [ADR-0004](../../../adr/0004-bot-confirmed-submit-for-coupon-oa.md) · [ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)
+> **关联**：[P0 最快 Bot POC 交付计划](coupon-three-source-fast-poc-delivery-plan-v1.md) · [综合 Skill](../../../../.claude/skills/OA优惠券提报/SKILL.md) · [三源 PRD](coupon-oa-three-source-workflow-prd-v1.md) · [三源离线测试](coupon-oa-three-source-offline-test-plan-v1.md) · [内网试点 rollout](../../current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md) · [ADR-0004](../../../adr/0004-bot-confirmed-submit-for-coupon-oa.md) · [ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)
+
+## 0. P0 与 P1 的边界
+
+P0 只交付单用户、严选、SKU、direct HTTP、OA 测试稿的可逆演示，使用已经实现的 adapter 与既有草稿 handoff。它不必等待 FDEV-001～008，也不实现截图、补充/覆盖、非 SKU、耐久控制面或真实 OA。
+
+本文剩余内容保留为 P1：当 P0 已证明业务价值后，再选择性补齐完整 Skill 合同、长期运行架构和原生 OA canary。P1 不反向阻断 P0，也不要求 P0 为未来的所有能力预建抽象。
 
 ## 1. 背景、目标与边界
 
@@ -14,19 +20,22 @@
 ```text
 业务员在现有测试 Bot 单聊发送 /OA优惠券提报
   → 服务端创建/恢复一笔三源优惠券任务
-  → 收集、解析并核验四类材料
+  → 收集、解析并核验原始配券表、白名单和可选黑名单
   → 第一次确认来源映射、无黑名单/重叠决策和补充字段
   → 生成同一 revision 的标准产物与 OA 预填快照
-  → 第二次确认最终预览
-  → R2 停在系统草稿；只有 R3/R4 才由受认证服务端创建并回读原生 OA
+  → 交接到既有 OA 测试稿
+  → 业务员沿用既有明确“发送”动作
+  → 仅当既有服务端 Gate 允许时，创建并回读原生 OA
 ```
 
+本方案复用已经存在的 OA 测试稿、最终发送和 readback 行为；它不以新建通用工作流平台、替代 bridge/worker 或重写 native-submit 为前提。该复用决定不改变正式 R1-dev/R2/R3 的命名和验收含义，也不授权绕过现有服务端 Gate。
 ### 1.1 本次方案的范围
 
 - Bot 单聊中的唯一目标命令为 `/OA优惠券提报`；不保留两个旧 Claude Code Skill 或旧命令的兼容入口。
-- 首期只覆盖已登记的券型、字段、公式、模板和 ID 维度；“任意布局”仅指 Sheet/表头/说明行布局，不表示支持任意业务语义或券型。
-- 复用当前测试 Bot 和既有测试 OA 模板，按现有 R0–R5 rollout 模型分阶段验证。
+- 首期只覆盖已登记的常规满减券、字段、公式、模板和 SKU ID 维度，且仅开放严选业务模式；寄卖/pop 在受控服务端截图渲染器可用并通过独立验证前明确拒绝。“任意布局”仅指 Sheet/表头/说明行布局，不表示支持任意业务语义或券型。
+- 复用当前测试 Bot、既有系统 OA 测试稿和既有测试 OA 模板；三源 adapter 只交接冻结 revision，不实现第二套提交/回读链路。
 - 不合并 `OA优惠券审批` 手工原生 OA 导航，也不改变 `优惠券Excel试点` 的 P1-1 产品边界；它们是独立的当前路线。
+- 不把本次适配扩大为通用工作流框架、替代 bridge/worker 平台、跨路线草稿重构、群协作、批量提报或未登记模板/券型支持。
 
 ### 1.2 不可变原则
 
@@ -41,23 +50,39 @@
 
 | 范围 | 已具备/已定义 | 飞书升级前的缺口 |
 | --- | --- | --- |
-| 三源领域规则 | `server/lib/coupon-oa/three-source/` 及离线测试能在无网络条件下演练 mapping、名单、标准产物与本地确认 | 没有飞书消息/Card adapter、持久化 task、Drive/审批附件编排或 OA 提交路径 |
-| Claude Code Skill | 已收敛为 `/OA优惠券提报` 的本地综合业务合同 | 本地执行不共享 Bot 草稿、文件引用、凭据或状态 |
-| 当前 Bot 路线 | `server/lib/feishu/events.ts` 已处理旧 `OA优惠券填报`、`优惠券Excel试点` 与 `OA优惠券审批` | 尚无 `/OA优惠券提报` 三源 dispatcher；总路由承担过多业务分支 |
-| 当前附件处理 | 旧优惠券 OA 消息附件直传审批附件库的路径已禁用；来源文件不会再被直接提升为 approval `file_code` | 尚无三源产物生成、冻结、重下载/hash 复验和最终 Gate 后的即时审批附件提升；不得把已禁用的旧附件路径重新接回 |
-| 原生 OA 提交 | `approval-schema.ts` 可做 definition hash 绑定、表单编码和回读差异；`submit-service.ts` 已有创建后回读方向 | 三源路线必须增加完整 Gate、持久业务幂等、`Submitting` lease、`SubmissionUnknown` 对账和人工告警，不能依赖普通失败重试 |
+| 三源领域规则与 adapter | `server/lib/coupon-oa/three-source/` 已提供 mapping、名单、revision 与标准产物；`server/lib/feishu/coupon-oa/three-source/` 已提供 default-disabled 的文件/Card adapter 和 OA 测试稿 handoff | P0 只验证严选、SKU、无截图子集；完整字段补充/覆盖、非 SKU、完整最终预览和截图仍为 P1。 |
+| Claude Code Skill | 已收敛为 `/OA优惠券提报` 的本地综合业务合同 | 本地执行不共享 Bot 草稿、文件引用、凭据或状态；P0 只实现其中明确列出的子集。 |
+| 当前 Bot 路线 | `server/lib/feishu/events.ts` 已路由三源文本、文件和 callback；`dispatcher.ts` 由 feature flag、OA allowlist 和测试资源 fail closed | 需要按 P0 手册配置 direct HTTP callback、专属资源和单用户测试；不因此成为正式 R2。 |
+| 当前附件处理 | 三源路径生成冻结标准产物，以 Drive 重下载/hash 复验后交接既有 OA 测试稿；来源文件不会被直接提升为 approval `file_code` | P0 不生成 `calcImage`；完整截图合同与非严选附件范围留在 P1。 |
+| 原生 OA 提交 | `approval-schema.ts` 可做 definition hash 绑定、表单编码和回读差异；`submit-service.ts` 已有创建后回读方向 | 三源路线必须交接到这条既有路径并保留其 Gate、幂等、`SubmissionUnknown` 与人工告警语义；不新建并行提交实现 |
 | 配置与并发 | `FEISHU_COUPON_OA_MODE` 默认 `disabled`；通用 tester allowlist、native-submit kill switch 和独立 native-submit allowlist 已由服务端复验；`production` 仅为兼容别名，仍须通过全部门禁 | Base 的读后 PUT 不是原子 CAS，且尚无持久业务 submission key/lease，不能作为最终提交锁 |
-| 事件入口 | 开发 bridge 已要求显式目标、HMAC key ID/secret、timestamp、nonce 和 body digest；Nitro `/api/feishu/bridge` 仅接受验签请求；本地 nonce cache 可拒绝同进程重放 | 当前 `lark-cli` / `pnpm dev:events` 仍仅用于调试，且没有 durable outbox、持久 transport receipt、跨实例 nonce/event 去重、监督运行、告警或 runbook，故不满足 R1/R2 Gate |
+| 事件入口 | 开发 bridge 已要求显式目标、HMAC key ID/secret、timestamp、nonce 和 body digest；Nitro `/api/feishu/bridge` 仅接受验签请求；本地 nonce cache 可拒绝同进程重放 | 当前 `lark-cli` / `pnpm dev:events` 可按 [ADR-0008](../../../adr/0008-limit-local-lark-cli-to-vercel-integration-smoke.md) 执行一次本机 → Vercel 的 `R0.5-manual-smoke`，但仍没有 durable outbox、持久 transport receipt、跨实例 nonce/event 去重、监督运行、告警或 runbook，故不满足 R1-dev/R2 Gate |
 | 公网 callback | `/api/feishu/process` 在未配置 `FEISHU_VERIFICATION_TOKEN` 时拒绝请求；常规构建已停止注入 `/api/feishu/events` Edge ACK 路径 | 若未来采用公网 callback，仍须设计一条唯一、受测试保护且具备持久接收/投递语义的正式合同；不能恢复 `waitUntil` best-effort 转发作为可靠入口 |
-| 本地 bridge 目标 | `scripts/long-connection-bridge.mjs` 要求显式 `FEISHU_BRIDGE_TARGET_URL`（或显式 legacy target），并只允许精确的 `/api/feishu/bridge`；HTTPS 是默认要求，回环 HTTP 仅限显式开发开关 | 该脚本仍无持久 outbox/retry/reconnect/队列边界，不能把它当作托管 bridge 或 R1 证明 |
+| 本地 bridge 目标 | `scripts/long-connection-bridge.mjs` 要求显式 `FEISHU_BRIDGE_TARGET_URL`（或显式 legacy target），并只允许精确的 `/api/feishu/bridge`；HTTPS 是默认要求，回环 HTTP 仅限显式开发开关 | 该脚本仍无持久 outbox/retry/reconnect/队列边界；可作为 ADR-0008 的 R0.5 手工 smoke 工具，但不能把它当作托管 bridge、R1-dev 或正式 R2 证明 |
 
-**结论：**“本地测试已打通”是 R0 的必要输入，不是 R1/R2 的上线证明。接入飞书之前，须先把运行时边界、持久状态、权限与回滚控制补齐。
+**结论：**“本地测试已打通”是 R0 的必要输入，不是 R1-dev、R2 或 R3 的上线证明。正式 ring 仍须补足运行时边界、持久状态、权限与回滚控制；方案 A 的代码范围则是将三源 canonical revision 适配到既有 OA 测试稿/发送路径，不重建本表列出的 bridge、worker 或 native-submit 能力，也不因此降低已有 Gate。
+
+### 2.1 R1-dev：正式 R2 前的 command/card 验证 ring
+
+为避免将 command-to-card canary 误称为正式 R2，开发路径使用以下定义：
+
+```text
+R0                  = 本地 domain、fake gateway、disposable PostgreSQL
+R0.5-manual-smoke   = 本机 lark-cli → 本机 bridge → Vercel HTTPS ingress
+R1-dev              = 独立 Dev App/Bot 的 Shadow → Dark task → command-to-card canary
+R2                  = `r2-draft-only` 的完整 draft-only 文件/材料流
+R3                  = 原生 OA canary
+```
+
+`R0.5-manual-smoke` 是 ADR-0008 的测试标签，不是新的 `FEISHU_RUNTIME_STAGE`，也不是 R1-dev 的别名。它只允许在所有业务 Gate 关闭时验证本机长连接、HMAC 转发和 Vercel ingress；不能推断 durable ACK、消息恢复、真实 command/card、R2 文件流或 OA 权限。
+
+`R1-dev` 是发布/验收 ring，运行时映射为 `FEISHU_RUNTIME_STAGE=r1-intake` 加独立 Dev command/card gate；它不是新的 runtime-stage 字符串，也不得选择 `r2-draft-only`。R1-dev 禁止文件、Base、Drive、对象存储、renderer、AI、Approval 附件和 OA。其顺序、独立 Test-Plan Agent/QA handoff 和 🥇 前置条件以[飞书开发版需求台账](coupon-oa-feishu-dev-requirements-tracker-v1.md)为准。
 
 ## 3. 目标命令、会话与材料合同
 
 ### 3.1 命令路由
 
-飞书 Bot 仅精确识别 `/OA优惠券提报`（可安全忽略首尾空白和命令前缀符号），并将其路由到 `CouponCommandDispatcher`。不为 `OA优惠券填报`、`OA优惠券三源填报` 或其他旧语句保留启动新任务的兼容分支。
+飞书 Bot 仅精确识别 `/OA优惠券提报`（可安全忽略首尾空白和命令前缀符号），并将其路由到 `dispatchCouponThreeSourceText` 的三源 adapter。不为 `OA优惠券填报`、`OA优惠券三源填报` 或其他旧语句保留启动新任务的兼容分支。
 
 - 同一 owner 在同一时刻仅允许一笔活动的综合提报；存在未终态任务时，提示继续或先结束当前任务。
 - 已存在的旧 OA 草稿/Excel 试点可以继续通过其**既有卡片**完成或取消，但不再从旧命令创建新任务。
@@ -81,23 +106,26 @@
 ### 4.1 建议状态机
 
 ```text
-Collecting
-  → Recognizing
-  → NeedsClarification
-  → AwaitingSourceConfirmation
-  → GeneratingArtifacts
-  → AwaitingFinalConfirmation
-  → DraftOnlyConfirmed                 (R2)
-  → Submitting → Submitted             (R3/R4)
-                ↘ CreatedNeedsReview
-                ↘ SubmissionUnknown
-                ↘ Failed
+三源 task
+  Collecting
+    → Recognizing
+    → NeedsClarification
+    → AwaitingSourceConfirmation
+    → GeneratingArtifacts
+    → AwaitingFinalConfirmation
+    → DraftOnlyConfirmed（已交接既有 OA 测试稿）
 
-任何可编辑状态 → Canceled / Expired
-任一源、映射、覆盖、决定或模板变化 → revision + 1 → 旧确认失效
+既有 OA 测试稿
+  Draft → Confirmed → Submitting → Submitted
+                         ↘ CreatedNeedsReview
+                         ↘ SubmissionUnknown
+                         ↘ Failed
+
+任一三源可编辑状态 → Canceled / Expired
+任一源、映射、覆盖、决定或模板变化 → revision + 1 → 旧确认、产物和 OA 测试稿失效
 ```
 
-每个 task 记录 `ownerOpenId`、`revision`、来源/产物 hash、映射/模板/审批定义版本、确认人/时间、操作事件 ID 和状态转换审计。卡片只能包含 task ID、revision、action、nonce；服务端从持久快照读取业务字段，绝不接受卡片回传的自由业务 JSON。
+每个三源 task 记录 `ownerOpenId`、`revision`、来源/产物 hash、映射/模板版本、确认人/时间、操作事件 ID、OA 测试稿交接引用和状态转换审计。交接后的审批定义 hash、submission key、实例 code/link 与 readback 结果由既有 OA 草稿记录。卡片只能包含 task 或 draft ID、revision、action、nonce；服务端从持久快照读取业务字段，绝不接受卡片回传的自由业务 JSON。
 
 ### 4.2 第一次：来源确认
 
@@ -111,18 +139,28 @@ Collecting
 
 确认后锁定 `sourceConfirmation`，形成可以生成标准产物的 canonical revision。文件、映射、补充、黑名单状态或交集决定发生任意变更时，该确认立即失效。
 
-### 4.3 第二次：最终确认
+### 4.3 第二次：最终确认与既有 OA 测试稿
 
 从已锁定的 canonical revision 生成：标准配券表、标准白名单、可选标准黑名单、无黑名单记录、OA 预填字段、计算结果、模板版本和附件 hash。最终卡完整回显这些内容、警告和当前 revision。
 
-| Ring | 按钮语义 | 服务端副作用 |
-| --- | --- | --- |
-| R2 draft-only | `确认生成系统草稿` | 写任务审计、冻结标准产物和系统草稿；严格禁止 `POST /approval/v4/instances` |
-| R3/R4 native-submit | `确认并发起 OA` | 再验 Gate；下载并 hash 校验冻结产物；上传审批附件；创建并回读一笔原生 OA |
+方案 A 在第二次确认后把该冻结快照交接给既有 OA 测试稿；用户随后使用已经验证的明确“发送”路径。三源 task 不自行执行审批创建，也不复制现有最终确认/提交卡片。
 
-最终确认是唯一可能授权原生 OA 创建的动作。不得沿用旧流程“预览确认 → 确认提交”产生第三次用户确认。旧卡、重复点击、非 owner 或 revision 不一致均应拒绝或返回已有终态。
+| 阶段 | 用户动作 | 服务端副作用 |
+| --- | --- | --- |
+| 三源第二次确认 | `确认生成 OA 测试稿` | 写 task 审计、冻结标准产物与预填快照，并创建/更新既有系统 OA 测试稿；不自动创建原生 OA |
+| 既有最终发送 | 既有 OA 测试稿中的明确“发送”动作 | 沿用既有 owner、revision、allowlist、kill switch、审批定义、附件 hash、提交幂等与 readback Gate；仅所有 Gate 通过时创建一笔 OA |
+
+最终发送是唯一可能授权原生 OA 创建的动作。旧卡、重复点击、非 owner 或 revision 不一致均应拒绝或返回已有终态。
 
 ## 5. 目标运行架构与信任边界
+
+### 5.1 R0.5-manual-smoke：本机长连接、Vercel ingress
+
+ADR-0008 允许一次受控、短期的本机 `lark-cli` → `scripts/long-connection-bridge.mjs` → Vercel HTTPS ingress 测试。已安装的 `lark-cli 1.0.96` 可能在 stdout bridge 转发和 Vercel 写入之前 ACK，因此该路径只验证“已到达 Vercel 的请求”的 transport 连通性和 Gate 关闭时的安全拒绝；不运行 worker tick，不处理命令/卡片/文件，不创建 OA，也不向测试用户回复。Vercel receipt/outbox commit 是系统内可核对边界，但不是飞书 source ACK 边界。任何未来用户可见回复必须是 worker 领取后的幂等 effect，不能由 ingress 直接发送。该路径没有 durable ACK、retry、reconnect、DLQ 或恢复保证，故不能写作本节正式目标架构的已实现前置。
+
+### 5.2 正式 R1-dev/R2/R3 的长期目标
+
+下图是正式 R1-dev/R2/R3 的长期运行目标，不是方案 A 为完成三源适配而新建的基础设施清单。方案 A 复用现有受限测试入口与 OA 测试稿/发送链路；若未来扩大为正式 ring，仍须逐项满足本节的运行边界。
 
 内网试点仍遵守 ADR-0006；长期生产仍以 ADR-0002 的 HTTP callback 为目标：
 
@@ -154,7 +192,7 @@ Collecting
 
 ### 6.1 canonical revision
 
-每个 revision 最少保存：
+每个三源 revision 最少保存：
 
 ```text
 taskId、ownerOpenId、revision、schemaVersion、
@@ -163,9 +201,10 @@ Sheet/列/ID 维度与字段来源定位、
 显式覆盖与原因、无黑名单确认、overlap hash/决定、
 template ID/version/fingerprint、生成规则版本、
 标准产物的行数/hash/Drive 引用、OA 预填快照、
-第一次/第二次确认、审批定义 hash、submission key、
-instance code/link、readback 结果与差异。
+第一次/第二次确认与既有 OA 测试稿的 handoff 引用。
 ```
+
+交接后，既有 OA 草稿保存审批定义 hash、submission key、实例 code/link 与 readback 结果；三源任务不复制这套提交状态。
 
 ### 6.2 文件身份
 
@@ -182,13 +221,13 @@ instance code/link、readback 结果与差异。
 
 ### 7.1 已实施的 P0 fail-closed 控制与三源路线必需配置
 
-2026-10-09 已完成旧优惠券 OA 路线的 P0 防误触发修复：未配置 mode 时禁用、通用/原生两层 allowlist、native-submit kill switch、服务端最终创建门禁、原始附件直传禁用、bridge HMAC ingress 和默认构建停止生成 Edge ACK。它们降低了测试环境误触发风险，**不**构成 R1、R2 或 R3 Gate 通过证据。
+2026-10-09 已完成旧优惠券 OA 路线的 P0 防误触发修复：未配置 mode 时禁用、通用/原生两层 allowlist、native-submit kill switch、服务端最终创建门禁、原始附件直传禁用、bridge HMAC ingress 和默认构建停止生成 Edge ACK。它们降低了测试环境误触发风险，**不**构成 R1-dev、R2 或 R3 Gate 通过证据。
 
 三源路线仍应采用显式、冲突即拒绝的配置；未知/缺失值禁止 native-submit。至少包括：
 
 | 配置 | 用途 |
 | --- | --- |
-| launch stage | 明确 R0/R1/R2/R3/R4；未知/缺失值禁止 native-submit |
+| launch stage | 明确 R0/R1-dev/R2/R3/R4；R1-dev 仅映射 `r1-intake`，未知/缺失值禁止 native-submit |
 | 三源路线 feature flag | 单独开启 `/OA优惠券提报`；不影响旧 Excel 试点 |
 | server-side allowlist | 发起、附件、确认、提交各步骤均复验，不依赖卡片隐藏 |
 | global native-submit kill switch | 默认关闭；可立即停止原生 OA 写入 |
@@ -197,9 +236,9 @@ instance code/link、readback 结果与差异。
 | bridge key ID / secret reference | 专用轮换密钥，不能复用 Verification Token、App Secret 或 tenant token |
 | retention / limits | 文件大小、行数、有效期、数据保留和日志脱敏策略 |
 
-当前旧路线的 P0 变量为：`FEISHU_COUPON_OA_MODE=disabled|draft-demo|native-submit`（`production` 仅兼容映射到 `native-submit`）、`FEISHU_COUPON_OA_ALLOWED_OPEN_IDS`、`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=true`、`FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS`、`FEISHU_BRIDGE_TARGET_URL`、`FEISHU_BRIDGE_KEY_ID` 和 `FEISHU_BRIDGE_SHARED_SECRET`。它们必须由服务端或企业托管 bridge 配置；不得把 allowlist、共享密钥或开关值放入卡片回调。
+当前旧路线的 P0 变量为：`FEISHU_COUPON_OA_MODE=disabled|draft-demo|native-submit`（`production` 仅兼容映射到 `native-submit`）、`FEISHU_COUPON_OA_ALLOWED_OPEN_IDS`、`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=true`、`FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS`、`FEISHU_BRIDGE_TARGET_URL`、`FEISHU_BRIDGE_KEY_ID` 和 `FEISHU_BRIDGE_SHARED_SECRET`。它们必须由服务端、ADR-0008 限定的安全本机 R0.5 runner 或企业托管 bridge 配置；不得把 allowlist、共享密钥或开关值放入卡片回调。
 
-Secret 只可存在于企业托管 bridge、服务端环境变量或密钥服务；不得写入 Skill、卡片、Base 业务字段、前端构建变量或日志。
+Secret 只可存在于 ADR-0008 限定的安全本机 R0.5 runner、企业托管 bridge、服务端环境变量或密钥服务；不得写入 Skill、卡片、Base 业务字段、前端构建变量或日志。
 
 ### 7.2 飞书资源与权限证据
 
@@ -211,47 +250,47 @@ Secret 只可存在于企业托管 bridge、服务端环境变量或密钥服务
 4. R3 前已经在隔离审批定义验证：definition read、目标 `approval_code`、`is_external=false`、申请人资格、审批附件 upload、instance create/get；
 5. OA 流程 Owner 已确认申请人、节点、抄送、撤回/驳回和人工对账职责。
 
-## 8. 实施工作包（实施前方案，不在本文档阶段抢跑）
+## 8. P1：完整 Skill 合同与长期架构工作包
 
-### W0：评审与合同冻结
+以下工作包不是 P0 的前置，不得在 P0 阶段抢跑；只在 POC 证明需要后按业务价值选择启动。
 
-- 业务/流程/模板 Owner 冻结首期券型、字段、公式、渠道、日期、业务模式、超扣点、白/黑名单模板和重叠规则；
-- 冻结由同 revision 已验证、已填充标准配券表完整渲染截图的规则；不得接受人工上传、原始源表或练习替代截图；
-- 在 proposal 中批准三源路线使用 `/OA优惠券提报`，再将生效规则提升到 `current/`；
-- 指定业务、OA、应用、平台/安全、bridge 运行、工程/QA Owner 和 R2/R3 签核人。
+### A1：冻结三源到 OA 测试稿的合同
 
-### W1：领域合同与持久任务
+- 由业务、流程与模板 Owner 冻结首期券型、字段、公式、渠道、日期、业务模式、超扣点、白/黑名单模板、ID 维度与重叠规则；
+- 冻结同 revision 标准配券表、标准名单和截图的生成/验证规则；不得接受原始源表、人工上传图片或未登记模板作为正式附件；
+- 定义 canonical revision 如何映射为现有系统 OA 草稿字段和标准产物引用；指定三源 handoff 与既有草稿失效/替换规则；
+- 保持当前 `优惠券Excel试点`、`OA优惠券填报` 与 `OA优惠券审批` 的合同不变。
 
-- 复用 `server/lib/coupon-oa/three-source/` 的纯领域识别、列表、canonical package、标准生成与离线测试；
-- 在 `server/lib/feishu/coupon-oa/` 建立独立的三源 task repository、application service、Card builders、Drive/Approval handoff；
-- 将 owner、revision、source confirmation、final confirmation、hash、template mapping 与 submission states 变成持久化数据；
-- 用持久唯一约束/lease 实现 transport receipt、业务状态迁移和 submission key；不能把 Base 的读后 PUT 或卡片 revision 当作原子并发锁。
+### A2：实现最小三源 Bot adapter
 
-### W2：Bot 路由与 R2 draft-only
+- 以 `dispatcher.ts` 的精确 `/OA优惠券提报` matcher 为入口，绑定已有 `CouponThreeSourceTaskService`，而不是在旧命令上增加隐式分支；
+- 只补三源文件接收、解析候选、角色/Sheet/列/ID 维度卡片、补充值、无黑名单和重叠决定，以及 task/revision/owner 的服务端复验；
+- 从同一冻结 revision 生成标准配券表、白名单、可选黑名单和截图，并保存来源/产物 hash；源文件绝不直接提升为 OA 附件；
+- 不引入通用工作流框架、替代 bridge/worker、跨路线状态机重构或第二套 native-submit 服务。
 
-- 在 `events.ts` 外抽取 transport adapter 和 Coupon command dispatcher，新增 `/OA优惠券提报` 精确路由；
-- 不把新三源逻辑继续堆入总事件处理器，也不复用旧 `handleCouponOaAttachment()` 的接收即上传审批附件路径；
-- 接收材料、完成两次确认、生成/冻结标准产物和系统草稿，但在代码、配置、审计和网络层均禁止原生 OA create；
-- 经企业托管 bridge 的签名、outbox、持久收据、去重、监控和 runbook 验收后，向严格 allowlist 开放 R2。
+### A3：交接既有 OA 测试稿与显式发送
 
-### W3：native-submit canary
+- 在三源第二次确认后，创建或更新既有系统 OA 测试稿，交接 OA 预填字段及重新下载/hash 校验所需的冻结产物引用；
+- 复用既有 OA 测试稿卡片、最终发送按钮、`submit-service.ts` 的 Gate、审批定义绑定、附件提升、创建/readback 和未知结果语义；
+- 三源 adapter 不直接调用 Approval create API；生成或交接成功不等于 OA 已发送；
+- 现有 native-submit 开关、双层 allowlist、owner、revision、definition hash 和 readback 的任何拒绝均保持拒绝。
 
-- 保留并复用 `approval-schema.ts` 的 definition hash 绑定、`approval-client.ts` 网关和 `submit-service.ts` 的创建后回读比对；
-- 为三源提交增加最终 Gate、冻结产物重新下载/hash 校验、即时 approval file upload、持久 submission key、`Submitting` lease、`SubmissionUnknown` 对账与 `CreatedNeedsReview` 告警；
-- 只有 readiness checklist 的 G1–G4 可重验通过后，使用 1–2 位具名用户和隔离测试 OA 做一次值守 canary。
+### A4：验证并准备受限测试
 
-### W4：严格 allowlist 扩容与后续迁移
+- 用现有离线三源测试覆盖乱序材料、角色/字段歧义、黑名单缺失或无效、ID 维度不一致、重叠决策、revision 失效和 source/standard-artifact 边界；
+- 为 adapter 和 handoff 增加 fake/mocked 飞书、Drive、审批网关测试，证明生成期间零 OA create，最终发送只走既有服务端路径；
+- 在不改变当前配置、allowlist、开关或部署的前提下完成本地/隔离验证；任何真实飞书或 OA 测试仍须由有权限的 Owner 在既有 Gate 下另行授权；
+- 通过受限测试后，才将真实已实现的行为和证据同步到 `current/`、rollout、readiness checklist 与 Skill 合同文档。
 
-- 逐次扩大 allowlist，并记录时间、人数、Owner、观察期和退回条件；
-- 任一重复/越权 OA、未签名请求、无法对账的 `SubmissionUnknown`、definition drift、hash mismatch、敏感日志泄露或 outbox 积压均立刻停止/回滚；
-- R5 生产部署必须另行完成 ADR-0002 的 HTTP callback、持久队列/数据库、合规/数据驻留、生产可观测性和安全决策，不能把试点 bridge 直接量产。
+## 9. 正式 Ring、Gate 与验收矩阵（方案 A 的后续扩大范围）
 
-## 9. Ring、Gate 与验收矩阵
+本节描述将来把三源路线宣称为正式 R1-dev/R2/R3 能力时的额外 Gate；它不要求方案 A 为完成受限 adapter 而重建这些平台能力，也不放松现有 OA 测试稿/发送路径的服务端控制。
 
 | Ring | 可开放范围 | 允许副作用 | 最小验收 |
 | --- | --- | --- | --- |
 | R0 | 合成/脱敏本地样本 | 无飞书写入 | 离线单元/合同测试、`fetch` 零调用、文档与模板规则评审 |
-| R1 | 托管 bridge + 指定测试账号 | 事件接收/回执测试 | 签名、nonce/replay、durable outbox、持久 receipt、单 consumer、监控/告警、runbook |
+| R0.5-manual-smoke | 本机 `lark-cli` → bridge → Vercel HTTPS ingress | 仅 transport receipt/安全拒绝验证；所有业务 Gate 和 Bot 用户回复关闭 | ADR-0008 用例通过；单 consumer；零 task/effect/user-visible reply/card/file/Base/Drive/AI/Approval/OA；不宣称 durable ACK 或 R1-dev |
+| R1-dev | 独立 Dev App/Bot 的 command/card pre-R2 验证 | 仅 receipt/outbox/task/audit/开发验收卡；使用 `r1-intake` | FDEV-001–FDEV-005 🥇 后，FDEV-006 逐步完成 Shadow、Dark task、单用户 card、小 allowlist；零文件/Base/Drive/object-store/renderer/AI/Approval/OA |
 | R2 | 严格 allowlist 业务员 | 系统草稿、Drive/Base 冻结产物 | 三源 draft-only E2E；证明没有 `POST /approval/v4/instances`；源表不入 OA 附件 |
 | R3 | 1–2 位具名 canary | 当前 revision 的单次 native-submit + readback | G4、submission 对账、kill switch/回滚演练、manual/API 路径比对 |
 | R4 | 预批准小范围用户 | 同 R3 | canary 经业务/OA/安全/运行 Owner 书面签核，逐次扩容 |
@@ -267,11 +306,11 @@ Secret 只可存在于企业托管 bridge、服务端环境变量或密钥服务
 | 文件与副作用 | 源文件绝不进入审批附件、冻结 Drive 文件下载 403、hash/大小不符、Base/Drive 失败、R2 零 OA create 证据 |
 | 提交与恢复 | 业务幂等、bridge/Nitro 重启、HTTP 回应丢失、create timeout、`SubmissionUnknown`、readback mismatch、`CreatedNeedsReview`、对账与回滚 |
 
-## 10. Go / No-go 与回滚
+## 10. 正式 Ring 的 Go / No-go 与回滚
 
 ### 10.1 R2 Go 条件
 
-- W0/W1 已完成且三源流程仍明确标为试点/提议，未误称为已生产；
+- A1/A2 已完成且三源流程仍明确标为试点/提议，未误称为已生产；
 - bridge 和 ingress 已完成签名、持久收据、去重、outbox、监控和 runbook；
 - 所有新配置 fail closed，native-submit kill switch 默认关闭；
 - 至少三次完整 R2 正常 E2E，另含重复、旧卡、重启、Drive/Base/文件下载故障注入；
@@ -299,11 +338,15 @@ Secret 只可存在于企业托管 bridge、服务端环境变量或密钥服务
 
 - 综合 Skill 只定义本地评审合同和飞书目标合同；服务端路由、状态机和权限必须单独实现。
 - 本文件和三源 PRD 在获批前都属于 `proposals/`。`current/`、MVP PRD、rollout、ADR-0004 里的当前 `OA优惠券填报` 路线不能因为新增文档而被宣称已迁移。
-- 当 W2/R2 实现完成后，更新 `current/product/`、`current/implementation/`、rollout、readiness checklist 和 `claude-code-skill-contract.md`，并保留 proposal 的决策追溯。
-- 当 W3/R3 后对原生 OA 创建作出长期边界变更时，必须评估并新增/修订 ADR；不得只在 Skill 文本中扩大授权。
+- 当方案 A 的三源 adapter 已实现并通过受限测试后，才更新 `current/product/`、`current/implementation/`、rollout、readiness checklist 与 `claude-code-skill-contract.md`，并保留 proposal 的决策追溯。
+- 当三源路线的实际 native-submit 边界、受限测试范围或正式 Ring 发生变化时，必须评估并新增/修订 ADR；不得只在 Skill 文本中扩大授权。
 
-## 12. 默认关闭的 R2 代码基础（2026-10-09）
+## 12. 默认关闭的控制面与 R2 代码基础（2026-10-09）
 
-仓库已开始实现与既有 OA/Excel 路线隔离的三源领域状态机、精确命令 matcher 与 fail-closed R2 配置基础。该代码仅用于离线/模拟测试：`FEISHU_COUPON_THREE_SOURCE_R2_ENABLED` 默认为 `false`，未实现或未验收持久 ingress、transport receipt、任务存储、冻结 Drive、渲染器与单聊上下文前，Bot 不得创建三源任务或接收来源文件。
+仓库已有默认关闭的 durable ingress、PostgreSQL receipt/outbox、command intake、task/audit/effect transaction、workflow/effect lease、scheduler tick 和三源领域状态机基础。它们已在 unit/SQL contract 与本地 disposable-schema PostgreSQL 范围验证 migration repeatability、delivery dedupe、同 owner 并发、`SKIP LOCKED`、stale lease fencing、fake card success 和 `outcome_unknown` restart no-resend。
 
-此项变更不代表 W0/W1/W2、R1 或 R2 Gate 已通过；不创建 Base/Drive 资源、不修改飞书应用权限、不开放 `/OA优惠券提报` 试点，也不触达审批附件或原生 OA 创建。
+这些代码只构成 R0 foundation；ADR-0008 允许用当前 `lark-cli` bridge 做一次 R0.5 手工 transport smoke，但它没有 durable transport/ACK 证明。outbound timeout/lease renewal、effect task-owner/hash binding、unknown/DLQ 运营闭环、观测、retention/RBAC、对象存储与真实 Dev Bot 都未完成。因此它们不构成 R1-dev/R2/R3 已开放的证据，也不能据此打开 `FEISHU_COUPON_THREE_SOURCE_R2_ENABLED` 或扩大文件、Base/Drive、审批附件和原生 OA 权限。
+
+方案 A 不以启用上述控制面开关或完成另一套 durable 平台为实现手段；它只把三源 canonical revision 交接到已经存在的 OA 测试稿/显式发送路径。该路径的真实 OA 写入仍必须由既有服务端 Gate 和有权限 Owner 的单独测试授权控制。
+
+本节不代表 A1–A4、R1-dev、R2 或 R3 Gate 已通过。任何将三源路线作为正式 R1-dev/R2/R3 能力的真实飞书测试，仍需按[需求台账](coupon-oa-feishu-dev-requirements-tracker-v1.md)完成相应 FDEV 🥇；任何受限测试都不得据此宣称已满足正式 ring。

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **修订状态（2026-10-09，v3）：** 两轮独立 Review 均发现初版设计不能证明隔离性。本版将 hermetic runner、ignored-input rejection、manifest schema 和 evidence-volume safety 变为实现前的具体合同。本文件仍是 FDEV-001 第 2 步“出方案”；未获用户/Release Owner 审阅前，不得写实现代码、创建 tag、配置外部环境、运行 Docker/数据库验证、部署或调用外部服务。
+> **修订状态（2026-10-10，P1 延后）：** 本计划只服务于未来的耐久化/正式运行路线。需求方已将单用户严选 Bot → OA 测试稿 POC 收敛到 [P0 最快 Bot POC 交付计划](../../oa-ticket-reimbursement-materials/proposals/three-source/coupon-three-source-fast-poc-delivery-plan-v1.md)，P0 不等待也不执行本计划。若未来启动 P1，本文件仍须先获用户/Release Owner 审阅；在此之前不得写实现代码、创建 tag、配置外部环境、运行 Docker/数据库验证、部署或调用外部服务。
 
 **Goal:** 为默认关闭的 Feishu R1-dev command-intake foundation 建立一个可复核、可重复、默认拒绝且不会产生飞书/OA副作用的 release baseline。交付物是受保护 Git ref 的来源身份、隔离验证工具/测试、测试方案和证据模板；不是 Dev Bot、bridge、scheduler、feature flag 或上线能力。
 

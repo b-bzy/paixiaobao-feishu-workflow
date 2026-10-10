@@ -4,8 +4,10 @@ vi.mock("./approval-client", () => ({
   createCouponApprovalInstance: vi.fn(),
   getCouponApprovalDefinition: vi.fn(),
   getCouponApprovalInstance: vi.fn(),
+  getCouponOaApplicantProfile: vi.fn(),
 }));
 vi.mock("./config", () => ({
+  assertCouponOaNativeSubmitAllowed: vi.fn(),
   getCouponOaApprovalCode: vi.fn(() => "approval-code"),
 }));
 vi.mock("./draft-store", () => ({ updateCouponOaDraft: vi.fn() }));
@@ -14,12 +16,16 @@ import {
   createCouponApprovalInstance,
   getCouponApprovalDefinition,
   getCouponApprovalInstance,
+  getCouponOaApplicantProfile,
 } from "./approval-client";
 import {
   bindCouponApprovalSchema,
   type CouponApprovalDefinition,
 } from "./approval-schema";
-import { getCouponOaApprovalCode } from "./config";
+import {
+  assertCouponOaNativeSubmitAllowed,
+  getCouponOaApprovalCode,
+} from "./config";
 import { updateCouponOaDraft } from "./draft-store";
 import {
   confirmCouponOaDraft,
@@ -120,7 +126,19 @@ function draft(status: "Draft" | "Confirmed" = "Draft") {
       status === "Confirmed"
         ? bindCouponApprovalSchema(definition).definitionHash
         : undefined,
-    values,
+    values:
+      status === "Confirmed"
+        ? {
+            ...values,
+            identitySnapshot: {
+              openId: "ou_submitter",
+              userId: "user_submitter",
+              displayName: "测试提报人",
+              departmentOpenId: "od_primary",
+              resolvedAt: "2030-01-01T00:00:00.000Z",
+            },
+          }
+        : values,
     attachments: [],
     validationIssues: [],
   };
@@ -129,8 +147,18 @@ function draft(status: "Draft" | "Confirmed" = "Draft") {
 describe("coupon OA submit service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(assertCouponOaNativeSubmitAllowed).mockImplementation(
+      () => undefined,
+    );
     vi.mocked(getCouponOaApprovalCode).mockReturnValue("approval-code");
     vi.mocked(getCouponApprovalDefinition).mockResolvedValue(definition);
+    vi.mocked(getCouponOaApplicantProfile).mockResolvedValue({
+      openId: "ou_submitter",
+      userId: "user_submitter",
+      displayName: "测试提报人",
+      departmentOpenIds: ["od_primary"],
+      primaryDepartmentOpenId: "od_primary",
+    });
     vi.mocked(updateCouponOaDraft).mockImplementation(
       async (value, updates) => ({
         ...value,
@@ -143,7 +171,28 @@ describe("coupon OA submit service", () => {
     await expect(confirmCouponOaDraft(draft())).resolves.toMatchObject({
       status: "Confirmed",
       definitionHash: bindCouponApprovalSchema(definition).definitionHash,
+      values: {
+        identitySnapshot: {
+          openId: "ou_submitter",
+          userId: "user_submitter",
+          departmentOpenId: "od_primary",
+        },
+      },
     });
+  });
+
+  it("blocks confirmation when the confirmer has no unambiguous department", async () => {
+    vi.mocked(getCouponOaApplicantProfile).mockResolvedValue({
+      openId: "ou_submitter",
+      userId: "user_submitter",
+      displayName: "测试提报人",
+      departmentOpenIds: ["od_one", "od_two"],
+    });
+
+    await expect(confirmCouponOaDraft(draft())).rejects.toThrow(
+      "无法唯一确定申请部门",
+    );
+    expect(updateCouponOaDraft).not.toHaveBeenCalled();
   });
 
   it("fails closed when the native definition changed after confirmation", async () => {
@@ -157,12 +206,35 @@ describe("coupon OA submit service", () => {
     expect(createCouponApprovalInstance).not.toHaveBeenCalled();
   });
 
+  it("checks the native submit gate before reading or creating an approval", async () => {
+    vi.mocked(assertCouponOaNativeSubmitAllowed).mockImplementation(() => {
+      throw new Error("Coupon OA native submit kill switch is closed");
+    });
+
+    await expect(
+      submitConfirmedCouponOaDraft(draft("Confirmed")),
+    ).rejects.toThrow("kill switch is closed");
+    expect(getCouponApprovalDefinition).not.toHaveBeenCalled();
+    expect(createCouponApprovalInstance).not.toHaveBeenCalled();
+  });
+
   it("creates without route overrides and marks matching result submitted", async () => {
     vi.mocked(createCouponApprovalInstance).mockResolvedValue({
       instanceCode: "instance-code",
       instanceLink: "https://example.test/instance",
     });
     const encoded = [
+      {
+        id: "department",
+        type: "department",
+        value: [{ open_id: "od_primary" }],
+      },
+      {
+        id: "applicant",
+        type: "contact",
+        value: ["user_submitter"],
+        open_ids: ["ou_submitter"],
+      },
       { id: "applicationType", type: "radioV2", value: "option:优惠券申请" },
       { id: "businessMode", type: "radioV2", value: "option:寄卖" },
       { id: "activityName", type: "input", value: "测试活动" },
@@ -227,6 +299,28 @@ describe("coupon OA submit service", () => {
         status: "Submitting",
         approvalInstanceCode: "instance-code",
       }),
+    );
+  });
+
+  it("marks an indeterminate create failure as submission unknown", async () => {
+    vi.mocked(createCouponApprovalInstance).mockRejectedValue(
+      new Error("approval create timed out"),
+    );
+
+    await expect(
+      submitConfirmedCouponOaDraft(draft("Confirmed")),
+    ).rejects.toMatchObject({
+      message: "approval create timed out",
+      draft: {
+        status: "SubmissionUnknown",
+        failureReason:
+          "Coupon OA create outcome requires reconciliation: approval create timed out",
+      },
+    });
+    expect(getCouponApprovalInstance).not.toHaveBeenCalled();
+    expect(updateCouponOaDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: "SubmissionUnknown" }),
     );
   });
 });

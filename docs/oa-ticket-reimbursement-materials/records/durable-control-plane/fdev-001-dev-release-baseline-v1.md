@@ -1,8 +1,8 @@
 # FDEV-001 Dev Release Baseline 候选清单 v1
 
-> **记录类型**：候选 manifest / evidence template
+> **记录类型**：P1 durable release baseline 候选 manifest / evidence template
 >
-> **状态**：**默认 No-go / 未验收**
+> **状态**：**P1 默认 No-go / 未验收**；不是 P0 最快 Bot POC 的阻断项
 >
 > **日期**：2026-10-09
 >

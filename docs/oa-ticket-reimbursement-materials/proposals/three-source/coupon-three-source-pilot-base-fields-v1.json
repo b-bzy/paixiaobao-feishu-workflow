@@ -1,0 +1,9 @@
+[
+  {"name":"Pilot ID","type":"text"},
+  {"name":"Owner Open ID","type":"text"},
+  {"name":"Status","type":"select","multiple":false,"options":[{"name":"Collecting"},{"name":"AwaitingSourceConfirmation"},{"name":"GeneratingArtifacts"},{"name":"AwaitingFinalConfirmation"},{"name":"DraftOnlyConfirmed"},{"name":"Canceled"}]},
+  {"name":"Revision","type":"number"},
+  {"name":"Schema Version","type":"text"},
+  {"name":"Task ID","type":"text"},
+  {"name":"State JSON","type":"text"}
+]

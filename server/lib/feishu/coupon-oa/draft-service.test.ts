@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateCouponApplicationDraft } from "./draft-service";
+import {
+  parseCouponApplicationDraftForm,
+  validateCouponApplicationDraft,
+} from "./draft-service";
 
 const strictDraft = {
   applicationType: "优惠券申请" as const,
@@ -12,6 +15,42 @@ const strictDraft = {
   activityStartAt: "2030-01-01",
   activityEndAt: "2030-01-02",
 };
+
+describe("parseCouponApplicationDraftForm", () => {
+  it("preserves explicitly confirmed OA point and platform percentages", () => {
+    expect(
+      parseCouponApplicationDraftForm({
+        businessMode: "寄卖",
+        activityName: "活动",
+        activityBackground: "背景",
+        activityPointPercent: "12.5",
+        platformBearingPercent: "50%",
+        overDeduction: "否",
+        estimatedGmvYuan: "10,000",
+        estimatedCostYuan: "500",
+        channels: "京东渠道；严选APP及小程序",
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-02",
+      }),
+    ).toMatchObject({
+      activityPointPercent: 12.5,
+      platformBearingPercent: 50,
+      estimatedGmvYuan: 10_000,
+      estimatedCostYuan: 500,
+    });
+  });
+
+  it("rejects an invalid explicitly supplied platform percentage", () => {
+    expect(() =>
+      parseCouponApplicationDraftForm({
+        businessMode: "寄卖",
+        overDeduction: "否",
+        channels: "京东渠道",
+        platformBearingPercent: "101",
+      }),
+    ).toThrow("平台承担比例必须为 0 到 100 之间的数值");
+  });
+});
 
 describe("validateCouponApplicationDraft", () => {
   it("accepts a complete strict-mode Base draft without approval attachments", () => {

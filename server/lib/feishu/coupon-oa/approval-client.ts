@@ -33,6 +33,22 @@ export interface ApprovalInstanceDetail {
   [key: string]: unknown;
 }
 
+interface RawFeishuUser {
+  user_id?: string;
+  open_id?: string;
+  name?: string;
+  department_ids?: string[];
+  primary_department_id?: string;
+}
+
+export interface CouponOaApplicantProfile {
+  openId: string;
+  userId: string;
+  displayName: string;
+  departmentOpenIds: string[];
+  primaryDepartmentOpenId?: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getTenantAccessToken();
   const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
@@ -47,6 +63,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(`Feishu approval request failed: ${result.msg}`);
   }
   return result.data;
+}
+
+export async function getCouponOaApplicantProfile(
+  openId: string,
+): Promise<CouponOaApplicantProfile> {
+  if (!openId.trim())
+    throw new Error("Coupon OA applicant open ID is required");
+  const data = await request<{ user?: RawFeishuUser }>(
+    `/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id&department_id_type=open_department_id`,
+  );
+  const user = data.user;
+  if (!user?.user_id || !user.open_id || !user.name) {
+    throw new Error(
+      "Feishu user profile did not include a stable applicant identity",
+    );
+  }
+  if (user.open_id !== openId) {
+    throw new Error(
+      "Feishu user profile did not match the coupon OA confirmer",
+    );
+  }
+  const departmentOpenIds = [...new Set(user.department_ids ?? [])].filter(
+    Boolean,
+  );
+  return {
+    openId: user.open_id,
+    userId: user.user_id,
+    displayName: user.name,
+    departmentOpenIds,
+    ...(user.primary_department_id
+      ? { primaryDepartmentOpenId: user.primary_department_id }
+      : {}),
+  };
 }
 
 export async function getCouponApprovalDefinition(

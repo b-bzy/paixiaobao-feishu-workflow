@@ -1,0 +1,266 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import ExcelJS from "exceljs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type CouponThreeSourcePilotDependencies,
+  CouponThreeSourcePilotService,
+} from "./service";
+import type { CouponThreeSourcePilotDraft } from "./store";
+
+async function workbookBytes(workbook: ExcelJS.Workbook): Promise<Uint8Array> {
+  return new Uint8Array(await workbook.xlsx.writeBuffer());
+}
+
+async function strictCouponBytes(
+  input: { businessMode?: string } = {},
+): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("配券材料");
+  sheet.getRow(1).values = [
+    "活动名称",
+    "活动背景",
+    "业务模式",
+    "申请人",
+    "活动开始日期",
+    "活动结束日期",
+    "用券渠道",
+    "满减门槛",
+    "优惠面额",
+    "总申请数量",
+    "单次发放到账张数",
+    "每日领取次数",
+    "可领时间",
+    "可用时间",
+    "预计领用率",
+    "预计使用率",
+    "拍拍平台承担比例",
+    "预计引入GMV",
+    "用户领券规则",
+    "优惠券赠送",
+    "推广途径",
+    "公开推广渠道",
+    "是否超扣点",
+    "超扣点原因",
+  ];
+  sheet.getRow(2).values = [
+    "严选测试活动",
+    "三源 Bot 服务测试",
+    input.businessMode ?? "严选",
+    "测试提报人",
+    "2030-01-01",
+    "2030-01-03",
+    "京东商城、拍拍二手",
+    "999",
+    "60",
+    "1000",
+    "1",
+    "1",
+    "2030-01-01 00:00:00 至 2030-01-03 23:59:59",
+    "2030-01-01 00:00:00 至 2030-01-10 23:59:59",
+    "80%",
+    "30%",
+    "50%",
+    "120000",
+    "活动期间仅可领一次",
+    "不允许",
+    "公开自动推广",
+    "领券中心",
+    "否",
+    "",
+  ];
+  return workbookBytes(workbook);
+}
+
+async function whitelistBytes(): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("白名单");
+  sheet.getRow(1).values = ["商品名称", "SKU", "券档"];
+  sheet.getRow(2).values = ["商品 A", "00123", "满999减60"];
+  sheet.getRow(2).getCell(2).numFmt = "@";
+  return workbookBytes(workbook);
+}
+
+async function loadTemplates() {
+  const directory = join(
+    process.cwd(),
+    "docs/oa-ticket-reimbursement-materials/reference/templates",
+  );
+  const [
+    regularFullReductionTemplateBytes,
+    whitelistTemplateBytes,
+    blacklistTemplateBytes,
+  ] = await Promise.all([
+    readFile(join(directory, "配券信息表-常规满减券.xlsx")),
+    readFile(join(directory, "商品明细白名单-多券档SKU-v1.xlsx")),
+    readFile(join(directory, "商品明细黑名单-多券档SKU-v1.xlsx")),
+  ]);
+  return {
+    regularFullReductionTemplateBytes,
+    whitelistTemplateBytes,
+    blacklistTemplateBytes,
+  };
+}
+
+describe("CouponThreeSourcePilotService", () => {
+  it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
+    const coupon = await strictCouponBytes();
+    const whitelist = await whitelistBytes();
+    const sources = new Map([
+      ["om-coupon:file-coupon", coupon],
+      ["om-whitelist:file-whitelist", whitelist],
+    ]);
+    let draft: CouponThreeSourcePilotDraft | undefined;
+    const handoff = vi.fn(
+      async () => ({ recordId: "rec-oa-test-draft" }) as never,
+    );
+    const uploadArtifact = vi.fn(async (input: { name: string }) => ({
+      fileToken: `drive-${input.name}`,
+    }));
+    const dependencies: CouponThreeSourcePilotDependencies = {
+      downloadSource: async (source) => {
+        const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
+        if (!bytes) throw new Error("unexpected source download");
+        return bytes;
+      },
+      uploadArtifact,
+      folderToken: () => "fld-three-source",
+      loadTemplates,
+      createDraft: async (input) => {
+        draft = {
+          recordId: "rec-three-source",
+          pilotId: "CTS-pilot",
+          ownerOpenId: input.ownerOpenId,
+          task: input.task,
+          schemaVersion: "coupon-three-source-pilot-v1",
+          recognitions: {},
+          selections: {},
+          artifacts: [],
+          processedMessageIds: [],
+          validationIssues: [],
+        };
+        return draft;
+      },
+      getDraft: async () => {
+        if (!draft) throw new Error("missing draft");
+        return draft;
+      },
+      listActive: async () =>
+        draft && !["DraftOnlyConfirmed", "Canceled"].includes(draft.task.status)
+          ? [draft]
+          : [],
+      updateDraft: async (current, updates, expectedRevision) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        draft = { ...current, ...updates };
+        return draft;
+      },
+      handoff,
+    };
+    const service = new CouponThreeSourcePilotService(dependencies);
+
+    let current = await service.startOrResume("ou_owner");
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-coupon",
+      fileKey: "file-coupon",
+      fileName: "严选配券表.xlsx",
+      bytes: coupon,
+    });
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "商品白名单.xlsx",
+      bytes: whitelist,
+    });
+    current = await service.confirmNoBlacklist({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "no-blacklist",
+    });
+    current = await service.updateSelections({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      selections: { activityPointPercent: 6 },
+      operationId: "set-point",
+    });
+    current = await service.confirmSourcesAndGenerate({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "generate",
+    });
+
+    expect(current.task).toMatchObject({ status: "AwaitingFinalConfirmation" });
+    expect(current.artifacts.map((artifact) => artifact.role)).toEqual([
+      "couponTable",
+      "productWhitelist",
+    ]);
+    expect(
+      current.oaPrefill?.attachments.map((attachment) => attachment.role),
+    ).toEqual(["couponTable", "productWhitelist"]);
+    expect(uploadArtifact).toHaveBeenCalledTimes(2);
+
+    current = await service.confirmFinalPreview({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "oa-draft",
+    });
+    expect(current.task.status).toBe("DraftOnlyConfirmed");
+    expect(current.oaDraftRecordId).toBe("rec-oa-test-draft");
+    expect(handoff).toHaveBeenCalledOnce();
+
+    const nonStrictCoupon = await strictCouponBytes({ businessMode: "pop" });
+    sources.set("om-pop:file-pop", nonStrictCoupon);
+    current = await service.startOrResume("ou_owner");
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-pop",
+      fileKey: "file-pop",
+      fileName: "pop配券表.xlsx",
+      bytes: nonStrictCoupon,
+    });
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "商品白名单.xlsx",
+      bytes: whitelist,
+    });
+    current = await service.confirmNoBlacklist({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "no-blacklist-pop",
+    });
+    current = await service.updateSelections({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      selections: { activityPointPercent: 6 },
+      operationId: "set-point-pop",
+    });
+    await expect(
+      service.confirmSourcesAndGenerate({
+        draft: current,
+        ownerOpenId: "ou_owner",
+        expectedRevision: current.task.revision,
+        operationId: "generate-pop",
+      }),
+    ).rejects.toThrow("仅支持严选");
+    expect(uploadArtifact).toHaveBeenCalledTimes(2);
+  });
+});

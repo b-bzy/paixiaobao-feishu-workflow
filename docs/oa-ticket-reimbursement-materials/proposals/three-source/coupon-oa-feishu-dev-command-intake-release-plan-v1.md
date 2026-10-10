@@ -1,6 +1,6 @@
 # 飞书开发版：R1-dev Command-to-Card 发布计划 v1
 
-> **状态**：待业务、流程、飞书应用、平台/安全与运行 Owner 评审。本文只定义独立 Dev App/Bot 的 command-only canary，不代表正式 R2、材料流或 OA 已开放。
+> **状态**：P1 耐久化/正式运行的发布计划，待业务、流程、飞书应用、平台/安全与运行 Owner 评审。本文只定义独立 Dev App/Bot 的 command-only canary，不代表正式 R2、材料流或 OA 已开放，也不阻断 P0 最快 Bot POC。
 >
 > **日期**：2026-10-09
 >

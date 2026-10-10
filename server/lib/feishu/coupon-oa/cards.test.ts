@@ -17,6 +17,16 @@ const values: CouponOaDraft["values"] = {
   businessMode: "寄卖",
   activityName: "国庆优惠券活动",
   activityBackground: "用于验证完整字段展示，避免提交前产生误会。",
+  activityPointPercent: 12.5,
+  platformBearingPercent: 50,
+  identitySnapshot: {
+    openId: "ou_test",
+    userId: "user_test",
+    displayName: "测试提报人",
+    departmentOpenId: "od_test",
+    departmentName: "测试部门",
+    resolvedAt: "2026-10-01T00:00:00.000Z",
+  },
   overDeduction: "是",
   overDeductionReason: "活动专项预算已审批",
   estimatedGmvYuan: 10000,
@@ -69,6 +79,10 @@ describe("coupon OA confirmation cards", () => {
 
     for (const expected of [
       "优惠券申请",
+      "测试提报人",
+      "测试部门",
+      "12.5%",
+      "50%",
       "寄卖",
       "国庆优惠券活动",
       "用于验证完整字段展示，避免提交前产生误会。",

@@ -37,6 +37,7 @@ const pilot = {
     activityName: "国庆满减",
     activityBackground: "测试背景",
     businessMode: "寄卖" as const,
+    activityPointPercent: 15,
     applicantName: "不作为 OA 申请人",
     activityStartAt: "2030-10-01",
     activityEndAt: "2030-10-07",
@@ -137,12 +138,35 @@ describe("coupon Excel pilot OA handoff", () => {
       applicationType: "优惠券申请",
       businessMode: "寄卖",
       estimatedCostYuan: 250,
-      activityPointPercent: 20,
+      activityPointPercent: 15,
       platformBearingPercent: 25,
       channels: ["京东渠道", "严选APP及小程序"],
       couponTableFileCodes: ["coupon-file-code"],
       productWhitelistFileCodes: ["whitelist-file-code"],
     });
+  });
+
+  it("requires a business-confirmed OA point instead of deriving it from coupon discount", () => {
+    const { activityPointPercent: _point, ...withoutPoint } = pilot.input;
+
+    expect(() =>
+      mapCouponPilotToOaValues(withoutPoint, [
+        {
+          role: "couponTable",
+          fileName: "配券信息表.xlsx",
+          fileCode: "coupon-file-code",
+          sha256: "coupon-hash",
+          bytes: 1,
+        },
+        {
+          role: "productWhitelist",
+          fileName: "商品明细白名单.xlsx",
+          fileCode: "whitelist-file-code",
+          sha256: "whitelist-hash",
+          bytes: 1,
+        },
+      ]),
+    ).toThrow("不能按优惠比例自动推断");
   });
 
   it("promotes exactly the two verified generated files without submitting OA", async () => {

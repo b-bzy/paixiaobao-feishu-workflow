@@ -17,15 +17,16 @@
 
 | Skill | Claude Code 中的作用 | 对应文档 | 现状与硬边界 |
 | --- | --- | --- | --- |
-| [`OA优惠券提报`](../../.claude/skills/OA优惠券提报/SKILL.md) | 综合的本地评审/底稿合同：以配券表为字段第一来源，收集白名单、可选黑名单和测算图片，完成映射、无黑名单/重叠决策、标准产物与两次确认的离线准备。 | [三源 PRD v1.0](proposals/three-source/coupon-oa-three-source-workflow-prd-v1.md) · [飞书综合 Skill 升级方案](proposals/three-source/coupon-oa-feishu-unified-skill-upgrade-plan-v1.md)。 | Skill 只在 Claude Code 执行，不调用 Bot、Base、Drive 或 OA API；三源 Bot 路线及 native-submit 仍待服务端实现和 rollout Gate。 |
+| [`OA优惠券提报`](../../.claude/skills/OA优惠券提报/SKILL.md) | 综合的本地评审/底稿合同：以配券表为字段第一来源，收集白名单、可选黑名单和测算图片，完成映射、无黑名单/重叠决策、标准产物与两次确认的离线准备。 | [三源 PRD v1.0](proposals/three-source/coupon-oa-three-source-workflow-prd-v1.md) · [P0 最快 Bot POC](proposals/three-source/coupon-three-source-fast-poc-delivery-plan-v1.md) · [飞书综合 Skill 升级方案](proposals/three-source/coupon-oa-feishu-unified-skill-upgrade-plan-v1.md)。 | 服务端已有默认关闭的严选三源适配器，P0 先在 [direct HTTP draft-only POC](current/operations/coupon-three-source-direct-http-poc-runbook-v1.md) 中验证材料到 OA 测试稿的受限子集；Skill 不会自动执行，且截图、补充/覆盖、非 SKU、耐久运行时与 native-submit 均留在 P1。 |
 
 ## 命名与执行入口
 
 `/OA优惠券提报` 在两个上下文中的目标含义必须写清执行平面：
 
 - **Claude Code**：以斜杠调用 `OA优惠券提报` Skill，产生本地零副作用评审/底稿；
-- **飞书 Bot（当前）**：当前服务端仍以 [MVP v1.3](current/product/coupon-oa-mvp-prd-v1.3.md) 定义的 `OA优惠券填报` 系统草稿路线为准，尚未因本 Skill 的出现自动注册 `/OA优惠券提报`；
-- **飞书 Bot（目标）**：评审、服务端实现与 R2 Gate 通过后，Bot 才能将 `/OA优惠券提报` 路由到版本化三源系统任务；R3/R4 前不得创建原生 OA。
+- **飞书 Bot（当前）**：服务端已实现默认关闭的 `/OA优惠券提报` 严选三源适配器；P0 只按 [最快 Bot POC 交付计划](proposals/three-source/coupon-three-source-fast-poc-delivery-plan-v1.md)和 [direct HTTP draft-only POC 运行手册](current/operations/coupon-three-source-direct-http-poc-runbook-v1.md) 验证其到系统 OA 测试稿的子集。它不是 Skill 的自动注册结果，也不是已上线、R2/R3 或 native-submit 授权；
+- **飞书 transport smoke（R0.5）**：按 [ADR-0008](../adr/0008-limit-local-lark-cli-to-vercel-integration-smoke.md) 可用本机 `lark-cli` / bridge 验证已到达 Vercel 的 signed ingress 与 receipt/outbox；所有业务 Gate、worker tick 和 Bot 用户回复保持关闭，不能推断完整 Skill 流程、R1-dev/R2 或 OA 权限；
+- **飞书 Bot（目标）**：完成业务合同缺口和 R2 Gate 后，Bot 才能将完整 `/OA优惠券提报` 合同路由到耐久、版本化的三源系统任务；第二次确认交接既有 OA 测试稿，R3/R4 的既有明确“发送”动作才可在 Gate 后创建原生 OA。
 
 文档中提到口令时，应标注“Claude Code Skill”“当前飞书 Bot”或“目标飞书 Bot”；不可用同一句话暗示执行平面共享状态、文件引用或权限。
 

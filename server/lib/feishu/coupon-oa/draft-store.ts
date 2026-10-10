@@ -10,6 +10,7 @@ export const couponOaDraftStatuses = [
   "Submitting",
   "Submitted",
   "CreatedNeedsReview",
+  "SubmissionUnknown",
   "Failed",
   "Canceled",
 ] as const;
@@ -216,7 +217,14 @@ export async function listActiveCouponOaDrafts(
     .filter(
       (draft) =>
         draft.ownerOpenId === ownerOpenId &&
-        ["Draft", "Validated", "Failed"].includes(draft.status),
+        [
+          "Draft",
+          "Validated",
+          "Confirmed",
+          "Submitting",
+          "SubmissionUnknown",
+          "Failed",
+        ].includes(draft.status),
     )
     .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 }
@@ -228,6 +236,11 @@ export async function saveCouponOaDraft(input: {
 }): Promise<CouponOaDraft> {
   const existing = (await listActiveCouponOaDrafts(input.ownerOpenId))[0];
   if (!existing) return createCouponOaDraft(input);
+  if (!["Draft", "Validated", "Failed"].includes(existing.status)) {
+    throw new Error(
+      "An existing coupon OA draft is awaiting confirmation or reconciliation",
+    );
+  }
 
   return updateCouponOaDraft(existing, {
     status: "Draft",
@@ -252,9 +265,16 @@ export async function updateCouponOaDraft(
     >
   >,
 ): Promise<CouponOaDraft> {
-  if (["Submitted", "CreatedNeedsReview", "Canceled"].includes(draft.status)) {
+  if (
+    [
+      "Submitted",
+      "CreatedNeedsReview",
+      "SubmissionUnknown",
+      "Canceled",
+    ].includes(draft.status)
+  ) {
     throw new Error(
-      "Submitted, review-required, or canceled coupon OA drafts cannot be changed",
+      "Submitted, review-required, submission-unknown, or canceled coupon OA drafts cannot be changed",
     );
   }
   const tableId = getCouponOaDraftTableId();

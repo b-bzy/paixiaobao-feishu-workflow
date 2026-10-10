@@ -1,10 +1,10 @@
 # 优惠券三源提报：耐久控制面风险整改开发清单 v1
 
-> **状态**：已冻结为后续 FDEV 的需求清单；不代表 R1-dev、正式 R2 或 R3 已开放。
+> **状态**：已冻结为 **P1** 耐久控制面与正式运行的需求清单；不代表 R1-dev、正式 R2 或 R3 已开放，也不是 P0 最快 Bot POC 的前置。
 >
 > **日期**：2026-10-09
 >
-> **范围**：解决 command-only durable intake 在进入受控 Feishu 试点前的 transport、外部副作用、可观测性与数据治理风险。
+> **范围**：P1 中解决 command-only durable intake 在进入受控 Feishu 试点前的 transport、外部副作用、可观测性与数据治理风险。P0 最快 Bot POC 使用独立的 direct HTTP、单用户、native-off 路线；不得把本清单的 FDEV 前置误写为 P0 阻塞，也不得把 P0 成功当作本清单任何风险已解决。
 >
 > **权威生命周期**：[飞书开发版需求与进度台账](coupon-oa-feishu-dev-requirements-tracker-v1.md)。本清单定义风险和验收，不得覆盖台账中的步骤、🥇 或发布结论。
 >
@@ -54,7 +54,7 @@ Feishu long connection 的 ACK/转发可靠性
 
 ## 4. 优先级风险需求
 
-### P0：入站可靠性与外部副作用 fencing
+### P1-A：入站可靠性与外部副作用 fencing
 
 | ID | 需求 / 开发项 | 主要改动 | 验收标准 | 必须新增测试 | 状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -62,7 +62,7 @@ Feishu long connection 的 ACK/转发可靠性
 | CP-RISK-002 | 为 card effect 引入 HTTP timeout、lease renewal 与运行上限 | `sendFeishuCard` 使用 `AbortSignal`；token/card 请求配置小于 lease 的硬超时；effect handler 执行期间 renew lease，或超时后转 `outcome_unknown` | 任意外部请求不得超过 lease；旧 lease 不能写成功/失败；超时不允许第二 worker 盲发 | 慢响应、fetch hang、lease expiry、两 worker、Feishu UUID 幂等证明 | FDEV-003A 未开始 / R1-dev No-go |
 | CP-RISK-003 | 强化 effect intent 的 payload 与 owner 绑定 | claim 时验证 `request_sha256`；从 `coupon_tasks.owner_open_id` 获取唯一 receiver；要求 task/revision/payload/semantic key 一致 | 被篡改 hash、owner 或 task ID 的 effect 进入 DLQ，绝不调用 gateway | hash mismatch、owner mismatch、task closed/revision changed、DB corruption fixture | FDEV-003B 未开始 / R1-dev No-go |
 
-### P1：可恢复性、运维与数据治理
+### P1-B：可恢复性、运维与数据治理
 
 | ID | 需求 / 开发项 | 主要改动 | 验收标准 | 必须新增测试 | 状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -70,7 +70,7 @@ Feishu long connection 的 ACK/转发可靠性
 | CP-RISK-005 | worker/bridge 健康、指标和运行手册 | 私有 `/livez`、`/readyz`、backlog age、retry、DLQ、unknown、lease reclaim、tick skipped 指标；阈值告警和 owner runbook | DB 不可写、queue 超龄、DLQ/unknown 增长、scheduler 失效均能阻止 ready 并触发告警 | DB down、lease lost、backlog threshold、tick unauthorized/timeout、graceful drain | FDEV-004B 未开始 |
 | CP-RISK-006 | 数据保留、脱敏和访问控制 | 定义 receipt/payload/audit/effect retention；按策略清理；日志只记录 correlation/hash/枚举；托管 PostgreSQL encryption/backup/RBAC checklist | payload、完整 open ID、token、file key 不进入日志；保留期作业可重跑且不破坏审计关联 | log redaction、retention job、backup/restore、least-privilege migration role | FDEV-004C 未开始 |
 
-### P2：正式 R2 文件链路前置条件
+### P1-C：正式 R2 文件链路前置条件
 
 | ID | 需求 / 开发项 | 主要改动 | 验收标准 | 必须新增测试 | 状态 |
 | --- | --- | --- | --- | --- | --- |

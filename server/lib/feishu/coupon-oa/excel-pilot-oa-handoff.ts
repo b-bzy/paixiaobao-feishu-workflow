@@ -1,6 +1,3 @@
-import { createHash } from "node:crypto";
-import { downloadFeishuDriveFile } from "../drive-client";
-import { uploadCouponApprovalFile } from "./approval-client";
 import {
   type CouponOaDraftValues,
   couponApprovalSchemaVersion,
@@ -18,13 +15,7 @@ import {
   type CouponExcelPilotDraft,
   updateCouponExcelPilotDraft,
 } from "./excel-pilot-store";
-
-const xlsxContentType =
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-function sha256(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
+import { uploadVerifiedCouponOaArtifacts } from "./frozen-artifact-handoff";
 
 function artifactByRole(
   artifacts: CouponExcelPilotArtifact[],
@@ -54,6 +45,9 @@ export function mapCouponPilotToOaValues(
     throw new Error("OA 草稿必须包含一份配券表和一份白名单");
   }
   const computed = computeCouponPilotValues(input);
+  if (input.activityPointPercent === undefined) {
+    throw new Error("请先明确确认 OA 活动点位，不能按优惠比例自动推断");
+  }
   const channels = input.channels.map((channel) =>
     channel === "JD" ? "京东渠道" : "严选APP及小程序",
   );
@@ -63,7 +57,7 @@ export function mapCouponPilotToOaValues(
     businessMode: input.businessMode,
     activityName: input.activityName,
     activityBackground: input.activityBackground,
-    activityPointPercent: computed.discountRatio * 100,
+    activityPointPercent: input.activityPointPercent,
     platformBearingPercent: input.platformBearingRatio * 100,
     overDeduction: input.overDeduction,
     ...(input.overDeduction === "是"
@@ -76,31 +70,6 @@ export function mapCouponPilotToOaValues(
     activityEndAt: input.activityEndAt,
     couponTableFileCodes: [couponTable[0].fileCode],
     productWhitelistFileCodes: [whitelist[0].fileCode],
-  };
-}
-
-async function uploadArtifact(
-  artifact: CouponExcelPilotArtifact,
-): Promise<CouponOaAttachment> {
-  const bytes = await downloadFeishuDriveFile(artifact.fileToken);
-  if (
-    bytes.byteLength !== artifact.bytes ||
-    sha256(bytes) !== artifact.sha256
-  ) {
-    throw new Error(`已确认的 ${artifact.fileName} 已变更，不能自动填写 OA`);
-  }
-  const fileCode = await uploadCouponApprovalFile({
-    name: artifact.fileName,
-    type: "attachment",
-    contentType: xlsxContentType,
-    bytes,
-  });
-  return {
-    role: artifact.role,
-    fileName: artifact.fileName,
-    fileCode,
-    sha256: artifact.sha256,
-    bytes: artifact.bytes,
   };
 }
 
@@ -173,10 +142,9 @@ export async function handoffCouponPilotToOaDraft(
         progress.artifacts,
         "productWhitelist",
       );
-      attachments = await Promise.all([
-        uploadArtifact(couponArtifact),
-        uploadArtifact(whitelistArtifact),
-      ]);
+      attachments = await uploadVerifiedCouponOaArtifacts({
+        artifacts: [couponArtifact, whitelistArtifact],
+      });
       progress = await updateCouponExcelPilotDraft(progress, {
         status: "HandingOffToOa",
         oaHandoff: { approvalAttachments: attachments },

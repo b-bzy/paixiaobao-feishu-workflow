@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  assertCouponOaNativeSubmitAllowed,
+  assertCouponOaUserAllowed,
   couponOaDraftInvocation,
   couponOaInvocation,
   getCouponOaApprovalCode,
@@ -7,38 +9,121 @@ import {
   getCouponOaInitiateUrl,
   getCouponOaMode,
   isCouponOaDraftInvocation,
+  isCouponOaEnabled,
   isCouponOaInvocation,
 } from "./config";
+
+function restoreEnvironment(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 describe("coupon OA configuration", () => {
   const originalMode = process.env.FEISHU_COUPON_OA_MODE;
   const originalUrl = process.env.FEISHU_COUPON_OA_INITIATE_URL;
+  const originalNativeSubmitEnabled =
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED;
+  const originalNativeSubmitAllowedOpenIds =
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS;
+  const originalCouponOaAllowedOpenIds =
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
 
   afterEach(() => {
-    if (originalMode === undefined) {
-      delete process.env.FEISHU_COUPON_OA_MODE;
-    } else {
-      process.env.FEISHU_COUPON_OA_MODE = originalMode;
-    }
-    if (originalUrl === undefined) {
-      delete process.env.FEISHU_COUPON_OA_INITIATE_URL;
-    } else {
-      process.env.FEISHU_COUPON_OA_INITIATE_URL = originalUrl;
-    }
+    restoreEnvironment("FEISHU_COUPON_OA_MODE", originalMode);
+    restoreEnvironment("FEISHU_COUPON_OA_INITIATE_URL", originalUrl);
+    restoreEnvironment(
+      "FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED",
+      originalNativeSubmitEnabled,
+    );
+    restoreEnvironment(
+      "FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS",
+      originalNativeSubmitAllowedOpenIds,
+    );
+    restoreEnvironment(
+      "FEISHU_COUPON_OA_ALLOWED_OPEN_IDS",
+      originalCouponOaAllowedOpenIds,
+    );
   });
 
-  it("defaults to production mode and accepts draft-demo only when explicit", () => {
+  it("defaults to disabled mode and only enables supported explicit modes", () => {
     delete process.env.FEISHU_COUPON_OA_MODE;
-    expect(getCouponOaMode()).toBe("production");
+    expect(getCouponOaMode()).toBe("disabled");
+    expect(isCouponOaEnabled()).toBe(false);
 
     process.env.FEISHU_COUPON_OA_MODE = "draft-demo";
     expect(getCouponOaMode()).toBe("draft-demo");
+
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    expect(getCouponOaMode()).toBe("native-submit");
+
+    process.env.FEISHU_COUPON_OA_MODE = "production";
+    expect(getCouponOaMode()).toBe("native-submit");
   });
 
   it("rejects an unknown coupon OA mode", () => {
     process.env.FEISHU_COUPON_OA_MODE = "local";
     expect(() => getCouponOaMode()).toThrow(
-      "FEISHU_COUPON_OA_MODE must be production or draft-demo",
+      "FEISHU_COUPON_OA_MODE must be disabled, native-submit, draft-demo, or the legacy production value",
+    );
+  });
+
+  it("requires an explicit kill-switch override and allowlist for native submit", () => {
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    delete process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED;
+    delete process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS;
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "kill switch is closed",
+    );
+
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_allowed, ou_other";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "not allowed for this user",
+    );
+
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS =
+      "ou_allowed, ou_other";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "not allowed for this user",
+    );
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_allowed")).not.toThrow();
+  });
+
+  it("denies stateful coupon operations without a general tester allowlist", () => {
+    delete process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
+    expect(() => assertCouponOaUserAllowed("ou_submitter")).toThrow(
+      "Coupon OA is not allowed for this user",
+    );
+
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_allowed";
+    expect(() => assertCouponOaUserAllowed("ou_submitter")).toThrow(
+      "Coupon OA is not allowed for this user",
+    );
+    expect(() => assertCouponOaUserAllowed("ou_allowed")).not.toThrow();
+  });
+
+  it("rejects malformed native submit configuration", () => {
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "yes";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "must be true or false",
+    );
+
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_submitter";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS = "user-id";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "must be a comma-separated list",
+    );
+  });
+
+  it("never allows native submit outside native-submit mode", () => {
+    process.env.FEISHU_COUPON_OA_MODE = "draft-demo";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS =
+      "ou_submitter";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_submitter")).toThrow(
+      "not enabled for this stage",
     );
   });
 

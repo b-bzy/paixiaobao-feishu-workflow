@@ -1,19 +1,19 @@
 import {
+  getFeishuRuntimeStage,
+  legacyPocEnabled,
+} from "../control-plane/runtime-config";
+import {
   createWorkflowInstance,
   decideWorkflowInstance,
   getPublishedExpenseTemplate,
   getTemplateByRecordId,
 } from "./base-store";
 import { sendFeishuCard } from "./client";
-import {
-  downloadFeishuMessageResource as downloadCouponOaMessageResource,
-  getFeishuMessageBody as getCouponOaMessageBody,
-  uploadCouponApprovalFile,
-} from "./coupon-oa/approval-client";
 import { couponApprovalSchemaVersion } from "./coupon-oa/approval-schema";
 import {
   buildCouponOaActiveWorkflowCard,
   buildCouponOaAttachmentRequestCard,
+  buildCouponOaDisabledCard,
   buildCouponOaDraftDemoUnavailableCard,
   buildCouponOaDraftErrorCard,
   buildCouponOaDraftFormCard,
@@ -22,20 +22,21 @@ import {
   buildCouponOaPreviewCard,
   buildCouponOaSubmissionFailureCard,
   buildCouponOaSubmissionResultCard,
+  buildCouponOaSubmissionUnknownCard,
   buildCouponOaSubmitCard,
   buildCouponOaUnavailableCard,
   buildCouponOaWorkflowCanceledCard,
   buildCouponOaWorkflowExpiredCard,
 } from "./coupon-oa/cards";
 import {
+  assertCouponOaUserAllowed,
   getCouponOaInitiateUrl,
   isCouponOaDraftDemo,
   isCouponOaDraftInvocation,
+  isCouponOaEnabled,
   isCouponOaInvocation,
 } from "./coupon-oa/config";
 import {
-  attachCouponOaFile,
-  classifyCouponOaAttachment,
   missingCouponOaAttachments,
   parseCouponApplicationDraftForm,
   validateCouponApplicationDraft,
@@ -87,6 +88,14 @@ import {
   confirmCouponOaDraft,
   submitConfirmedCouponOaDraft,
 } from "./coupon-oa/submit-service";
+import { buildCouponThreeSourceErrorCard } from "./coupon-oa/three-source/cards";
+import {
+  dispatchCouponThreeSourceCallback,
+  dispatchCouponThreeSourceFile,
+  dispatchCouponThreeSourceText,
+} from "./coupon-oa/three-source/dispatcher";
+import { isCouponThreeSourcePilotEnabled } from "./coupon-oa/three-source/pilot-config";
+import { listActiveCouponThreeSourcePilotDrafts } from "./coupon-oa/three-source/store";
 import {
   isCancelableCouponExcelPilot,
   isCancelableCouponOaDraft,
@@ -110,7 +119,13 @@ export interface Envelope {
   header?: { event_id?: string; event_type?: string; token?: string };
   event?: {
     sender?: { sender_id?: { open_id?: string } };
-    message?: { message_id?: string; message_type?: string; content?: string };
+    message?: {
+      message_id?: string;
+      message_type?: string;
+      chat_type?: string;
+      chat_id?: string;
+      content?: string;
+    };
   };
   action?: { name?: string; value?: unknown; form_value?: unknown };
   operator?: { open_id?: string; operator_id?: { open_id?: string } };
@@ -228,6 +243,23 @@ function expiredCouponWorkflowMessage(state: CouponWorkflowState): string {
   return "Coupon Excel pilot expired";
 }
 
+async function ensureCouponOaUserAllowed(input: {
+  openId: string;
+  idempotencyKey?: string;
+}): Promise<boolean> {
+  try {
+    assertCouponOaUserAllowed(input.openId);
+    return true;
+  } catch {
+    await sendFeishuCard(
+      input.openId,
+      buildCouponOaDisabledCard(),
+      input.idempotencyKey,
+    );
+    return false;
+  }
+}
+
 async function expireCouponOaDraftIfNeeded(
   openId: string,
   draft: CouponOaDraft,
@@ -323,74 +355,36 @@ function draftPreviewCard(draft: Awaited<ReturnType<typeof getCouponOaDraft>>) {
   });
 }
 
-async function handleCouponOaAttachment(input: {
-  draft: CouponOaDraft;
-  openId: string;
-  messageId: string;
-  messageType: "image" | "file";
-}): Promise<string> {
-  const message = await getCouponOaMessageBody({ messageId: input.messageId });
-  if (message.messageType !== input.messageType) {
-    throw new Error("Feishu attachment message type changed before processing");
-  }
-  const content = objectValue(message.content);
-  const fileKey = String(
-    input.messageType === "image"
-      ? (content?.image_key ?? "")
-      : (content?.file_key ?? ""),
-  );
-  if (!fileKey) return "Coupon OA attachment did not include a file key";
-  const draft = input.draft;
-
-  const name = String(
-    input.messageType === "image"
-      ? (content?.image_name ?? "满减测算图片.png")
-      : (content?.file_name ?? "未命名附件"),
-  );
-  const bytes = await downloadCouponOaMessageResource({
-    messageId: input.messageId,
-    fileKey,
-    type: input.messageType,
-  });
-  const attachment = classifyCouponOaAttachment({
-    messageType: input.messageType,
-    name,
-    fileCode: await uploadCouponApprovalFile({
-      name,
-      type: input.messageType === "image" ? "image" : "attachment",
-      contentType:
-        input.messageType === "image"
-          ? "image/png"
-          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      bytes,
-    }),
-    bytes,
-  });
-  const next = await updateCouponOaDraft(
-    draft,
-    attachCouponOaFile(draft, attachment),
-  );
-  const missing = missingCouponOaAttachments(next);
-  if (missing.length) {
-    await sendFeishuCard(
-      input.openId,
-      buildCouponOaAttachmentRequestCard({ draftId: next.draftId, missing }),
-    );
-  } else {
-    await sendFeishuCard(input.openId, draftPreviewCard(next));
-  }
-  return `Coupon OA attachment saved to ${next.draftId}`;
+export interface FeishuPocEventOptions {
+  /** Only the HMAC-verified private bridge ingress may set this value. */
+  trustedIngress?: "bridge";
 }
 
 export async function handleFeishuPocEvent(
   payload: Envelope,
+  options: FeishuPocEventOptions = {},
 ): Promise<FeishuPocResult> {
-  const expected = process.env.FEISHU_VERIFICATION_TOKEN;
-  if (expected && (payload.token ?? payload.header?.token) !== expected)
-    throw new Error("Invalid Feishu verification token");
+  if (options.trustedIngress !== "bridge") {
+    const expected = process.env.FEISHU_VERIFICATION_TOKEN?.trim();
+    if (!expected) {
+      throw new Error("FEISHU_VERIFICATION_TOKEN is not configured");
+    }
+    if ((payload.token ?? payload.header?.token) !== expected) {
+      throw new Error("Invalid Feishu verification token");
+    }
+  }
   if (payload.challenge)
     return { kind: "challenge", challenge: payload.challenge };
 
+  if (getFeishuRuntimeStage() !== "local" && !legacyPocEnabled()) {
+    return {
+      kind: "ignored",
+      reason:
+        "Legacy synchronous Feishu POC routes are disabled outside local runtime",
+    };
+  }
+
+  const couponOaEnabled = isCouponOaEnabled();
   const draftDemo = isCouponOaDraftDemo();
 
   if (payload.header?.event_type === "im.message.receive_v1") {
@@ -401,6 +395,23 @@ export async function handleFeishuPocEvent(
     const idempotencyKey = eventId(payload);
 
     if (["image", "file"].includes(message.message_type)) {
+      if (message.message_type === "file" && message.message_id) {
+        const content = objectValue(message.content);
+        const fileKey = String(content?.file_key ?? "");
+        const fileName = String(content?.file_name ?? "未命名来源文件.xlsx");
+        if (fileKey) {
+          const threeSourceResult = await dispatchCouponThreeSourceFile({
+            openId,
+            messageId: message.message_id,
+            fileKey,
+            fileName,
+            idempotencyKey,
+          });
+          if (threeSourceResult.handled) {
+            return { kind: "handled", message: threeSourceResult.message };
+          }
+        }
+      }
       const workflowState = await activeCouponWorkflowState(openId);
       await sendExpiredCouponWorkflowCards(openId, workflowState);
       if (
@@ -474,6 +485,20 @@ export async function handleFeishuPocEvent(
           };
         }
       }
+      if (!couponOaEnabled) {
+        await sendFeishuCard(
+          openId,
+          buildCouponOaDisabledCard(),
+          idempotencyKey,
+        );
+        return {
+          kind: "handled",
+          message: "Coupon OA is disabled",
+        };
+      }
+      if (!(await ensureCouponOaUserAllowed({ openId, idempotencyKey }))) {
+        return { kind: "handled", message: "Coupon OA user is not allowed" };
+      }
       if (draftDemo) {
         await sendFeishuCard(
           openId,
@@ -502,19 +527,53 @@ export async function handleFeishuPocEvent(
       if (!message.message_id) {
         return { kind: "ignored", reason: "Attachment message ID is missing" };
       }
-      const result = await handleCouponOaAttachment({
-        draft: oaDraft,
+      await sendFeishuCard(
         openId,
-        messageId: message.message_id,
-        messageType: message.message_type as "image" | "file",
-      });
-      return { kind: "handled", message: result };
+        buildCouponOaDraftErrorCard({
+          message:
+            "原始附件直传审批已禁用。请使用受控的 Excel 试点产物，或等待三源提报路线完成 R2 draft-only 实现。",
+        }),
+        idempotencyKey,
+      );
+      return {
+        kind: "handled",
+        message: "Coupon OA source attachment promotion is disabled",
+      };
     }
 
     if (message.message_type !== "text")
       return { kind: "ignored", reason: "Unsupported message" };
     const text =
       (objectValue(message.content)?.text as string | undefined) ?? "";
+    const threeSourceResult = await dispatchCouponThreeSourceText({
+      openId,
+      text,
+      idempotencyKey,
+    });
+    if (threeSourceResult.handled) {
+      return { kind: "handled", message: threeSourceResult.message };
+    }
+    if (
+      isCouponThreeSourcePilotEnabled() &&
+      (isCouponExcelPilotInvocation(text) || isCouponOaDraftInvocation(text))
+    ) {
+      const activeThreeSource =
+        await listActiveCouponThreeSourcePilotDrafts(openId);
+      if (activeThreeSource.length) {
+        await sendFeishuCard(
+          openId,
+          buildCouponThreeSourceErrorCard({
+            message:
+              "当前存在未完成的 OA 优惠券三源提报。请继续或结束当前三源提报后，再启动其他优惠券流程。",
+          }),
+          idempotencyKey,
+        );
+        return {
+          kind: "handled",
+          message: "Coupon workflow is blocked by an active three-source pilot",
+        };
+      }
+    }
     const workflowState = await activeCouponWorkflowState(openId);
     await sendExpiredCouponWorkflowCards(openId, workflowState);
     if (
@@ -590,6 +649,17 @@ export async function handleFeishuPocEvent(
     }
 
     if (isCouponOaDraftInvocation(text)) {
+      if (!couponOaEnabled) {
+        await sendFeishuCard(
+          openId,
+          buildCouponOaDisabledCard(),
+          idempotencyKey,
+        );
+        return { kind: "handled", message: "Coupon OA is disabled" };
+      }
+      if (!(await ensureCouponOaUserAllowed({ openId, idempotencyKey }))) {
+        return { kind: "handled", message: "Coupon OA user is not allowed" };
+      }
       const pilot = onlyActiveExcelPilot(workflowState.pilotDrafts);
       const oaDraft = workflowState.oaDrafts[0];
       if (pilot) {
@@ -693,6 +763,17 @@ export async function handleFeishuPocEvent(
   const openId = operatorId(payload);
   if (!openId) return { kind: "ignored", reason: "Missing operator" };
   const form = objectValue(payload.action?.form_value);
+  const callbackValue = objectValue(payload.action?.value);
+  const threeSourceResult = await dispatchCouponThreeSourceCallback({
+    openId,
+    action: payload.action?.name ?? String(callbackValue?.action ?? ""),
+    value: callbackValue ?? undefined,
+    form: form ?? undefined,
+    idempotencyKey: eventId(payload),
+  });
+  if (threeSourceResult.handled) {
+    return { kind: "handled", message: threeSourceResult.message };
+  }
   const name = payload.action?.name ?? "";
   const [mappingAction, mappingPilotRecordId, mappingRevisionText] =
     name.split(":");
@@ -780,6 +861,13 @@ export async function handleFeishuPocEvent(
     }
   }
   if (form && name === "coupon_oa_draft_save") {
+    if (!couponOaEnabled) {
+      await sendFeishuCard(openId, buildCouponOaDisabledCard());
+      return { kind: "handled", message: "Coupon OA is disabled" };
+    }
+    if (!(await ensureCouponOaUserAllowed({ openId }))) {
+      return { kind: "handled", message: "Coupon OA user is not allowed" };
+    }
     const workflowState = await activeCouponWorkflowState(openId);
     await sendExpiredCouponWorkflowCards(openId, workflowState);
     if (
@@ -927,6 +1015,13 @@ export async function handleFeishuPocEvent(
     }
   }
   if (couponDraftRecordId && action === "coupon_oa_cancel") {
+    if (!couponOaEnabled) {
+      await sendFeishuCard(openId, buildCouponOaDisabledCard());
+      return { kind: "handled", message: "Coupon OA is disabled" };
+    }
+    if (!(await ensureCouponOaUserAllowed({ openId }))) {
+      return { kind: "handled", message: "Coupon OA user is not allowed" };
+    }
     try {
       const draft = await getCouponOaDraft(couponDraftRecordId);
       if (draft.ownerOpenId !== openId) {
@@ -1011,9 +1106,15 @@ export async function handleFeishuPocEvent(
           message: `Coupon Excel pilot input confirmed ${confirmed.pilotId}`,
         };
       }
+      if (!couponOaEnabled) {
+        throw new Error("优惠券 OA 工作流当前未启用，不能交接 Excel 试点结果");
+      }
+      if (!(await ensureCouponOaUserAllowed({ openId }))) {
+        return { kind: "handled", message: "Coupon OA user is not allowed" };
+      }
       if (draftDemo) {
         throw new Error(
-          "Excel 试点自动填写 OA 需要 FEISHU_COUPON_OA_MODE=production",
+          "Excel 试点自动填写 OA 需要 FEISHU_COUPON_OA_MODE=native-submit",
         );
       }
       const handingOff = await confirmCouponPilotOutput(draft);
@@ -1057,6 +1158,13 @@ export async function handleFeishuPocEvent(
     couponDraftRecordId &&
     ["coupon_oa_confirm", "coupon_oa_submit"].includes(action)
   ) {
+    if (!couponOaEnabled) {
+      await sendFeishuCard(openId, buildCouponOaDisabledCard());
+      return { kind: "handled", message: "Coupon OA is disabled" };
+    }
+    if (!(await ensureCouponOaUserAllowed({ openId }))) {
+      return { kind: "handled", message: "Coupon OA user is not allowed" };
+    }
     if (draftDemo) {
       await sendFeishuCard(openId, buildCouponOaDraftDemoUnavailableCard());
       return {
@@ -1090,6 +1198,20 @@ export async function handleFeishuPocEvent(
       return {
         kind: "handled",
         message: `Coupon OA ${draft.approvalInstanceCode ?? ""} requires review`,
+      };
+    }
+    if (action === "coupon_oa_submit" && draft.status === "SubmissionUnknown") {
+      await sendFeishuCard(
+        openId,
+        buildCouponOaSubmissionUnknownCard({
+          message:
+            draft.failureReason ??
+            "当前提交是否已创建原生 OA 无法确认，请人工对账。",
+        }),
+      );
+      return {
+        kind: "handled",
+        message: `Coupon OA ${draft.draftId} submission outcome is unknown`,
       };
     }
     if (action === "coupon_oa_submit" && draft.status === "Submitted") {
@@ -1140,6 +1262,20 @@ export async function handleFeishuPocEvent(
       result = await submitConfirmedCouponOaDraft(draft);
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知提交错误";
+      const failedDraft =
+        error && typeof error === "object" && "draft" in error
+          ? (error.draft as CouponOaDraft | undefined)
+          : undefined;
+      if (failedDraft?.status === "SubmissionUnknown") {
+        await sendFeishuCard(
+          openId,
+          buildCouponOaSubmissionUnknownCard({ message }),
+        );
+        return {
+          kind: "handled",
+          message: `Coupon OA ${failedDraft.draftId} submission outcome is unknown`,
+        };
+      }
       await sendFeishuCard(
         openId,
         buildCouponOaSubmissionFailureCard({ message }),

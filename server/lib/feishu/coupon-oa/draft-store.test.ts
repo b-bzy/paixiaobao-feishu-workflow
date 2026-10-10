@@ -26,11 +26,14 @@ function record(fields: Record<string, unknown>) {
   };
 }
 
-function fields(input = values): Record<string, unknown> {
+function fields(
+  input = values,
+  status: "Draft" | "Confirmed" | "Submitting" | "SubmissionUnknown" = "Draft",
+): Record<string, unknown> {
   return {
     "Draft ID": "COA-existing",
     "Owner Open ID": "ou_submitter",
-    Status: "Draft",
+    Status: status,
     "Schema Version": "coupon-oa-submit-schema-v1",
     "Definition Hash": "",
     "Fields JSON": JSON.stringify(input),
@@ -99,4 +102,23 @@ describe("saveCouponOaDraft", () => {
       '"Attachments JSON":"[]"',
     );
   });
+
+  it.each(["Confirmed", "Submitting", "SubmissionUnknown"] as const)(
+    "does not overwrite an active %s draft",
+    async (status) => {
+      fetchMock.mockResolvedValueOnce(
+        success({ items: [record(fields(values, status))] }),
+      );
+
+      await expect(
+        saveCouponOaDraft({
+          ownerOpenId: "ou_submitter",
+          schemaVersion: "coupon-oa-submit-schema-v1",
+          values: { ...values, activityName: "不应覆盖" },
+        }),
+      ).rejects.toThrow("awaiting confirmation or reconciliation");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 });

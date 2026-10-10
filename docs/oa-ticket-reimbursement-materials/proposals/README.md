@@ -5,10 +5,16 @@
 | 主题 | 入口 | 当前状态 |
 | --- | --- | --- |
 | 对话式一轮确认 | [PRD v1.3](conversational-single-confirm/coupon-oa-conversational-single-confirm-prd-v1.3.md) | 待评审；拟将 P1-1 多次中间确认收敛为一张最终确认单。 |
-| 三源优惠券填报 | [PRD v1.0](three-source/coupon-oa-three-source-workflow-prd-v1.md) | 待评审；拟处理配券表、白名单与可选黑名单的两次确认路径。 |
-| 综合 Skill 飞书适配 | [升级方案 v1](three-source/coupon-oa-feishu-unified-skill-upgrade-plan-v1.md) | 待评审；拟以 `/OA优惠券提报` 将本地综合合同升级为分阶段的飞书 Bot 路线。 |
-| 持久 Command-Intake Worker | [设计 v1](three-source/coupon-oa-durable-command-intake-worker-design-v1.md) | 默认关闭的 code foundation 已实现；仍待真实 PostgreSQL、bridge/worker rehearsal 与 Owner 评审。 |
-| 持久 Command-Intake Worker 验证 | [测试方案 v1](three-source/coupon-oa-durable-command-intake-worker-test-plan-v1.md) | unit/SQL contract 已通过；PostgreSQL、HTTP rehearsal 与受控 E2E 待实施。 |
+| 三源优惠券填报 | [PRD v1.0](three-source/coupon-oa-three-source-workflow-prd-v1.md) | 待 Owner 评审；方案 A 拟将本地完整三源输入迁移到 Bot 单聊，再交接既有 OA 测试稿与显式发送路径。 |
+| 综合 Skill 飞书适配 | [升级方案 v1](three-source/coupon-oa-feishu-unified-skill-upgrade-plan-v1.md) | 已沉淀为 P1 完整 Skill/长期架构目标；不重建提交平台，复用既有 OA 测试稿、最终发送与 readback。 |
+| 三源最快 Bot POC | [P0 交付计划 v1](three-source/coupon-three-source-fast-poc-delivery-plan-v1.md) | 需求方当前优先路线：单用户严选三源 → OA 测试稿；复用现有 adapter，不以 FDEV 或原生 OA 为前置。 |
+| 持久 Command-Intake Worker | [设计 v1](three-source/coupon-oa-durable-command-intake-worker-design-v1.md) | 默认关闭的 code foundation 与本地 PostgreSQL integration 已实现；R1-dev command/card 与正式 R2 材料流边界已分离，仍待 bridge/常驻 worker/Feishu rehearsal 与 Owner 评审。 |
+| 飞书开发版需求与进度台账 | [需求台账 v1](three-source/coupon-oa-feishu-dev-requirements-tracker-v1.md) | **P1 耐久化/正式运行的生命周期台账**；不阻断 P0 最快 Bot POC。 |
+| FDEV-001 Dev release baseline | [候选清单 v1](../records/durable-control-plane/fdev-001-dev-release-baseline-v1.md) | P1 耐久化/正式运行的候选字段模板，不是 P0 交付的前置，也不是 clean release、commit/tag 或 🥇。 |
+| R0.5 本机长连接 Smoke | [部署方案 v1](three-source/coupon-oa-r0.5-local-long-connection-vercel-deployment-plan-v1.md)<br>[测试用例 v1](three-source/coupon-oa-r0.5-local-long-connection-smoke-test-case-v1.md) | 提议中的本机 `lark-cli` → Vercel transport 连通性测试；所有业务 Gate 和 Bot 用户回复关闭，不构成 R1-dev/R2/OA 证据。 |
+| 飞书开发版 command-intake 发布 | [发布计划 v1](three-source/coupon-oa-feishu-dev-command-intake-release-plan-v1.md) | 待评审；独立 Dev App/Bot 的 **R1-dev** command-to-card canary，映射 `r1-intake`，不开放材料或 OA。 |
+| 耐久控制面风险整改 | [开发清单 v1](three-source/coupon-oa-durable-control-plane-risk-remediation-backlog-v1.md) | 已将 CP-RISK-001–008 映射到唯一 FDEV/FDEV 子需求；优先处理 bridge ACK、外部 effect fencing、unknown/DLQ 与运行观测。 |
+| 持久 Command-Intake Worker 验证 | [测试方案 v1](three-source/coupon-oa-durable-command-intake-worker-test-plan-v1.md) | 已有 unit/SQL contract 与本地 PostgreSQL integration 证据；HTTP rehearsal、durable bridge ACK、真实 Dev Bot 和受控 E2E 待实施。 |
 | 三源后续迭代 | [迭代计划 v1](three-source/coupon-oa-three-source-follow-up-iteration-plan-v1.md) | 已记录后续决策，不表示已实现或已接入飞书。 |
 | 三源离线验证 | [离线测试方案 v1](three-source/coupon-oa-three-source-offline-test-plan-v1.md) | 仅合成数据和本地零副作用验证，不能推断为飞书或 OA 联调通过。 |
 | 优惠券 OA 模块化升级 | [升级方案 v1](modularization/coupon-oa-modularization-upgrade-proposal-v1.md) | 待技术、流程与业务 Owner 评审；仅定义渐进式模块化目标，不改变当前代码或运行行为。 |

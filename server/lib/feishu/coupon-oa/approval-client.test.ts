@@ -7,6 +7,7 @@ import {
   createCouponApprovalInstance,
   getCouponApprovalDefinition,
   getCouponApprovalInstance,
+  getCouponOaApplicantProfile,
   getFeishuMessageBody,
   uploadCouponApprovalFile,
 } from "./approval-client";
@@ -44,6 +45,32 @@ describe("coupon OA approval client", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer tenant-token" },
     });
+  });
+
+  it("reads a confirmer identity and department candidates by open ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response({
+        user: {
+          user_id: "user_submitter",
+          open_id: "ou_submitter",
+          name: "测试提报人",
+          department_ids: ["od_primary", "od_secondary", "od_primary"],
+          primary_department_id: "od_primary",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCouponOaApplicantProfile("ou_submitter")).resolves.toEqual({
+      openId: "ou_submitter",
+      userId: "user_submitter",
+      displayName: "测试提报人",
+      departmentOpenIds: ["od_primary", "od_secondary"],
+      primaryDepartmentOpenId: "od_primary",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      "/contact/v3/users/ou_submitter?user_id_type=open_id&department_id_type=open_department_id",
+    );
   });
 
   it("creates an instance without node approver or cc overrides", async () => {

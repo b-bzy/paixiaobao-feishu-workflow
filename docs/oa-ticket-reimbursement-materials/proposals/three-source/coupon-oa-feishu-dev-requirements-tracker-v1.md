@@ -1,14 +1,20 @@
-# 飞书开发版需求与进度台账 v1
+# 飞书 P1 耐久化与正式运行需求台账 v1
 
-> **状态**：飞书开发版的**唯一需求生命周期台账**。它记录需求、方案、开发、测试、缺陷和验收进度；不表示 R1-dev、正式 R2 或 R3 已开放。
+> **状态**：P1 耐久化/正式运行的需求生命周期台账。它管理 FDEV 的方案、开发、测试、缺陷和验收；**不管理也不阻断 P0 最快 Bot POC**。不表示 R1-dev、正式 R2 或 R3 已开放。
 >
 > **日期**：2026-10-09
 >
-> **范围**：R0 本地/隔离验证、R1-dev command-to-card 验证 ring、正式 R2 draft-only 材料链路和 R3 原生 OA canary。线上“拍小宝”、完整三源材料流程、Base/Drive 与原生 OA 均不因本台账而开放。
+> **范围**：P1 的 R1-dev command-to-card 验证 ring、正式 R2 draft-only 材料链路和 R3 原生 OA canary。P0 的单用户 direct HTTP 三源 → OA 测试稿交付以[最快 Bot POC 计划](coupon-three-source-fast-poc-delivery-plan-v1.md)和对应运行手册为准，不继承本台账的 FDEV 顺序。线上“拍小宝”、完整三源材料流程、Base/Drive 与原生 OA 均不因本台账而开放。
 >
-> **关联**：[R1-dev 发布计划](coupon-oa-feishu-dev-command-intake-release-plan-v1.md) · [耐久控制面风险整改清单](coupon-oa-durable-control-plane-risk-remediation-backlog-v1.md) · [FDEV-001 候选基线清单](../../records/durable-control-plane/fdev-001-dev-release-baseline-v1.md) · [R2 foundation 验证记录](../../records/durable-control-plane/coupon-r2-foundation-verification-2026-10-09.md)
+> **关联**：[P0 最快 Bot POC 计划](coupon-three-source-fast-poc-delivery-plan-v1.md) · [R1-dev 发布计划](coupon-oa-feishu-dev-command-intake-release-plan-v1.md) · [耐久控制面风险整改清单](coupon-oa-durable-control-plane-risk-remediation-backlog-v1.md) · [FDEV-001 候选基线清单](../../records/durable-control-plane/fdev-001-dev-release-baseline-v1.md) · [R2 foundation 验证记录](../../records/durable-control-plane/coupon-r2-foundation-verification-2026-10-09.md)
 
-## 1. 不可跳过的交付生命周期
+## 0. P0 最快 Bot POC 不进入 FDEV 队列
+
+P0 是一个单用户、严选、SKU、direct HTTP、OA 测试稿的可逆业务验证。它只要求一个冻结的测试 revision、相关自动化检查、一次聚焦 review 和一次受控 E2E；它不创建原生 OA，并始终保持 native-submit kill switch 关闭。
+
+因此，FDEV-001 的 protected tag/hermetic baseline、FDEV-002～006 的 durable bridge/worker 工作和 FDEV-007/008 的正式 R2/R3 Gate，都是 **P1** 工作而非 P0 前置。P0 的一次验证成功也不能标记任何 FDEV 为完成，不能降低 P1 的可靠性或原生 OA Gate。
+
+## 1. P1 不可跳过的交付生命周期
 
 每一个 `FDEV-*` 或字母子需求都必须独立完成以下八步。后继需求可以在第 1 步登记，但在直接前置需求取得 🥇 前，不能进入第 2–7 步，更不能以当前脏工作区作为发布或试点基线。
 
@@ -39,7 +45,7 @@
 
 所有 Agent 只通过版本化文件、冻结接口、代码快照、命令结果和缺陷/证据记录交接，不共享未审阅的对话结论。Lead 是共享 contracts、migration 编号、secret、环境变量、Dev App、真实 scheduler/bridge、部署、回滚和真实飞书测试的唯一集成者。
 
-## 2. Canonical FDEV 顺序与当前队列
+## 2. P1 Canonical FDEV 顺序与当前队列
 
 `R1-dev` 是独立 Dev App/Bot 的**发布/验收 ring**，运行时使用 `FEISHU_RUNTIME_STAGE=r1-intake` 和后续独立 command/card gates；它不是新的 runtime-stage 字符串，也不是正式 R2。正式 R2 专指 `r2-draft-only` 的完整文件/材料流程。
 
@@ -171,8 +177,8 @@ FDEV-001 → FDEV-002 → FDEV-003A → FDEV-003B → FDEV-004A → FDEV-004B �
 
 ## 7. 发布纪律
 
-1. 任何 Agent 完成代码都不等于需求完成；必须经过新的 Test-Plan Agent、独立 QA/Test、Bug loop 和三方 🥇。
-2. 不得为赶进度跳过 FDEV-002 至 FDEV-004C 的可靠性工作而打开 Dev App feature flag。
+1. 任何 **P1 FDEV** 完成代码都不等于需求完成；必须经过新的 Test-Plan Agent、独立 QA/Test、Bug loop 和三方 🥇。
+2. 不得为赶进度跳过 FDEV-002 至 FDEV-004C 的可靠性工作而打开 **P1 正式 Dev App** feature flag。P0 不使用这些 FDEV feature gate，仍按其独立的单用户/native-off 边界执行。
 3. 不得从脏工作区部署，也不得由多个 Agent 独立修改 migration、secret、飞书 App、环境或 bridge/scheduler。
 4. 每次真实飞书操作前，Lead 必须核验当前阶段、allowlist、kill switch、值守人和回滚路径。
 5. 每次 🥇 后，更新风险清单、验证记录、runbook、readiness checklist 与本台账；随后才可将直接后继从第 1 步推进到第 2 步。

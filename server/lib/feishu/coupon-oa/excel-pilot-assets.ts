@@ -6,6 +6,17 @@ import {
 const assetStorage = "assets:server";
 const assetPrefix = "coupon-excel";
 
+export async function loadCouponExcelTemplate(
+  assetName: string,
+): Promise<Uint8Array> {
+  const { useStorage } = await import("nitropack/runtime");
+  const value = await useStorage(assetStorage).getItemRaw<Uint8Array>(
+    `${assetPrefix}:${assetName}`,
+  );
+  if (!value) throw new Error(`Excel 试点模板不存在：${assetName}`);
+  return value instanceof Uint8Array ? value : new Uint8Array(value);
+}
+
 export async function loadCouponPilotTemplate(input: {
   kind: "coupon" | "whitelist";
 }): Promise<Uint8Array> {
@@ -13,10 +24,5 @@ export async function loadCouponPilotTemplate(input: {
     input.kind === "coupon"
       ? regularFullReductionManifest.assetName
       : skuWhitelistPilotManifest.assetName;
-  const { useStorage } = await import("nitropack/runtime");
-  const value = await useStorage(assetStorage).getItemRaw<Uint8Array>(
-    `${assetPrefix}:${assetName}`,
-  );
-  if (!value) throw new Error(`Excel 试点模板不存在：${assetName}`);
-  return value instanceof Uint8Array ? value : new Uint8Array(value);
+  return loadCouponExcelTemplate(assetName);
 }

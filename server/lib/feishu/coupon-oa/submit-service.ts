@@ -3,6 +3,7 @@ import {
   createCouponApprovalInstance,
   getCouponApprovalDefinition,
   getCouponApprovalInstance,
+  getCouponOaApplicantProfile,
 } from "./approval-client";
 import {
   bindCouponApprovalSchema,
@@ -12,7 +13,10 @@ import {
   encodeCouponOaForm,
   parseApprovalFormValues,
 } from "./approval-schema";
-import { getCouponOaApprovalCode } from "./config";
+import {
+  assertCouponOaNativeSubmitAllowed,
+  getCouponOaApprovalCode,
+} from "./config";
 import { type CouponOaDraft, updateCouponOaDraft } from "./draft-store";
 
 function validateValues(draft: CouponOaDraft) {
@@ -21,6 +25,39 @@ function validateValues(draft: CouponOaDraft) {
       ? couponApplicationValuesSchema
       : couponModificationValuesSchema;
   return schema.parse(draft.values);
+}
+
+async function resolveFinalConfirmerIdentity(draft: CouponOaDraft) {
+  const profile = await getCouponOaApplicantProfile(draft.ownerOpenId);
+  const departmentOpenId = profile.primaryDepartmentOpenId
+    ? profile.departmentOpenIds.includes(profile.primaryDepartmentOpenId)
+      ? profile.primaryDepartmentOpenId
+      : undefined
+    : profile.departmentOpenIds.length === 1
+      ? profile.departmentOpenIds[0]
+      : undefined;
+  if (!departmentOpenId) {
+    throw new Error(
+      "无法唯一确定申请部门；请在飞书中确认主部门后重新发起优惠券 OA",
+    );
+  }
+  return {
+    openId: profile.openId,
+    userId: profile.userId,
+    displayName: profile.displayName,
+    departmentOpenId,
+    resolvedAt: new Date().toISOString(),
+  };
+}
+
+function confirmedIdentity(draft: CouponOaDraft) {
+  const identity = draft.values.identitySnapshot;
+  if (!identity || identity.openId !== draft.ownerOpenId) {
+    throw new Error(
+      "Confirmed coupon OA draft is missing the final confirmer identity",
+    );
+  }
+  return identity;
 }
 
 function approvalRequestUuid(input: {
@@ -63,6 +100,7 @@ export async function submitConfirmedCouponOaDraft(
     throw new Error("Confirmed coupon OA draft is missing a definition hash");
   }
 
+  assertCouponOaNativeSubmitAllowed(draft.ownerOpenId);
   const approvalCode = getCouponOaApprovalCode();
   const definition = await getCouponApprovalDefinition(approvalCode);
   const schema = bindCouponApprovalSchema(definition);
@@ -73,9 +111,8 @@ export async function submitConfirmedCouponOaDraft(
   }
 
   const values = validateValues(draft);
-  const form = encodeCouponOaForm(schema, values, {
-    openId: draft.ownerOpenId,
-  });
+  const identity = confirmedIdentity(draft);
+  const form = encodeCouponOaForm(schema, values, identity);
   const submitting = await updateCouponOaDraft(draft, {
     status: "Submitting",
     validationIssues: [],
@@ -132,13 +169,16 @@ export async function submitConfirmedCouponOaDraft(
       );
       return { draft: reviewDraft, verificationIssues: [message] };
     }
-    const failed = await updateCouponOaDraft(submitting, {
-      status: "Failed",
-      failureReason: message,
+    const unknown = await updateCouponOaDraft(submitting, {
+      status: "SubmissionUnknown",
+      failureReason: `Coupon OA create outcome requires reconciliation: ${message}`,
+      validationIssues: [message],
     });
     throw Object.assign(
-      error instanceof Error ? error : new Error("Coupon OA submission failed"),
-      { draft: failed },
+      error instanceof Error
+        ? error
+        : new Error("Coupon OA submission outcome unknown"),
+      { draft: unknown },
     );
   }
 }
@@ -157,9 +197,11 @@ export async function confirmCouponOaDraft(
     getCouponOaApprovalCode(),
   );
   const schema = bindCouponApprovalSchema(definition);
+  const identitySnapshot = await resolveFinalConfirmerIdentity(draft);
   return updateCouponOaDraft(draft, {
     status: "Confirmed",
     definitionHash: schema.definitionHash,
+    values: { ...draft.values, identitySnapshot },
     confirmedAt: new Date().toISOString(),
     validationIssues: [],
     failureReason: undefined,

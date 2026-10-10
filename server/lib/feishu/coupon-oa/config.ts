@@ -2,17 +2,79 @@ export const couponOaInvocation = "OA优惠券审批";
 export const couponOaDraftInvocation = "OA优惠券填报";
 export const couponOaDraftAliases = ["优惠券提单草稿"] as const;
 
-export type CouponOaMode = "production" | "draft-demo";
+export type CouponOaMode = "disabled" | "native-submit" | "draft-demo";
 
 export function getCouponOaMode(): CouponOaMode {
   const value = process.env.FEISHU_COUPON_OA_MODE?.trim();
-  if (!value || value === "production") return "production";
+  if (!value || value === "disabled") return "disabled";
   if (value === "draft-demo") return "draft-demo";
-  throw new Error("FEISHU_COUPON_OA_MODE must be production or draft-demo");
+  if (value === "native-submit" || value === "production") {
+    return "native-submit";
+  }
+  throw new Error(
+    "FEISHU_COUPON_OA_MODE must be disabled, native-submit, draft-demo, or the legacy production value",
+  );
+}
+
+export function isCouponOaEnabled(): boolean {
+  return getCouponOaMode() !== "disabled";
 }
 
 export function isCouponOaDraftDemo(): boolean {
   return getCouponOaMode() === "draft-demo";
+}
+
+function nativeSubmitEnabled(): boolean {
+  const value = process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED?.trim();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error(
+    "FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED must be true or false",
+  );
+}
+
+function configuredOpenIds(name: string): Set<string> {
+  const value = process.env[name]?.trim() ?? "";
+  if (!value) return new Set();
+  const openIds = value
+    .split(",")
+    .map((openId) => openId.trim())
+    .filter(Boolean);
+  if (
+    !openIds.length ||
+    openIds.some((openId) => !/^ou_[a-zA-Z0-9]+$/.test(openId))
+  ) {
+    throw new Error(`${name} must be a comma-separated list of open IDs`);
+  }
+  return new Set(openIds);
+}
+
+/** Applies to all coupon-OA stateful operations, including draft-only. */
+export function assertCouponOaUserAllowed(openId: string): void {
+  if (!configuredOpenIds("FEISHU_COUPON_OA_ALLOWED_OPEN_IDS").has(openId)) {
+    throw new Error("Coupon OA is not allowed for this user");
+  }
+}
+
+/**
+ * Native approval creation is intentionally gated independently from the
+ * broader coupon OA mode. A production mode alone never authorizes a write.
+ */
+export function assertCouponOaNativeSubmitAllowed(openId: string): void {
+  if (getCouponOaMode() !== "native-submit") {
+    throw new Error("Coupon OA native submit is not enabled for this stage");
+  }
+  if (!nativeSubmitEnabled()) {
+    throw new Error("Coupon OA native submit kill switch is closed");
+  }
+  assertCouponOaUserAllowed(openId);
+  if (
+    !configuredOpenIds("FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS").has(
+      openId,
+    )
+  ) {
+    throw new Error("Coupon OA native submit is not allowed for this user");
+  }
 }
 
 function normalizeInvocation(text: string) {

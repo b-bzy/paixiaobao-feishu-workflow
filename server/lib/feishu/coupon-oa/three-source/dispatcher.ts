@@ -1,0 +1,572 @@
+import { multiTierSkuSheetNames } from "../../../excel-template-engine/template-manifests";
+import { sendFeishuCard } from "../../client";
+import { downloadFeishuMessageResource } from "../../message-client";
+import { buildCouponOaPreviewCard } from "../cards";
+import {
+  assertCouponOaUserAllowed,
+  isCouponOaDraftDemo,
+  isCouponOaEnabled,
+} from "../config";
+import { missingCouponOaAttachments } from "../draft-service";
+import { getCouponOaDraft, listActiveCouponOaDrafts } from "../draft-store";
+import { listActiveCouponExcelPilotDrafts } from "../excel-pilot-store";
+import {
+  buildCouponThreeSourceCompletedCard,
+  buildCouponThreeSourceErrorCard,
+  buildCouponThreeSourceIntakeCard,
+  buildCouponThreeSourceMappingCard,
+  buildCouponThreeSourceNoBlacklistCard,
+  buildCouponThreeSourceOverlapCard,
+  buildCouponThreeSourcePreviewCard,
+  buildCouponThreeSourceRoleCard,
+  buildCouponThreeSourceRuntimeBlockedCard,
+  buildCouponThreeSourceUnavailableCard,
+} from "./cards";
+import { isCouponThreeSourceInvocation } from "./config";
+import { isCouponThreeSourcePilotEnabled } from "./pilot-config";
+import {
+  type CouponThreeSourcePilotService,
+  createDefaultCouponThreeSourcePilotService,
+} from "./service";
+import {
+  type CouponThreeSourcePilotDraft,
+  getCouponThreeSourcePilotDraft,
+  listActiveCouponThreeSourcePilotDrafts,
+} from "./store";
+
+export type CouponThreeSourceDispatchResult =
+  | { handled: false }
+  | { handled: true; message: string };
+
+export interface CouponThreeSourceDispatcherDependencies {
+  isPilotEnabled(): boolean;
+  isCouponOaEnabled(): boolean;
+  isCouponOaDraftDemo(): boolean;
+  assertUserAllowed(openId: string): void;
+  createService(): CouponThreeSourcePilotService;
+  getDraft(recordId: string): Promise<CouponThreeSourcePilotDraft>;
+  listActiveThreeSource(openId: string): Promise<CouponThreeSourcePilotDraft[]>;
+  listActiveOa(openId: string): Promise<Array<{ recordId: string }>>;
+  listActiveExcel(openId: string): Promise<Array<{ recordId: string }>>;
+  downloadFile(input: {
+    messageId: string;
+    fileKey: string;
+    type: "file";
+  }): Promise<Uint8Array>;
+  sendCard(
+    openId: string,
+    card: Parameters<typeof sendFeishuCard>[1],
+    idempotencyKey?: string,
+  ): Promise<void>;
+  getOaDraft: typeof getCouponOaDraft;
+}
+
+const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
+  isPilotEnabled: isCouponThreeSourcePilotEnabled,
+  isCouponOaEnabled,
+  isCouponOaDraftDemo,
+  assertUserAllowed: assertCouponOaUserAllowed,
+  createService: createDefaultCouponThreeSourcePilotService,
+  getDraft: getCouponThreeSourcePilotDraft,
+  listActiveThreeSource: listActiveCouponThreeSourcePilotDrafts,
+  listActiveOa: listActiveCouponOaDrafts,
+  listActiveExcel: listActiveCouponExcelPilotDrafts,
+  downloadFile: downloadFeishuMessageResource,
+  sendCard: sendFeishuCard,
+  getOaDraft: getCouponOaDraft,
+};
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function parseRevision(value: unknown): number | undefined {
+  const revision = Number(value);
+  return Number.isInteger(revision) && revision > 0 ? revision : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
+}
+
+function overlapCount(draft: CouponThreeSourcePilotDraft): number {
+  const whitelist = new Set(draft.whitelist?.entries.map((entry) => entry.id));
+  return (draft.blacklist?.entries ?? []).filter((entry) =>
+    whitelist.has(entry.id),
+  ).length;
+}
+
+async function sendDraftState(input: {
+  openId: string;
+  draft: CouponThreeSourcePilotDraft;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+  idempotencyKey?: string;
+}): Promise<void> {
+  const { draft } = input;
+  const card = (() => {
+    if (draft.task.status === "DraftOnlyConfirmed") {
+      return buildCouponThreeSourceCompletedCard(draft);
+    }
+    if (draft.task.status === "Canceled") {
+      return buildCouponThreeSourceErrorCard({
+        message: "当前三源提报已取消，请重新发送 /OA优惠券提报。",
+      });
+    }
+    if (draft.pendingRecognition) {
+      return buildCouponThreeSourceRoleCard({
+        draft,
+        recognition: draft.pendingRecognition,
+      });
+    }
+    if (!draft.task.sources.couponTable || !draft.task.sources.whitelist) {
+      return buildCouponThreeSourceIntakeCard(draft);
+    }
+    if (draft.task.blacklistStatus === "absent_pending_confirmation") {
+      return buildCouponThreeSourceNoBlacklistCard(draft);
+    }
+    if (
+      draft.validationIssues.some((issue) => issue.includes("白黑名单存在重叠"))
+    ) {
+      return buildCouponThreeSourceOverlapCard({
+        draft,
+        count: overlapCount(draft),
+      });
+    }
+    if (draft.task.status === "AwaitingFinalConfirmation") {
+      return buildCouponThreeSourcePreviewCard(draft);
+    }
+    return buildCouponThreeSourceMappingCard(draft);
+  })();
+  await input.dependencies.sendCard(input.openId, card, input.idempotencyKey);
+}
+
+async function assertRuntimeAvailable(input: {
+  openId: string;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+  idempotencyKey?: string;
+}): Promise<boolean> {
+  if (!input.dependencies.isPilotEnabled()) {
+    await input.dependencies.sendCard(
+      input.openId,
+      buildCouponThreeSourceUnavailableCard(),
+      input.idempotencyKey,
+    );
+    return false;
+  }
+  try {
+    if (!input.dependencies.isCouponOaEnabled()) {
+      throw new Error("Coupon OA is disabled");
+    }
+    if (input.dependencies.isCouponOaDraftDemo()) {
+      throw new Error(
+        "Coupon OA draft demo cannot create a three-source OA handoff",
+      );
+    }
+    input.dependencies.assertUserAllowed(input.openId);
+    return true;
+  } catch {
+    await input.dependencies.sendCard(
+      input.openId,
+      buildCouponThreeSourceRuntimeBlockedCard(),
+      input.idempotencyKey,
+    );
+    return false;
+  }
+}
+
+function operationId(input: {
+  action: string;
+  recordId: string;
+  revision: number;
+  idempotencyKey?: string;
+}): string {
+  return (
+    input.idempotencyKey ??
+    `${input.action}:${input.recordId}:${input.revision}`
+  );
+}
+
+async function activeWorkflowConflict(input: {
+  openId: string;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+}): Promise<string | undefined> {
+  const [oaDrafts, excelPilots] = await Promise.all([
+    input.dependencies.listActiveOa(input.openId),
+    input.dependencies.listActiveExcel(input.openId),
+  ]);
+  if (oaDrafts.length)
+    return "当前存在未完成的优惠券 OA 草稿，不能同时启动三源提报";
+  if (excelPilots.length)
+    return "当前存在未完成的优惠券 Excel 试点，不能同时启动三源提报";
+  return undefined;
+}
+
+function mappingSelections(form: Record<string, unknown>) {
+  const activityPointPercent = Number(stringValue(form.activityPointPercent));
+  if (!Number.isFinite(activityPointPercent) || activityPointPercent <= 0) {
+    throw new Error("请填写大于 0 的 OA 活动点位（%）");
+  }
+  const couponFieldCandidateIds = Object.fromEntries(
+    Object.entries(form).flatMap(([name, value]) => {
+      const candidateId = stringValue(value);
+      return name.startsWith("coupon_") && candidateId
+        ? [[name.slice("coupon_".length), candidateId]]
+        : [];
+    }),
+  );
+  const listSelection = (prefix: "whitelist" | "blacklist") => {
+    const defaultTier = stringValue(form[`${prefix}_defaultTier`]);
+    if (
+      defaultTier &&
+      !multiTierSkuSheetNames.includes(
+        defaultTier as (typeof multiTierSkuSheetNames)[number],
+      )
+    ) {
+      throw new Error("请选择已登记的统一券档");
+    }
+    return {
+      identifierCandidateId: stringValue(
+        form[`${prefix}_identifierCandidateId`],
+      ),
+      tierCandidateId: stringValue(form[`${prefix}_tierCandidateId`]),
+      ...(defaultTier
+        ? {
+            defaultTier: defaultTier as (typeof multiTierSkuSheetNames)[number],
+          }
+        : {}),
+    };
+  };
+  return {
+    activityPointPercent,
+    ...(Object.keys(couponFieldCandidateIds).length
+      ? { couponFieldCandidateIds }
+      : {}),
+    whitelist: listSelection("whitelist"),
+    blacklist: listSelection("blacklist"),
+  };
+}
+
+export function createCouponThreeSourceDispatcher(
+  dependencies: CouponThreeSourceDispatcherDependencies = defaultDependencies,
+) {
+  async function dispatchText(input: {
+    openId: string;
+    text: string;
+    idempotencyKey?: string;
+  }): Promise<CouponThreeSourceDispatchResult> {
+    if (!isCouponThreeSourceInvocation(input.text)) return { handled: false };
+    if (!(await assertRuntimeAvailable({ ...input, dependencies }))) {
+      return {
+        handled: true,
+        message: "Coupon three-source pilot is unavailable",
+      };
+    }
+    try {
+      const conflict = await activeWorkflowConflict({
+        openId: input.openId,
+        dependencies,
+      });
+      if (conflict) {
+        await dependencies.sendCard(
+          input.openId,
+          buildCouponThreeSourceErrorCard({ message: conflict }),
+          input.idempotencyKey,
+        );
+        return { handled: true, message: conflict };
+      }
+      const draft = await dependencies
+        .createService()
+        .startOrResume(input.openId);
+      await sendDraftState({
+        openId: input.openId,
+        draft,
+        dependencies,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return {
+        handled: true,
+        message: `Coupon three-source pilot ${draft.pilotId} opened`,
+      };
+    } catch (error) {
+      const detail = errorMessage(error, "无法创建三源提报，请稍后重试");
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({ message: detail }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: detail };
+    }
+  }
+
+  async function dispatchFile(input: {
+    openId: string;
+    messageId: string;
+    fileKey: string;
+    fileName: string;
+    idempotencyKey?: string;
+  }): Promise<CouponThreeSourceDispatchResult> {
+    if (!dependencies.isPilotEnabled()) return { handled: false };
+    try {
+      if (!dependencies.isCouponOaEnabled()) return { handled: false };
+      dependencies.assertUserAllowed(input.openId);
+    } catch {
+      return { handled: false };
+    }
+    let active: CouponThreeSourcePilotDraft[];
+    try {
+      active = await dependencies.listActiveThreeSource(input.openId);
+    } catch {
+      // A partially configured pilot must not steal files from existing routes.
+      return { handled: false };
+    }
+    if (!active.length) return { handled: false };
+    if (active.length > 1) {
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({
+          message: "检测到多笔未完成的三源提报，已停止处理本次文件。",
+        }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: "Multiple active three-source pilots" };
+    }
+    const conflict = await activeWorkflowConflict({
+      openId: input.openId,
+      dependencies,
+    });
+    if (conflict) {
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({ message: conflict }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: conflict };
+    }
+    try {
+      const bytes = await dependencies.downloadFile({
+        messageId: input.messageId,
+        fileKey: input.fileKey,
+        type: "file",
+      });
+      const next = await dependencies.createService().receiveSource({
+        draft: active[0],
+        ownerOpenId: input.openId,
+        expectedRevision: active[0].task.revision,
+        messageId: input.messageId,
+        fileKey: input.fileKey,
+        fileName: input.fileName,
+        bytes,
+      });
+      await sendDraftState({
+        openId: input.openId,
+        draft: next,
+        dependencies,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return {
+        handled: true,
+        message: `Coupon three-source source received for ${next.pilotId}`,
+      };
+    } catch (error) {
+      const detail = errorMessage(error, "三源来源文件处理失败，请重新上传");
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({ message: detail }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: detail };
+    }
+  }
+
+  async function dispatchCallback(input: {
+    openId: string;
+    action: string;
+    value?: Record<string, unknown>;
+    form?: Record<string, unknown>;
+    idempotencyKey?: string;
+  }): Promise<CouponThreeSourceDispatchResult> {
+    const mapping = input.action.match(
+      /^coupon_three_source_mapping_confirm:([^:]+):(\d+)$/,
+    );
+    const action = mapping
+      ? "coupon_three_source_mapping_confirm"
+      : input.action;
+    const value = input.value ?? {};
+    const recordId = mapping?.[1] ?? stringValue(value.pilotRecordId);
+    const revision = mapping
+      ? Number(mapping[2])
+      : parseRevision(value.revision);
+    if (!action.startsWith("coupon_three_source_")) return { handled: false };
+    if (!recordId || !revision) {
+      return {
+        handled: true,
+        message: "Coupon three-source callback is invalid",
+      };
+    }
+    if (
+      !(await assertRuntimeAvailable({
+        openId: input.openId,
+        dependencies,
+        idempotencyKey: input.idempotencyKey,
+      }))
+    ) {
+      return {
+        handled: true,
+        message: "Coupon three-source pilot is unavailable",
+      };
+    }
+    try {
+      const draft = await dependencies.getDraft(recordId);
+      if (draft.ownerOpenId !== input.openId) {
+        throw new Error("只有当前三源提报创建人可以继续操作");
+      }
+      if (draft.task.revision !== revision) {
+        throw new Error("当前三源提报版本已变化，请使用最新卡片");
+      }
+      const service = dependencies.createService();
+      const id = operationId({
+        action,
+        recordId,
+        revision,
+        idempotencyKey: input.idempotencyKey,
+      });
+      let next: CouponThreeSourcePilotDraft;
+      switch (action) {
+        case "coupon_three_source_role_confirm": {
+          const role = stringValue(value.role);
+          if (
+            role !== "couponTable" &&
+            role !== "whitelist" &&
+            role !== "blacklist"
+          ) {
+            throw new Error("请选择有效的材料角色");
+          }
+          next = await service.selectPendingRole({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+            role,
+            operationId: id,
+          });
+          break;
+        }
+        case "coupon_three_source_no_blacklist_confirm":
+          next = await service.confirmNoBlacklist({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+            operationId: id,
+          });
+          break;
+        case "coupon_three_source_mapping_confirm": {
+          const selections = mappingSelections(input.form ?? {});
+          const updated = await service.updateSelections({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+            selections,
+            operationId: id,
+          });
+          next = await service.confirmSourcesAndGenerate({
+            draft: updated,
+            ownerOpenId: input.openId,
+            expectedRevision: updated.task.revision,
+            operationId: `${id}:generate`,
+          });
+          break;
+        }
+        case "coupon_three_source_overlap_decide": {
+          const decision = stringValue(value.decision);
+          if (decision === "source_replacement_required") {
+            await dependencies.sendCard(
+              input.openId,
+              buildCouponThreeSourceIntakeCard(draft),
+              input.idempotencyKey,
+            );
+            return { handled: true, message: "Source replacement requested" };
+          }
+          if (decision !== "whitelist_wins" && decision !== "blacklist_wins") {
+            throw new Error("请选择有效的白黑名单冲突处理规则");
+          }
+          const updated = await service.updateSelections({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+            selections: { overlapDecision: decision },
+            operationId: id,
+          });
+          next = await service.confirmSourcesAndGenerate({
+            draft: updated,
+            ownerOpenId: input.openId,
+            expectedRevision: updated.task.revision,
+            operationId: `${id}:generate`,
+          });
+          break;
+        }
+        case "coupon_three_source_final_confirm": {
+          next = await service.confirmFinalPreview({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+            operationId: id,
+          });
+          if (!next.oaDraftRecordId) {
+            throw new Error("OA 测试稿已创建但缺少草稿记录引用");
+          }
+          const oaDraft = await dependencies.getOaDraft(next.oaDraftRecordId);
+          await dependencies.sendCard(
+            input.openId,
+            buildCouponOaPreviewCard({
+              draftRecordId: oaDraft.recordId,
+              values: oaDraft.values,
+              attachments: oaDraft.attachments,
+              missing: missingCouponOaAttachments(oaDraft),
+            }),
+            input.idempotencyKey,
+          );
+          return {
+            handled: true,
+            message: `Coupon three-source pilot created OA draft ${oaDraft.draftId}`,
+          };
+        }
+        case "coupon_three_source_cancel":
+          next = await service.cancel({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision: revision,
+          });
+          break;
+        default:
+          return { handled: false };
+      }
+      await sendDraftState({
+        openId: input.openId,
+        draft: next,
+        dependencies,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return {
+        handled: true,
+        message: `Coupon three-source action ${action} completed`,
+      };
+    } catch (error) {
+      const detail = errorMessage(error, "三源提报操作失败，请稍后重试");
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({ message: detail }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: detail };
+    }
+  }
+
+  return { dispatchText, dispatchFile, dispatchCallback };
+}
+
+const defaultDispatcher = createCouponThreeSourceDispatcher();
+
+export const dispatchCouponThreeSourceText = defaultDispatcher.dispatchText;
+export const dispatchCouponThreeSourceFile = defaultDispatcher.dispatchFile;
+export const dispatchCouponThreeSourceCallback =
+  defaultDispatcher.dispatchCallback;

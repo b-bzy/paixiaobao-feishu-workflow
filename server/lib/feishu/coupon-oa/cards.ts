@@ -125,6 +125,11 @@ export function buildCouponOaDraftFormCard(
           formSelect("businessMode", "业务模式", ["严选", "寄卖", "pop"]),
           formInput("activityName", "活动名称"),
           formInput("activityBackground", "活动背景", true),
+          formInput(
+            "activityPointPercent",
+            "活动点位（%）（请按 OA 口径明确填写，非自动折扣率）",
+          ),
+          formInput("platformBearingPercent", "平台承担比例（%）"),
           formSelect("overDeduction", "是否超扣点", ["是", "否"]),
           formInput("overDeductionReason", "超扣点原因（若否请填写无）", true),
           formInput("estimatedGmvYuan", "预估 GMV（元）"),
@@ -202,6 +207,22 @@ export function buildCouponOaDraftDemoUnavailableCard(): FeishuCard {
         tag: "markdown",
         content:
           "附件处理、人工确认和正式 OA 提交均已在本地草稿测试中禁用，不会调用审批接口。",
+      },
+    ],
+  );
+}
+
+export function buildCouponOaDisabledCard(): FeishuCard {
+  return baseCard(
+    "优惠券 OA 填报暂未启用",
+    "当前环境未开放优惠券 OA 工作流",
+    "orange",
+    "未启用",
+    [
+      {
+        tag: "markdown",
+        content:
+          "当前环境没有开启优惠券 OA 工作流。请联系试点维护人确认环境、allowlist 与上线阶段；系统不会保存草稿、处理附件或创建 OA。",
       },
     ],
   );
@@ -314,6 +335,8 @@ export function buildCouponOaPreviewCard(input: {
         tag: "markdown",
         content: [
           "**申请基本信息**",
+          `**申请人：** ${values.identitySnapshot?.displayName ?? "将在最终确认时按确认人飞书身份带出"}`,
+          `**申请部门：** ${values.identitySnapshot?.departmentName ?? values.identitySnapshot?.departmentOpenId ?? "将在最终确认时自动读取主部门"}`,
           `**申请类型：** ${values.applicationType}`,
           `**业务模式：** ${values.businessMode ?? "—"}`,
           `**活动名称：** ${values.activityName ?? "未填写活动名称"}`,
@@ -448,6 +471,26 @@ export function buildCouponOaSubmissionResultCard(input: {
             },
           ]
         : []),
+    ],
+  );
+}
+
+export function buildCouponOaSubmissionUnknownCard(input: {
+  message: string;
+}): FeishuCard {
+  return baseCard(
+    "优惠券 OA 发起结果待核对",
+    "系统无法确认是否已创建审批，已停止自动重试",
+    "red",
+    "待人工核对",
+    [
+      {
+        tag: "markdown",
+        content: [
+          `**原因：** ${input.message}`,
+          "请由 OA/运行 Owner 按当前草稿和提交审计进行对账。不要重复点击提交或重新发起，以免创建重复 OA。",
+        ].join("\n"),
+      },
     ],
   );
 }

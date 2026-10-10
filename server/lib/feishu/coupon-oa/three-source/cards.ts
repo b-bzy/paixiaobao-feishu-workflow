@@ -1,0 +1,427 @@
+import type {
+  CouponFieldCandidate,
+  ListColumnCandidate,
+} from "../../../coupon-oa/three-source/types";
+import { multiTierSkuSheetNames } from "../../../excel-template-engine/template-manifests";
+import type { FeishuCard } from "../../expense-poc";
+import type {
+  CouponThreeSourcePilotDraft,
+  StoredWorkbookRecognition,
+} from "./store";
+
+const plainText = (content: string) => ({ tag: "plain_text", content });
+
+function card(input: {
+  title: string;
+  subtitle: string;
+  template: string;
+  content?: string;
+  elements?: Array<Record<string, unknown>>;
+}): FeishuCard {
+  return {
+    schema: "2.0",
+    config: { update_multi: true, width_mode: "default" },
+    header: {
+      title: plainText(input.title),
+      subtitle: plainText(input.subtitle),
+      template: input.template,
+      icon: { tag: "standard_icon", token: "form_colorful" },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 20px 12px",
+      vertical_spacing: "12px",
+      elements: input.elements ?? [
+        { tag: "markdown", content: input.content ?? "" },
+      ],
+    },
+  };
+}
+
+function actionValue(draft: CouponThreeSourcePilotDraft, action: string) {
+  return {
+    action,
+    pilotRecordId: draft.recordId,
+    revision: draft.task.revision,
+  };
+}
+
+function button(
+  draft: CouponThreeSourcePilotDraft,
+  input: {
+    action: string;
+    text: string;
+    type?: string;
+    extra?: Record<string, unknown>;
+  },
+): Record<string, unknown> {
+  return {
+    tag: "button",
+    text: plainText(input.text),
+    type: input.type ?? "primary_filled",
+    width: "fill",
+    behaviors: [
+      {
+        type: "callback",
+        value: { ...actionValue(draft, input.action), ...input.extra },
+      },
+    ],
+  };
+}
+
+function cancelButton(
+  draft: CouponThreeSourcePilotDraft,
+): Record<string, unknown> {
+  return button(draft, {
+    action: "coupon_three_source_cancel",
+    text: "结束当前三源提报",
+    type: "danger",
+  });
+}
+
+function candidateText(
+  candidate: CouponFieldCandidate | ListColumnCandidate,
+): string {
+  return `${candidate.sheetName} / ${candidate.column}（${candidate.header}）`;
+}
+
+function candidateSelect(input: {
+  name: string;
+  label: string;
+  candidates: Array<CouponFieldCandidate | ListColumnCandidate>;
+  required?: boolean;
+}): Record<string, unknown> {
+  return {
+    tag: "select_static",
+    name: input.name,
+    placeholder: plainText(`请选择${input.label}`),
+    required: input.required ?? false,
+    width: "fill",
+    options: input.candidates.map((candidate) => ({
+      text: plainText(candidateText(candidate)),
+      value: candidate.id,
+    })),
+  };
+}
+
+function sourcesSummary(draft: CouponThreeSourcePilotDraft): string[] {
+  const sources = draft.task.sources;
+  return [
+    `- 配券表：${sources.couponTable?.fileName ?? "待上传"}`,
+    `- 商品白名单：${sources.whitelist?.fileName ?? "待上传"}`,
+    `- 商品黑名单：${
+      sources.blacklist?.fileName ??
+      (draft.task.blacklistStatus === "absent_confirmed"
+        ? "已确认无黑名单"
+        : "待上传或确认无黑名单")
+    }`,
+  ];
+}
+
+export function buildCouponThreeSourceUnavailableCard(): FeishuCard {
+  return card({
+    title: "OA 优惠券提报暂未开放",
+    subtitle: "三源 Bot 试点未启用",
+    template: "orange",
+    content: [
+      "`/OA优惠券提报` 的服务端试点模块默认关闭。",
+      "当前不会读取来源文件、创建系统草稿、上传文件或创建原生 OA。",
+      "请继续使用已开放流程，或联系试点维护人完成受控资源配置。",
+    ].join("\n"),
+  });
+}
+
+export function buildCouponThreeSourceRuntimeBlockedCard(): FeishuCard {
+  return card({
+    title: "OA 优惠券提报尚不能开始",
+    subtitle: "当前用户或环境未通过试点 Gate",
+    template: "orange",
+    content: [
+      "系统没有读取来源文件、创建任务、写入 Base/Drive 或创建原生 OA。",
+      "请由试点维护人确认功能开关、用户权限和受控资源后再开启。",
+    ].join("\n"),
+  });
+}
+
+export function buildCouponThreeSourceIntakeCard(
+  draft?: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  const content = [
+    "请直接发送原始 `.xlsx` 配券表、商品白名单，以及可选商品黑名单（可任意顺序）。",
+    ...(draft ? ["", "**当前材料**", ...sourcesSummary(draft)] : []),
+    "未上传黑名单时，系统会要求当前创建人明确确认“本次无黑名单”。",
+    "源文件只用于生成当前 revision 的标准产物；不会直接成为 OA 附件。",
+  ].join("\n");
+  return card({
+    title: "OA 优惠券提报",
+    subtitle: "第 1 步：收集三源材料",
+    template: "blue",
+    ...(draft
+      ? {
+          elements: [{ tag: "markdown", content }, cancelButton(draft)],
+        }
+      : { content }),
+  });
+}
+
+export function buildCouponThreeSourceRoleCard(input: {
+  draft: CouponThreeSourcePilotDraft;
+  recognition: StoredWorkbookRecognition;
+}): FeishuCard {
+  return card({
+    title: "确认材料角色",
+    subtitle: "系统无法唯一判断刚上传的 Excel",
+    template: "orange",
+    elements: [
+      {
+        tag: "markdown",
+        content: [
+          `**文件：** ${input.recognition.source.fileName}`,
+          "请选择该文件在本次三源提报中的角色。选择后会替换同角色材料并产生新 revision。",
+        ].join("\n"),
+      },
+      ...input.recognition.roleCandidates.map((candidate) =>
+        button(input.draft, {
+          action: "coupon_three_source_role_confirm",
+          text:
+            candidate.role === "couponTable"
+              ? "作为配券表"
+              : candidate.role === "whitelist"
+                ? "作为商品白名单"
+                : "作为商品黑名单",
+          extra: { role: candidate.role },
+        }),
+      ),
+      cancelButton(input.draft),
+    ],
+  });
+}
+
+export function buildCouponThreeSourceNoBlacklistCard(
+  draft: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  return card({
+    title: "请确认是否有黑名单",
+    subtitle: "第 2 步：不能把未上传误当作无黑名单",
+    template: "orange",
+    elements: [
+      {
+        tag: "markdown",
+        content: [
+          ...sourcesSummary(draft),
+          "",
+          "若本次确实没有商品黑名单，请由创建人明确确认。若有黑名单，请直接发送原始 `.xlsx` 文件。",
+        ].join("\n"),
+      },
+      button(draft, {
+        action: "coupon_three_source_no_blacklist_confirm",
+        text: "确认本次无黑名单",
+        type: "danger",
+      }),
+      cancelButton(draft),
+    ],
+  });
+}
+
+export function buildCouponThreeSourceMappingCard(
+  draft: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  const coupon = draft.recognitions.couponTable;
+  const whitelist = draft.recognitions.whitelist;
+  const blacklist = draft.recognitions.blacklist;
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: "markdown",
+      content: [
+        "第 3 步：确认活动点位及存在歧义的来源列。",
+        "未显示的字段或列已经唯一识别；提交此表单会冻结新的 revision 并清除旧预览。",
+      ].join("\n"),
+    },
+    {
+      tag: "form",
+      name: "coupon_three_source_mapping_submit",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "input",
+          name: "activityPointPercent",
+          label: plainText("OA 活动点位（%）："),
+          input_type: "text",
+          required: true,
+          width: "fill",
+        },
+        ...Object.entries(coupon?.couponFieldCandidates ?? {})
+          .filter(([, candidates]) => candidates.length > 1)
+          .map(([key, candidates]) =>
+            candidateSelect({
+              name: `coupon_${key}`,
+              label: `配券表 ${key} 字段`,
+              candidates,
+              required: true,
+            }),
+          ),
+        ...listCandidateElements("whitelist", whitelist),
+        ...listCandidateElements("blacklist", blacklist),
+        {
+          tag: "button",
+          name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}`,
+          text: plainText("确认映射，核对来源并生成标准附件"),
+          type: "primary_filled",
+          width: "fill",
+          form_action_type: "submit",
+        },
+      ],
+    },
+    cancelButton(draft),
+  ];
+  return card({
+    title: "确认来源映射",
+    subtitle: "第 3 步：活动点位与字段映射",
+    template: "orange",
+    elements,
+  });
+}
+
+function listCandidateElements(
+  prefix: "whitelist" | "blacklist",
+  recognition: StoredWorkbookRecognition | undefined,
+): Array<Record<string, unknown>> {
+  if (!recognition) return [];
+  const identifier = recognition.listCandidates.filter(
+    (candidate) => candidate.kind === "identifier",
+  );
+  const tier = recognition.listCandidates.filter(
+    (candidate) => candidate.kind === "tier",
+  );
+  return [
+    ...(identifier.length > 1
+      ? [
+          candidateSelect({
+            name: `${prefix}_identifierCandidateId`,
+            label: `${prefix === "whitelist" ? "白名单" : "黑名单"} SKU 列`,
+            candidates: identifier,
+            required: true,
+          }),
+        ]
+      : []),
+    ...(tier.length > 1
+      ? [
+          candidateSelect({
+            name: `${prefix}_tierCandidateId`,
+            label: `${prefix === "whitelist" ? "白名单" : "黑名单"}券档列`,
+            candidates: tier,
+            required: true,
+          }),
+        ]
+      : tier.length === 0
+        ? [
+            {
+              tag: "select_static",
+              name: `${prefix}_defaultTier`,
+              placeholder: plainText(
+                `请选择${prefix === "whitelist" ? "白名单" : "黑名单"}统一券档`,
+              ),
+              required: true,
+              width: "fill",
+              options: multiTierSkuSheetNames.map((tierName) => ({
+                text: plainText(tierName),
+                value: tierName,
+              })),
+            },
+          ]
+        : []),
+  ];
+}
+
+export function buildCouponThreeSourceOverlapCard(input: {
+  draft: CouponThreeSourcePilotDraft;
+  count: number;
+}): FeishuCard {
+  return card({
+    title: "白黑名单存在重叠 SKU",
+    subtitle: "第 4 步：必须明确冲突处理规则",
+    template: "orange",
+    elements: [
+      {
+        tag: "markdown",
+        content: `检测到 **${input.count}** 个 SKU 同时存在于白名单和黑名单。选择规则后将重新确认并生成标准附件。`,
+      },
+      button(input.draft, {
+        action: "coupon_three_source_overlap_decide",
+        text: "白名单优先",
+        extra: { decision: "whitelist_wins" },
+      }),
+      button(input.draft, {
+        action: "coupon_three_source_overlap_decide",
+        text: "黑名单优先",
+        extra: { decision: "blacklist_wins" },
+      }),
+      button(input.draft, {
+        action: "coupon_three_source_overlap_decide",
+        text: "返回替换源文件",
+        type: "danger",
+        extra: { decision: "source_replacement_required" },
+      }),
+      cancelButton(input.draft),
+    ],
+  });
+}
+
+export function buildCouponThreeSourcePreviewCard(
+  draft: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  const prefill = draft.oaPrefill;
+  return card({
+    title: "标准附件已生成，待创建 OA 测试稿",
+    subtitle: "第 5 步：确认当前 revision",
+    template: "green",
+    elements: [
+      {
+        tag: "markdown",
+        content: [
+          `**版本：** revision ${draft.task.revision}`,
+          `**业务模式：** ${prefill?.values.businessMode ?? "—"}`,
+          `**活动名称：** ${prefill?.values.activityName ?? "—"}`,
+          `**活动点位：** ${prefill?.values.activityPointPercent ?? "—"}%`,
+          "**冻结标准附件：**",
+          ...draft.artifacts.map(
+            (artifact) =>
+              `- ${artifact.fileName}（${artifact.sha256.slice(0, 12)}…）`,
+          ),
+          "",
+          "严选首期不生成配券表截图。确认后只会创建既有 OA 测试稿；不会自动提交正式 OA。",
+        ].join("\n"),
+      },
+      button(draft, {
+        action: "coupon_three_source_final_confirm",
+        text: "确认并创建 OA 测试稿",
+      }),
+      cancelButton(draft),
+    ],
+  });
+}
+
+export function buildCouponThreeSourceCompletedCard(
+  draft: CouponThreeSourcePilotDraft,
+): FeishuCard {
+  return card({
+    title: "OA 测试稿已创建",
+    subtitle: "请使用既有明确“发送”动作提交正式 OA",
+    template: "green",
+    content: [
+      `三源提报 ${draft.pilotId.slice(0, 12)} 的 revision ${draft.task.revision} 已冻结并生成 OA 测试稿。`,
+      "当前操作没有创建正式 OA；只有既有 OA 草稿中的显式“确认提交正式 OA”才会进入原生审批创建与回读 Gate。",
+    ].join("\n"),
+  });
+}
+
+export function buildCouponThreeSourceErrorCard(input: {
+  message: string;
+}): FeishuCard {
+  return card({
+    title: "OA 优惠券三源提报未完成",
+    subtitle: "请修正材料或使用最新卡片重试",
+    template: "red",
+    content: `**原因：** ${input.message}`,
+  });
+}

@@ -512,11 +512,13 @@ export function createCouponThreeSourceDispatcher(
         throw new Error("只有当前三源提报创建人可以继续操作");
       }
       const expectedRevision =
-        action === "coupon_three_source_recognition_start"
+        action === "coupon_three_source_recognition_start" ||
+        action === "coupon_three_source_supplement_recognition_start"
           ? draft.task.revision
           : revision;
       if (
         action !== "coupon_three_source_recognition_start" &&
+        action !== "coupon_three_source_supplement_recognition_start" &&
         draft.task.revision !== revision
       ) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
@@ -538,6 +540,18 @@ export function createCouponThreeSourceDispatcher(
             operationId: id,
           });
           break;
+        case "coupon_three_source_supplement_recognition_start":
+          next = await service.startSupplementRecognition({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision,
+            operationId: id,
+            text: stringValue(input.form?.supplementText) ?? "",
+          });
+          return {
+            handled: true,
+            message: `Coupon supplement recognition queued ${next.supplementRecognition?.runId ?? ""}`,
+          };
         case "coupon_three_source_role_confirm": {
           const role = stringValue(value.role);
           if (

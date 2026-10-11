@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   generateMultiTierSkuListWorkbook,
   generateRegularFullReductionWorkbook,
+  generateRegularFullReductionWorkbookSet,
   generateSingleCouponSkuListWorkbook,
 } from "../../excel-template-engine";
 import {
@@ -20,6 +21,7 @@ import {
 import type {
   BlacklistStatus,
   CanonicalPackage,
+  ConfirmedCouponSetSource,
   ConfirmedCouponSource,
   OaPrefillSnapshot,
   OfflineArtifact,
@@ -231,16 +233,83 @@ export interface OfflineArtifactTemplates {
   blacklistTemplateBytes: Uint8Array;
 }
 
+export function createCouponSetCanonicalPackage(input: {
+  ownerId: string;
+  revision: number;
+  couponSet: ConfirmedCouponSetSource;
+  whitelist: ParsedTieredIdentifierList;
+  blacklistStatus: BlacklistStatus;
+  blacklist?: ParsedTieredIdentifierList;
+  overlapDecision?: OverlapDecision;
+}): CanonicalPackage {
+  if (!input.couponSet.tiers.length) throw new Error("至少需要一个优惠券档位");
+  assertListIsUsable(input.whitelist, "白名单");
+  if (input.blacklistStatus === "absent_pending_confirmation") {
+    throw new Error("必须明确确认“本次无黑名单”后才能继续");
+  }
+  if (input.blacklistStatus === "uploaded") {
+    if (!input.blacklist) throw new Error("已上传黑名单但缺少解析结果");
+    assertListIsUsable(input.blacklist, "黑名单");
+  }
+  const overlap = computeOverlap(input.whitelist, input.blacklist);
+  const resolved = applyOverlapDecision({
+    whitelist: input.whitelist,
+    blacklist: input.blacklist,
+    decision: input.overlapDecision,
+  });
+  const coupon = input.couponSet.tiers[0];
+  const computed = computeRegularFullReductionValues(coupon.input);
+  return {
+    ownerId: input.ownerId,
+    revision: input.revision,
+    sourceConfirmationHash: stableHash({
+      ownerId: input.ownerId,
+      revision: input.revision,
+      couponSet: input.couponSet.tiers.map((tier) => ({
+        sourceHash: tier.sourceHash,
+        input: tier.input,
+      })),
+      whitelist: resolved.whitelist.entries.map(({ id, tier }) => ({
+        id,
+        tier,
+      })),
+      blacklist: resolved.blacklist?.entries.map(({ id, tier }) => ({
+        id,
+        tier,
+      })),
+      overlap,
+    }),
+    coupon,
+    couponSet: input.couponSet,
+    computed,
+    whitelistByTier: groupIdentifiersByTier(resolved.whitelist),
+    blacklistByTier: resolved.blacklist
+      ? groupIdentifiersByTier(resolved.blacklist)
+      : undefined,
+    blacklistStatus: input.blacklistStatus,
+    overlap: { ...overlap, decision: input.overlapDecision },
+  };
+}
+
 export async function generateOfflineArtifacts(input: {
   package: CanonicalPackage;
   templates: OfflineArtifactTemplates;
 }): Promise<OfflineArtifact[]> {
-  const couponWorkbook = await generateRegularFullReductionWorkbook({
-    templateBytes: input.templates.regularFullReductionTemplateBytes,
-    data: input.package.coupon.input,
-    computed: input.package.computed,
-    revision: input.package.revision,
-  });
+  const couponWorkbook = input.package.couponSet
+    ? await generateRegularFullReductionWorkbookSet({
+        templateBytes: input.templates.regularFullReductionTemplateBytes,
+        tiers: input.package.couponSet.tiers.map((tier) => ({
+          data: tier.input,
+          computed: computeRegularFullReductionValues(tier.input),
+        })),
+        revision: input.package.revision,
+      })
+    : await generateRegularFullReductionWorkbook({
+        templateBytes: input.templates.regularFullReductionTemplateBytes,
+        data: input.package.coupon.input,
+        computed: input.package.computed,
+        revision: input.package.revision,
+      });
   const whitelistWorkbook = await generateMultiTierSkuListWorkbook({
     templateBytes: input.templates.whitelistTemplateBytes,
     manifest: multiTierSkuWhitelistManifest,

@@ -261,13 +261,24 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     );
     if (!sheetCandidates.length) continue;
     const selected = input.selection?.sheets[worksheet.name];
-    const resolvedTier = selected?.templateTier ?? tierName(worksheet.name);
+    const resolvedTier =
+      selected?.templateTier ??
+      tierName(worksheet.name) ??
+      (workbook.worksheets.filter((sheet) =>
+        identifierCandidates.some(
+          (candidate) => candidate.sheetName === sheet.name,
+        ),
+      ).length === 1
+        ? multiTierSkuSheetNames[0]
+        : undefined);
     if (!resolvedTier) {
       issues.push(`${worksheet.name} 无法唯一映射到已登记券档`);
       continue;
     }
     if (seenTiers.has(resolvedTier)) {
-      issues.push(`${worksheet.name} 与其他 Sheet 重复映射券档 ${resolvedTier}`);
+      issues.push(
+        `${worksheet.name} 与其他 Sheet 重复映射券档 ${resolvedTier}`,
+      );
       continue;
     }
     seenTiers.add(resolvedTier);

@@ -280,7 +280,7 @@ describe("CouponThreeSourcePilotService", () => {
     expect(uploadArtifact).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes the second-round card candidates instead of failing generation", async () => {
+  it("generates one artifact set for multiple amount tiers", async () => {
     const coupon = await multipleCouponBytes();
     const whitelist = await whitelistBytes();
     const sources = new Map([
@@ -288,7 +288,9 @@ describe("CouponThreeSourcePilotService", () => {
       ["om-whitelist:file-whitelist", whitelist],
     ]);
     let draft: CouponThreeSourcePilotDraft | undefined;
-    const uploadArtifact = vi.fn();
+    const uploadArtifact = vi.fn(async ({ name }: { name: string }) => ({
+      fileToken: `token-${name}`,
+    }));
     const dependencies: CouponThreeSourcePilotDependencies = {
       downloadSource: async (source) => {
         const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
@@ -368,13 +370,13 @@ describe("CouponThreeSourcePilotService", () => {
       operationId: "refresh-candidates",
     });
 
-    expect(current.task.status).toBe("AwaitingSourceConfirmation");
-    expect(current.recognitions.couponTable?.couponCandidates).toHaveLength(2);
-    expect(current.validationIssues).toContain(
-      "识别到多个优惠券，请明确选择本次唯一优惠券",
-    );
-    expect(current.artifacts).toEqual([]);
-    expect(uploadArtifact).not.toHaveBeenCalled();
+    expect(current.task.status).toBe("AwaitingFinalConfirmation");
+    expect(current.couponSet?.tiers).toHaveLength(2);
+    expect(current.artifacts.map((artifact) => artifact.role)).toEqual([
+      "couponTable",
+      "productWhitelist",
+    ]);
+    expect(uploadArtifact).toHaveBeenCalledTimes(2);
   });
 
   it("waits for explicit completion before activating one recognition batch", async () => {

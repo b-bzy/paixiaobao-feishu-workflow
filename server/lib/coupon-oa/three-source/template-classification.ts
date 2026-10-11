@@ -26,7 +26,10 @@ const DISCOUNT_HEADERS = [
 function cellText(cell: ExcelJS.Cell): string {
   if (cell.value === null || cell.value === undefined) return "";
   if (typeof cell.value === "object" && "richText" in cell.value) {
-    return cell.value.richText.map((item) => item.text).join("").trim();
+    return cell.value.richText
+      .map((item) => item.text)
+      .join("")
+      .trim();
   }
   return String(cell.text || cell.value).trim();
 }
@@ -110,7 +113,10 @@ export async function classifyCouponTemplate(
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(Buffer.from(source.bytes) as never);
   const candidates: CouponTemplateCandidate[] = [];
-  const tiersByCandidate = new Map<CouponTemplateKind, CouponTierRowReference[]>();
+  const tiersByCandidate = new Map<
+    CouponTemplateKind,
+    CouponTierRowReference[]
+  >();
 
   for (const worksheet of workbook.worksheets) {
     for (
@@ -134,7 +140,11 @@ export async function classifyCouponTemplate(
       const discountCount = DISCOUNT_HEADERS.filter((header) =>
         columns.has(header),
       ).length;
-      const variants: Array<{ discount: boolean; count: number; total: number }> = [];
+      const variants: Array<{
+        discount: boolean;
+        count: number;
+        total: number;
+      }> = [];
       if (fullCount >= 2) {
         variants.push({
           discount: false,
@@ -159,11 +169,13 @@ export async function classifyCouponTemplate(
         const identifyingHeaders = variant.discount
           ? DISCOUNT_HEADERS
           : FULL_REDUCTION_HEADERS;
-        const evidenceCells = [...COMMON_HEADERS, ...identifyingHeaders]
-          .flatMap((header) => {
-            const column = columns.get(header);
-            return column ? [`${columnName(column)}${rowNumber}`] : [];
-          });
+        const evidenceCells = [
+          ...COMMON_HEADERS,
+          ...identifyingHeaders,
+        ].flatMap((header) => {
+          const column = columns.get(header);
+          return column ? [`${columnName(column)}${rowNumber}`] : [];
+        });
         const rows = tierRows({
           worksheet,
           headerRow: rowNumber,
@@ -172,7 +184,9 @@ export async function classifyCouponTemplate(
         });
         candidates.push({
           templateKind,
-          score: commonCount * 10 + Math.round((variant.count / variant.total) * 100),
+          score:
+            commonCount * 10 +
+            Math.round((variant.count / variant.total) * 100),
           supported: templateKind === "regular_full_reduction",
           headerRow: rowNumber,
           sheetName: worksheet.name,

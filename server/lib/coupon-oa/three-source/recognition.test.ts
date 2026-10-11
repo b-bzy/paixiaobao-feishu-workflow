@@ -119,9 +119,7 @@ describe("single coupon confirmation", () => {
         couponRow("活动B", "200", "30"),
       ]),
     );
-    const candidates = await discoverRegularFullReductionCoupons({
-      recognition,
-    });
+    await discoverRegularFullReductionCoupons({ recognition });
     const confirmed = await confirmRegularFullReductionCouponSet({
       recognition,
       ownerId: "owner-1",
@@ -133,8 +131,7 @@ describe("single coupon confirmation", () => {
       "活动B",
     ]);
     expect(confirmed.tiers.map((tier) => tier.input.thresholdYuan)).toEqual([
-      100,
-      200,
+      100, 200,
     ]);
     expect(confirmed.activityPointPercent).toBe(6);
   });

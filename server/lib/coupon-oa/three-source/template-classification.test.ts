@@ -54,7 +54,19 @@ describe("coupon template classification", () => {
       headers: regularHeaders,
       rows: [
         ["京东", "业务员", "1月", "1月", "满999减60", "活动", 1, 1, 1, 60, 999],
-        ["京东", "业务员", "1月", "1月", "满1999减120", "活动", 1, 1, 1, 120, 1999],
+        [
+          "京东",
+          "业务员",
+          "1月",
+          "1月",
+          "满1999减120",
+          "活动",
+          1,
+          1,
+          1,
+          120,
+          1999,
+        ],
       ],
     });
 
@@ -69,7 +81,9 @@ describe("coupon template classification", () => {
     const source = await workbook({
       fileName: "常规满减券.xlsx",
       headers: [
-        ...regularHeaders.filter((header) => !["优惠券名称", "面额"].includes(header)),
+        ...regularHeaders.filter(
+          (header) => !["优惠券名称", "面额"].includes(header),
+        ),
         "折扣名称",
         "折扣力度",
         "折扣限额",

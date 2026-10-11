@@ -64,7 +64,9 @@ export function validateCouponSupplementTextProposal(
   if (!parsed.success) {
     return { fields: {}, warnings: ["AI 返回结构不符合补充字段格式"] };
   }
-  const fields = { ...parsed.data.fields } as ValidatedCouponSupplementText["fields"];
+  const fields = {
+    ...parsed.data.fields,
+  } as ValidatedCouponSupplementText["fields"];
   const warnings = [...parsed.data.warnings];
   const businessMode = fields.businessMode;
   if (
@@ -77,7 +79,9 @@ export function validateCouponSupplementTextProposal(
   for (const key of ["activityStartAt", "activityEndAt"] as const) {
     if (fields[key] !== undefined && !validDate(fields[key])) {
       delete fields[key];
-      warnings.push(`AI 返回的${key === "activityStartAt" ? "开始" : "结束"}日期无效`);
+      warnings.push(
+        `AI 返回的${key === "activityStartAt" ? "开始" : "结束"}日期无效`,
+      );
     }
   }
   return { fields, warnings };
@@ -93,7 +97,7 @@ export function buildCouponSupplementTextAiRequest(text: string): {
     system: [
       "你是内部优惠券提报的中文补充字段提取器。",
       "只提取业务员文字中明确提供的信息，不补猜、不生成审批结论。",
-      "返回严格 JSON：{\"fields\":{...},\"warnings\":[]}。",
+      '返回严格 JSON：{"fields":{...},"warnings":[]}。',
       `允许字段：${allowedKeys.join(", ")}。`,
       "businessMode 只能输出严选、寄卖或 POP；日期使用 YYYY-MM-DD。",
     ].join("\n"),

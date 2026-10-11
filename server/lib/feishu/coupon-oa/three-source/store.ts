@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ValidatedCouponSupplementText } from "../../../coupon-oa/three-source/ai-text";
 import type { ListColumnSelection } from "../../../coupon-oa/three-source/offline";
 import {
   type CouponThreeSourceTask,
@@ -16,6 +17,7 @@ import type {
   OaPrefillSnapshot,
   OverlapDecision,
   ParsedSingleCouponIdentifierList,
+  ParsedTieredIdentifierList,
   SourceRoleCandidate,
   ValidatedAiRecognition,
   WorkbookRecognition,
@@ -75,11 +77,21 @@ export interface CouponThreeSourcePilotDraft {
     Record<"couponTable" | "whitelist" | "blacklist", StoredWorkbookRecognition>
   >;
   pendingRecognition?: StoredWorkbookRecognition;
+  supplementRecognition?: {
+    text: string;
+    textSha256: string;
+    runId: string;
+    revision: number;
+    status: "pending" | "succeeded" | "failed" | "outcome_unknown";
+    result?: ValidatedCouponSupplementText;
+    audit?: AiAuditSummary;
+    fallbackCode?: string;
+  };
   selections: CouponThreeSourcePilotSelections;
   coupon?: ConfirmedCouponSource;
   couponSet?: ConfirmedCouponSetSource;
-  whitelist?: ParsedSingleCouponIdentifierList;
-  blacklist?: ParsedSingleCouponIdentifierList;
+  whitelist?: ParsedSingleCouponIdentifierList | ParsedTieredIdentifierList;
+  blacklist?: ParsedSingleCouponIdentifierList | ParsedTieredIdentifierList;
   package?: CanonicalPackage;
   artifacts: FrozenThreeSourceArtifact[];
   oaPrefill?: OaPrefillSnapshot;
@@ -155,6 +167,7 @@ function state(
     task: input.task,
     recognitions: input.recognitions,
     pendingRecognition: input.pendingRecognition,
+    supplementRecognition: input.supplementRecognition,
     selections: input.selections,
     coupon: input.coupon,
     couponSet: input.couponSet,

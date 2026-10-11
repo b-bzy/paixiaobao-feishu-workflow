@@ -123,6 +123,8 @@ describe("three-source Bot cards", () => {
 
     expect(rendered).toContain("材料已上传完毕，开始统一识别");
     expect(rendered).toContain("coupon_three_source_recognition_start");
+    expect(rendered).not.toContain("源文件只用于生成");
+    expect(rendered).not.toContain("未上传黑名单时");
   });
 
   it("asks for ambiguous fields and never infers a coupon from template tiers", () => {
@@ -140,6 +142,11 @@ describe("three-source Bot cards", () => {
     );
     expect(rendered).toContain("blacklistDecision");
     expect(rendered).toContain("确认本次无商品黑名单");
+    expect(rendered).toContain("语音或文字补充说明");
+    expect(rendered).toContain("严选");
+    expect(rendered).toContain("寄卖");
+    expect(rendered).toContain("POP");
+    expect(rendered).not.toContain("补充字段 activityBackground");
   });
 
   it("keeps no-blacklist and final draft creation as explicit revision-bound actions", () => {
@@ -206,7 +213,7 @@ describe("three-source Bot cards", () => {
     expect(rendered).not.toContain("确认来源并生成标准附件");
   });
 
-  it("requires explicit coupon selection for multiple candidates", () => {
+  it("treats multiple amount rows as one coupon template", () => {
     const current = draft();
     const recognition = current.recognitions.couponTable;
     if (!recognition) throw new Error("missing fixture recognition");
@@ -235,8 +242,9 @@ describe("three-source Bot cards", () => {
       },
     ];
     const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
-    expect(rendered).toContain("couponCandidateId");
+    expect(rendered).not.toContain("couponCandidateId");
     expect(rendered).toContain("couponType");
+    expect(rendered).toContain("语音或文字补充说明");
     expect(rendered).not.toContain('"selected":true');
   });
 });

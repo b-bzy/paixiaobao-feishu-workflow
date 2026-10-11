@@ -376,15 +376,18 @@ Feishu transport
 - `deepseek-chat-gateway.ts` 只访问官方 HTTPS endpoint，设置超时与 1 MiB 响应上限，对上下文拒绝、429、超时、网络、无效 JSON 和超大响应分类；密钥不进入错误或审计。
 - 上传阶段仅保存确定性识别结果；owner 点击“材料已上传完毕，开始统一识别”后，服务端先准备 AI run，再把整批 run ID/pending 状态写入 Base，最后幂等激活 durable effect，避免 effect 早于草稿状态执行。
 - `coupon_ai_recognition_runs` 与 durable effect 用语义键限制每个 source/revision/model/prompt version 一次外发。终态先持久化，再投影 Base/Card；投影重试不得再次调用 DeepSeek。同一业务任务的 AI effect 串行投影，不同任务仍可并行，防止 Base 全量 JSON 回写发生 lost update。
+- `coupon_ai_text_runs` 使用 owner/revision/text hash/model/prompt version 形成独立语义键。业务员检查过的语音转写或文字只用于字段候选提取；终态先持久化再回填第二轮卡，投影重试不得再次外发。原文不得进入日志、附件或 OA。
 - 同一批来源进入 AI 识别时只追加一张处理中卡片；单个来源识别完成但仍有其他来源 pending 时不再发中间卡，整批终态后只发送一张汇总第二轮卡片。
 - Base P0 draft 只保存结构化候选、审计摘要和 owner 选择。owner、revision 或 source hash 变化时丢弃旧投影。
-- 第二轮使用稳定 candidate ID 绑定具体 Sheet/行；缺字段记录 `ownerSupplement` provenance，覆盖非空源值必须附原因。活动点位不能从优惠比例推导。
-- 名单生成器校验原模板 SHA-256，仅保留并重命名一个蓝本 Sheet，写入文本 SKU 后重新打开校验。
+- 第二轮按券模板而不是满减金额行判断歧义；同一常规满减模板中的多行作为多券档生成。缺字段记录 `ownerSupplement` provenance，覆盖非空源值必须附原因。活动点位不能从优惠比例推导。
+- 已登记白名单 Sheet 名自动映射到对应券档并保留多 Sheet 输出；生成器校验原模板 SHA-256，写入文本 SKU 后重新打开校验。
+- 卡片业务字段使用中文标签，业务模式提供“严选 / 寄卖 / POP”选择；补充说明使用可编辑多行文本框，兼容系统输入法语音转写。DeepSeek 可提出活动名称/背景候选，但确定性模板引擎只消费 owner 最终确认值。
 
 该增量由 [ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) 约束。`FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED` 默认 `false`；AI 关闭或失败时保留确定性识别和 owner 人工补充路径。它不改变 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`、源文件不得进入 OA 附件或 P0 单用户限制。
 
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-11 | v1.5 | 多券档、多 Sheet 名单、中文第二轮卡与耐久补充说明识别 | 仍限常规满减、draft-only；寄卖/POP 生成 Gate 仍按当前能力拒绝 |
 | 2026-10-11 | v1.4 | 增加显式“上传完成”批量识别、prepare→Base→activate 顺序与同任务串行投影；无黑名单确认并入汇总第二轮 | 修复并发 AI 投影覆盖导致 pending 无 effect、无法返回第二轮卡的问题 |
 | 2026-10-11 | v1.3 | 收敛多来源上传与 AI 终态投影的中间卡片，避免每个来源各追加一张“AI 识别中” | 保留每条来源消息与 AI run 的耐久幂等；仅收敛用户可见状态卡 |
 | 2026-10-10 | v1.2 | 增加默认关闭的 P0 DeepSeek 候选识别、第二轮单券确认、单 Sheet 名单生成与 durable effect 边界 | 代码完成本地验证；仍待外部 P0 验证 |

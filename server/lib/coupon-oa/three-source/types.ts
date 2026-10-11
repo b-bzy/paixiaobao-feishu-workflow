@@ -312,6 +312,7 @@ export interface CanonicalPackage {
   revision: number;
   sourceConfirmationHash: string;
   coupon: ConfirmedCouponSource;
+  couponSet?: ConfirmedCouponSetSource;
   computed: RegularFullReductionComputedValues;
   couponName?: string;
   whitelist?: ParsedSingleCouponIdentifierList;

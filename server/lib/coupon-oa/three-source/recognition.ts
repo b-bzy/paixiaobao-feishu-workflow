@@ -5,8 +5,8 @@ import {
   regularFullReductionInputSchema,
 } from "../calculation";
 import type {
-  ConfirmedCouponSource,
   ConfirmedCouponSetSource,
+  ConfirmedCouponSource,
   CouponCandidate,
   CouponFieldCandidate,
   CouponFieldKey,

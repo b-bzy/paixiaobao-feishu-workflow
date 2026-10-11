@@ -201,13 +201,7 @@ export async function generateRegularFullReductionWorkbookSet(input: {
     copyBlueprintRow(worksheet, 2, targetRowNumber);
   }
   for (const [index, row] of rows.entries()) {
-    setCouponRow(
-      worksheet,
-      2 + index,
-      row.data,
-      row.computed,
-      row.channel,
-    );
+    setCouponRow(worksheet, 2 + index, row.data, row.computed, row.channel);
   }
 
   const bytes = xlsxBytes(await workbook.xlsx.writeBuffer());

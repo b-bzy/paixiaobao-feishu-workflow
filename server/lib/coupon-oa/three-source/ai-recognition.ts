@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { z } from "zod";
 import type {
-  AiCouponFieldCandidate,
   AiActivityCopyCandidate,
+  AiCouponFieldCandidate,
   AiListCandidate,
   AiSourceRoleCandidate,
   CouponCandidate,
@@ -352,7 +352,9 @@ export function validateCouponThreeSourceAiProposal(input: {
 
   const activityCopyCandidates: AiActivityCopyCandidate[] = [];
   const couponRows = new Set(
-    couponCandidates.map((candidate) => `${candidate.sheetName}!${candidate.row}`),
+    couponCandidates.map(
+      (candidate) => `${candidate.sheetName}!${candidate.row}`,
+    ),
   );
   for (const candidate of parsed.data.activityCopyCandidates) {
     const invalid = candidate.evidence.cells.filter(
@@ -363,7 +365,8 @@ export function validateCouponThreeSourceAiProposal(input: {
     );
     const evidencedRows = new Set(
       candidate.evidence.cells.map(
-        (cell) => `${candidate.evidence.sheetName}!${Number(cell.match(/\d+$/)?.[0])}`,
+        (cell) =>
+          `${candidate.evidence.sheetName}!${Number(cell.match(/\d+$/)?.[0])}`,
       ),
     );
     if (invalid.length) {

@@ -168,8 +168,6 @@ export function buildCouponThreeSourceIntakeCard(
   const content = [
     "请直接发送原始 `.xlsx` 配券表、商品白名单，以及可选商品黑名单（可任意顺序）。",
     ...(draft ? ["", "**当前材料**", ...sourcesSummary(draft)] : []),
-    "未上传黑名单时，系统会要求当前创建人明确确认“本次无黑名单”。",
-    "源文件只用于生成当前 revision 的标准产物；不会直接成为 OA 附件。",
   ].join("\n");
   return card({
     title: "OA 优惠券提报",
@@ -321,6 +319,50 @@ const optionalOwnerSupplementKeys = [
   "overDeductionReason",
 ] as const satisfies readonly CouponFieldKey[];
 
+const fieldLabels: Partial<Record<CouponFieldKey, string>> = {
+  activityName: "活动名称",
+  activityBackground: "活动背景",
+  businessMode: "业务模式",
+  applicantName: "申请人",
+  activityStartAt: "活动开始日期",
+  activityEndAt: "活动结束日期",
+  channels: "用券渠道",
+  thresholdYuan: "使用门槛（元）",
+  discountAmountYuan: "优惠金额（元）",
+  totalQuantity: "申请总数量",
+  grantQuantityPerClaim: "单次发放数量",
+  dailyClaimLimit: "每日领取上限",
+  claimWindow: "领取时间",
+  useWindow: "使用时间",
+  expectedClaimRate: "预计领取率",
+  expectedUseRate: "预计使用率",
+  platformBearingRatio: "平台承担比例",
+  estimatedGmvYuan: "预计成交额（元）",
+  claimRule: "领取规则",
+  allowGift: "是否允许转赠",
+  promotionMode: "推广方式",
+  publicPromotionChannels: "公开推广渠道",
+  overDeduction: "是否超扣",
+  overDeductionReason: "超扣原因",
+};
+
+function ownerDefaultValue(
+  draft: CouponThreeSourcePilotDraft,
+  key: CouponFieldKey,
+): string | undefined {
+  const ownerValue = draft.selections.ownerFieldValues?.[key];
+  if (ownerValue !== undefined) {
+    return Array.isArray(ownerValue)
+      ? ownerValue.join("、")
+      : String(ownerValue);
+  }
+  const copy =
+    draft.recognitions.couponTable?.ai?.result?.activityCopyCandidates?.find(
+      (candidate) => candidate.key === key,
+    );
+  return copy?.value;
+}
+
 function missingOwnerFields(
   recognition: StoredWorkbookRecognition | undefined,
 ): CouponFieldKey[] {
@@ -353,8 +395,8 @@ export function buildCouponThreeSourceMappingCard(
     {
       tag: "markdown",
       content: [
-        "第二轮：确认唯一优惠券、活动点位、缺失字段和名单 Sheet。",
-        "AI 只提供候选；提交后才会由确定性模板引擎生成标准附件。",
+        "第二轮：确认券模板、活动点位和缺失字段。",
+        "可使用手机或电脑自带语音输入，把转写文字放入补充说明后先识别并回填；提交前仍可逐项修改。",
         ...(onlyUnsupported
           ? [
               "当前只识别到 P0 不支持的券型，请结束并改用受支持的常规满减券材料。",
@@ -381,23 +423,6 @@ export function buildCouponThreeSourceMappingCard(
                     value: "regular_full_reduction",
                   },
                 ],
-              },
-            ]
-          : []),
-        ...(coupons.length > 1
-          ? [
-              {
-                tag: "select_static",
-                name: "couponCandidateId",
-                placeholder: plainText("检测到多券，请选择本次唯一优惠券"),
-                required: true,
-                width: "fill",
-                options: coupons.map((candidate) => ({
-                  text: plainText(
-                    `${candidate.displayName}（${candidate.sheetName}!第${candidate.row}行）`,
-                  ),
-                  value: candidate.id,
-                })),
               },
             ]
           : []),
@@ -431,18 +456,38 @@ export function buildCouponThreeSourceMappingCard(
           .map(([key, candidates]) =>
             candidateSelect({
               name: `coupon_${key}`,
-              label: `配券表 ${key} 字段`,
+              label: `配券表${fieldLabels[key as CouponFieldKey] ?? "字段"}`,
               candidates,
               required: true,
             }),
           ),
         ...missingOwnerFields(coupon).map((key) => ({
-          tag: "input",
-          name: `owner_${key}`,
-          label: plainText(`补充字段 ${key}：`),
-          input_type: "text",
-          required: true,
-          width: "fill",
+          ...(key === "businessMode"
+            ? {
+                tag: "select_static",
+                name: "owner_businessMode",
+                placeholder: plainText("请选择业务模式"),
+                required: true,
+                width: "fill",
+                options: [
+                  { text: plainText("严选"), value: "严选" },
+                  { text: plainText("寄卖"), value: "寄卖" },
+                  { text: plainText("POP"), value: "pop" },
+                ],
+              }
+            : {
+                tag: "input",
+                name: `owner_${key}`,
+                label: plainText(fieldLabels[key] ?? "补充信息"),
+                input_type:
+                  key === "activityBackground" ? "multiline_text" : "text",
+                ...(key === "activityBackground" ? { rows: 3 } : {}),
+                ...(ownerDefaultValue(draft, key)
+                  ? { default_value: ownerDefaultValue(draft, key) }
+                  : {}),
+                required: true,
+                width: "fill",
+              }),
         })),
         ...optionalOwnerSupplementKeys
           .filter(
@@ -457,13 +502,36 @@ export function buildCouponThreeSourceMappingCard(
           .map((key) => ({
             tag: "input",
             name: `owner_${key}`,
-            label: plainText(`按业务条件补充 ${key}：`),
+            label: plainText(fieldLabels[key] ?? "按业务条件补充"),
             input_type: "text",
+            ...(ownerDefaultValue(draft, key)
+              ? { default_value: ownerDefaultValue(draft, key) }
+              : {}),
             required: false,
             width: "fill",
           })),
         ...listCandidateElements("whitelist", whitelist),
         ...listCandidateElements("blacklist", blacklist),
+        {
+          tag: "input",
+          name: "supplementText",
+          label: plainText("语音或文字补充说明"),
+          input_type: "multiline_text",
+          rows: 4,
+          required: false,
+          width: "fill",
+          ...(draft.supplementRecognition?.text
+            ? { default_value: draft.supplementRecognition.text }
+            : {}),
+        },
+        {
+          tag: "button",
+          name: `coupon_three_source_supplement_recognition_start:${draft.recordId}:${draft.task.revision}`,
+          text: plainText("识别补充说明并填入上方字段"),
+          type: "default",
+          width: "fill",
+          form_action_type: "submit",
+        },
         ...(!onlyUnsupported
           ? [
               {

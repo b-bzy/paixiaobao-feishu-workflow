@@ -32,11 +32,11 @@ function tier(thresholdYuan: number, discountAmountYuan: number) {
     estimatedGmvYuan: 10000,
     couponType: "东券" as const,
     productLimitType: "限SKU" as const,
-    claimRiskControl: "0级以下用户可领",
-    claimRule: "活动期间仅可领一次",
+    claimRiskControl: "0级以下用户可领" as const,
+    claimRule: "活动期间仅可领一次" as const,
     allowGift: "允许" as const,
     promotionMode: "非公开推广" as const,
-    publicPromotionChannels: [],
+    publicPromotionChannels: [] as string[],
     overDeduction: "否" as const,
     overDeductionReason: "",
   };
@@ -55,13 +55,14 @@ describe("multi-tier regular full-reduction workbook", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(Buffer.from(generated.bytes) as never);
     const sheet = workbook.getWorksheet("满减券");
-    expect(sheet?.getCell("J2").value).toMatchObject({ formula: expect.any(String) });
-    expect(sheet?.getCell("J5").value).toMatchObject({ formula: expect.any(String) });
+    expect(sheet?.getCell("J2").value).toMatchObject({
+      formula: expect.any(String),
+    });
+    expect(sheet?.getCell("J5").value).toMatchObject({
+      formula: expect.any(String),
+    });
     expect([2, 3, 4, 5].map((row) => sheet?.getCell(`P${row}`).value)).toEqual([
-      999,
-      999,
-      1999,
-      1999,
+      999, 999, 1999, 1999,
     ]);
     expect([2, 3, 4, 5].map((row) => sheet?.getCell(`F${row}`).text)).toEqual([
       "京东商城",

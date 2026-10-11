@@ -6,13 +6,17 @@ import {
   createCouponThreeSourceAiProjector,
   feishuCouponAiSourceLoader,
 } from "../feishu/coupon-oa/three-source/ai-projection";
+import { createCouponAiTextProjector } from "../feishu/coupon-oa/three-source/ai-text-projection";
 import type { CouponThreeSourceAiGateway } from "../feishu/deepseek-chat-gateway";
 import { createDeepSeekChatGateway } from "../feishu/deepseek-chat-gateway";
+import type { CouponSupplementTextGateway } from "../feishu/deepseek-text-gateway";
+import { createDeepSeekTextGateway } from "../feishu/deepseek-text-gateway";
 import {
   type CouponAiRecognitionProjector,
   type CouponAiSourceLoader,
   createCouponAiRecognitionEffectHandler,
 } from "./coupon-ai-recognition-effect";
+import { createCouponAiTextEffectHandler } from "./coupon-ai-text-effect";
 import {
   type CouponIntakeCardGateway,
   createCouponIntakeCardEffectHandler,
@@ -30,6 +34,10 @@ import {
   couponAiRecognitionEffectKind,
   PostgresCouponAiRecognitionRepository,
 } from "./postgres-coupon-ai-recognition-repository";
+import {
+  couponAiTextEffectKind,
+  PostgresCouponAiTextRepository,
+} from "./postgres-coupon-ai-text-repository";
 import { PostgresCouponCommandIntakeRepository } from "./postgres-coupon-command-intake-repository";
 import { PostgresDurableEffectRepository } from "./postgres-durable-effect-repository";
 import { getControlPlaneDatabase } from "./postgres-sql-database";
@@ -133,6 +141,10 @@ export function createDurableCouponControlPlaneWorker(input: {
     sourceLoader: CouponAiSourceLoader;
     projector: CouponAiRecognitionProjector;
   };
+  aiText?: {
+    gateway: CouponSupplementTextGateway;
+    projector: ReturnType<typeof createCouponAiTextProjector>;
+  };
 }): DurableCouponControlPlaneWorker {
   const commandRepository = new PostgresCouponCommandIntakeRepository(
     input.database,
@@ -158,12 +170,23 @@ export function createDurableCouponControlPlaneWorker(input: {
         ...input.aiRecognition,
       });
   }
+  if (input.aiText) {
+    handlers[couponAiTextEffectKind] = createCouponAiTextEffectHandler({
+      repository: new PostgresCouponAiTextRepository(input.database),
+      ...input.aiText,
+    });
+  }
   const effectWorker = new DurableEffectWorker(
     new PostgresDurableEffectRepository(input.database),
     handlers,
     {
       serializationKey(effect) {
-        if (effect.kind !== couponAiRecognitionEffectKind) return undefined;
+        if (
+          effect.kind !== couponAiRecognitionEffectKind &&
+          effect.kind !== couponAiTextEffectKind
+        ) {
+          return undefined;
+        }
         const businessTaskId = effect.requestPayload.businessTaskId;
         return typeof businessTaskId === "string" && businessTaskId
           ? `coupon-ai:${businessTaskId}`
@@ -188,8 +211,15 @@ export function createConfiguredDurableCouponControlPlaneWorker(): DurableCoupon
         projector: createCouponThreeSourceAiProjector(),
       }
     : undefined;
+  const aiText = isCouponThreeSourceAiRecognitionEnabled()
+    ? {
+        gateway: createDeepSeekTextGateway(getCouponThreeSourceAiConfig()),
+        projector: createCouponAiTextProjector(),
+      }
+    : undefined;
   return createDurableCouponControlPlaneWorker({
     database: getControlPlaneDatabase(),
     aiRecognition,
+    aiText,
   });
 }

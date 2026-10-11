@@ -360,7 +360,10 @@ function ownerDefaultValue(
     draft.recognitions.couponTable?.ai?.result?.activityCopyCandidates?.find(
       (candidate) => candidate.key === key,
     );
-  return copy?.value;
+  if (copy?.value) return copy.value;
+  return draft.recognitions.couponTable?.couponFieldCandidates[key]
+    ?.flatMap((candidate) => candidate.sampleValues)
+    .find((value) => value.trim());
 }
 
 function missingOwnerFields(
@@ -434,6 +437,43 @@ export function buildCouponThreeSourceMappingCard(
           required: true,
           width: "fill",
         },
+        {
+          tag: "select_static",
+          name: "owner_businessMode",
+          placeholder: plainText("请选择业务模式"),
+          required: true,
+          width: "fill",
+          options: [
+            { text: plainText("严选"), value: "严选" },
+            { text: plainText("寄卖"), value: "寄卖" },
+            { text: plainText("POP"), value: "pop" },
+          ],
+        },
+        {
+          tag: "input",
+          name: "owner_activityName",
+          label: plainText("活动名称"),
+          input_type: "text",
+          ...(ownerDefaultValue(draft, "activityName")
+            ? { default_value: ownerDefaultValue(draft, "activityName") }
+            : {}),
+          required: true,
+          width: "fill",
+        },
+        {
+          tag: "input",
+          name: "owner_activityBackground",
+          label: plainText("活动背景"),
+          input_type: "multiline_text",
+          rows: 3,
+          ...(ownerDefaultValue(draft, "activityBackground")
+            ? {
+                default_value: ownerDefaultValue(draft, "activityBackground"),
+              }
+            : {}),
+          required: true,
+          width: "fill",
+        },
         ...(draft.task.blacklistStatus === "absent_pending_confirmation"
           ? [
               {
@@ -461,34 +501,41 @@ export function buildCouponThreeSourceMappingCard(
               required: true,
             }),
           ),
-        ...missingOwnerFields(coupon).map((key) => ({
-          ...(key === "businessMode"
-            ? {
-                tag: "select_static",
-                name: "owner_businessMode",
-                placeholder: plainText("请选择业务模式"),
-                required: true,
-                width: "fill",
-                options: [
-                  { text: plainText("严选"), value: "严选" },
-                  { text: plainText("寄卖"), value: "寄卖" },
-                  { text: plainText("POP"), value: "pop" },
-                ],
-              }
-            : {
-                tag: "input",
-                name: `owner_${key}`,
-                label: plainText(fieldLabels[key] ?? "补充信息"),
-                input_type:
-                  key === "activityBackground" ? "multiline_text" : "text",
-                ...(key === "activityBackground" ? { rows: 3 } : {}),
-                ...(ownerDefaultValue(draft, key)
-                  ? { default_value: ownerDefaultValue(draft, key) }
-                  : {}),
-                required: true,
-                width: "fill",
-              }),
-        })),
+        ...missingOwnerFields(coupon)
+          .filter(
+            (key) =>
+              !["businessMode", "activityName", "activityBackground"].includes(
+                key,
+              ),
+          )
+          .map((key) => ({
+            ...(key === "businessMode"
+              ? {
+                  tag: "select_static",
+                  name: "owner_businessMode",
+                  placeholder: plainText("请选择业务模式"),
+                  required: true,
+                  width: "fill",
+                  options: [
+                    { text: plainText("严选"), value: "严选" },
+                    { text: plainText("寄卖"), value: "寄卖" },
+                    { text: plainText("POP"), value: "pop" },
+                  ],
+                }
+              : {
+                  tag: "input",
+                  name: `owner_${key}`,
+                  label: plainText(fieldLabels[key] ?? "补充信息"),
+                  input_type:
+                    key === "activityBackground" ? "multiline_text" : "text",
+                  ...(key === "activityBackground" ? { rows: 3 } : {}),
+                  ...(ownerDefaultValue(draft, key)
+                    ? { default_value: ownerDefaultValue(draft, key) }
+                    : {}),
+                  required: true,
+                  width: "fill",
+                }),
+          })),
         ...optionalOwnerSupplementKeys
           .filter(
             (key) =>

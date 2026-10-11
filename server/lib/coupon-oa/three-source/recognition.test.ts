@@ -1,6 +1,9 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
-import { parseSingleCouponIdentifierList } from "./lists";
+import {
+  parseMultiSheetTieredIdentifierList,
+  parseSingleCouponIdentifierList,
+} from "./lists";
 import {
   confirmRegularFullReductionCoupon,
   confirmRegularFullReductionCouponSet,
@@ -220,5 +223,59 @@ describe("single coupon identifier list", () => {
     expect(parsed.confirmedCouponName).toBe("满100减20");
     expect(parsed.selectedSheetName).toBe("任意业务命名");
     expect(parsed.entries.map((entry) => entry.id)).toEqual(["00123"]);
+  });
+});
+
+describe("multi-sheet identifier list", () => {
+  it("parses every registered tier Sheet without selecting one Sheet", async () => {
+    const workbook = new ExcelJS.Workbook();
+    for (const [sheetName, sku] of [
+      ["满999减60", "00123"],
+      ["满1999减120", "00999"],
+    ] as const) {
+      const sheet = workbook.addWorksheet(sheetName);
+      sheet.getCell("A1").value = "sku";
+      sheet.getCell("A2").value = sku;
+      sheet.getCell("A2").numFmt = "@";
+    }
+    const source: OfflineSourceFile = {
+      fileName: "商品白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["满999减60", "00123"],
+      ["满1999减120", "00999"],
+    ]);
+  });
+
+  it("keeps valid sibling Sheets when one Sheet is not registered", async () => {
+    const workbook = new ExcelJS.Workbook();
+    for (const sheetName of ["满999减60", "业务临时档"]) {
+      const sheet = workbook.addWorksheet(sheetName);
+      sheet.getCell("A1").value = "sku";
+      sheet.getCell("A2").value = `${sheetName}-sku`;
+      sheet.getCell("A2").numFmt = "@";
+    }
+    const source: OfflineSourceFile = {
+      fileName: "商品白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.issues).toContain("业务临时档 无法唯一映射到已登记券档");
   });
 });

@@ -257,6 +257,16 @@ export interface ParsedTieredIdentifierList {
   issues: string[];
 }
 
+export interface MultiSheetListSelection {
+  sheets: Record<
+    string,
+    {
+      templateTier: MultiTierSkuSheetName;
+      identifierCandidateId?: string;
+    }
+  >;
+}
+
 export interface SingleCouponIdentifierEntry {
   id: string;
   provenance: SourceProvenance;

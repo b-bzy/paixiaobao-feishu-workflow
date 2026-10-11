@@ -7,6 +7,7 @@ import {
 import { selectUniqueListCandidate } from "./recognition";
 import type {
   ListColumnCandidate,
+  MultiSheetListSelection,
   OfflineSourceFile,
   OverlapDecision,
   OverlapSnapshot,
@@ -230,6 +231,110 @@ export async function parseTieredIdentifierList(
     role: input.role,
     sourceHash: hashValue,
     dimension: identifier.dimension,
+    entries,
+    issues,
+  };
+}
+
+export async function parseMultiSheetTieredIdentifierList(input: {
+  recognition: WorkbookRecognition;
+  role: "whitelist" | "blacklist";
+  selection?: MultiSheetListSelection;
+}): Promise<ParsedTieredIdentifierList> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Buffer.from(input.recognition.source.bytes) as never,
+  );
+  const sourceHashValue =
+    input.recognition.sourceHash || sourceHash(input.recognition.source);
+  const entries: ParsedTieredIdentifierList["entries"] = [];
+  const issues: string[] = [];
+  const seenIds = new Set<string>();
+  const seenTiers = new Set<MultiTierSkuSheetName>();
+  const identifierCandidates = input.recognition.listCandidates.filter(
+    (candidate) => candidate.kind === "identifier",
+  );
+
+  for (const worksheet of workbook.worksheets) {
+    const sheetCandidates = identifierCandidates.filter(
+      (candidate) => candidate.sheetName === worksheet.name,
+    );
+    if (!sheetCandidates.length) continue;
+    const selected = input.selection?.sheets[worksheet.name];
+    const resolvedTier = selected?.templateTier ?? tierName(worksheet.name);
+    if (!resolvedTier) {
+      issues.push(`${worksheet.name} 无法唯一映射到已登记券档`);
+      continue;
+    }
+    if (seenTiers.has(resolvedTier)) {
+      issues.push(`${worksheet.name} 与其他 Sheet 重复映射券档 ${resolvedTier}`);
+      continue;
+    }
+    seenTiers.add(resolvedTier);
+    const identifier = selected?.identifierCandidateId
+      ? sheetCandidates.find(
+          (candidate) => candidate.id === selected.identifierCandidateId,
+        )
+      : sheetCandidates.length === 1
+        ? sheetCandidates[0]
+        : undefined;
+    if (!identifier) {
+      issues.push(`${worksheet.name} 存在多个 SKU 列候选，需要业务员确认`);
+      continue;
+    }
+    if (identifier.dimension !== "SKU") {
+      issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
+      continue;
+    }
+    const column = worksheet.getColumn(identifier.column).number;
+    for (
+      let rowNumber = identifier.headerRow + 1;
+      rowNumber <= worksheet.rowCount;
+      rowNumber += 1
+    ) {
+      const cell = worksheet.getRow(rowNumber).getCell(column);
+      const raw = cellText(cell);
+      if (!raw) continue;
+      const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
+      if (isFormula(cell) || /^[=+@-]/.test(raw)) {
+        issues.push(`${location} 不能使用公式作为 SKU`);
+        continue;
+      }
+      if (typeof cell.value === "number") {
+        issues.push(`${location} 是数值格式，无法确认前导零`);
+        continue;
+      }
+      if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
+        issues.push(`${location} 包含多个 SKU 或分隔符`);
+        continue;
+      }
+      if (seenIds.has(raw)) {
+        issues.push(`${location} 与前序 SKU 重复：${raw}`);
+        continue;
+      }
+      seenIds.add(raw);
+      entries.push({
+        id: raw,
+        tier: resolvedTier,
+        provenance: provenance({
+          source: input.recognition.source,
+          sourceHash: sourceHashValue,
+          worksheet,
+          row: rowNumber,
+          column: identifier.column,
+          rawValue: raw,
+          normalizedValue: raw,
+        }),
+      });
+    }
+  }
+  if (!entries.length && !issues.length) {
+    issues.push("未发现任何可用名单 Sheet");
+  }
+  return {
+    role: input.role,
+    sourceHash: sourceHashValue,
+    dimension: "SKU",
     entries,
     issues,
   };

@@ -168,6 +168,22 @@ export async function generateRegularFullReductionWorkbook(input: {
   computed: CouponPilotComputedValues;
   revision: number;
 }): Promise<GeneratedWorkbook> {
+  return generateRegularFullReductionWorkbookSet({
+    templateBytes: input.templateBytes,
+    tiers: [{ data: input.data, computed: input.computed }],
+    revision: input.revision,
+  });
+}
+
+export async function generateRegularFullReductionWorkbookSet(input: {
+  templateBytes: Uint8Array;
+  tiers: Array<{
+    data: CouponPilotInput;
+    computed: CouponPilotComputedValues;
+  }>;
+  revision: number;
+}): Promise<GeneratedWorkbook> {
+  if (!input.tiers.length) throw new Error("配券表至少需要一个券档");
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(Buffer.from(input.templateBytes) as never);
   const worksheet = workbook.getWorksheet(
@@ -176,25 +192,36 @@ export async function generateRegularFullReductionWorkbook(input: {
   if (!worksheet) throw new Error("常规满减券模板缺少工作表“满减券”");
 
   removeInstructionRows(worksheet);
-  const channels = input.data.channels;
-  for (let index = 1; index < channels.length; index += 1) {
+  const rows = input.tiers.flatMap((tier) =>
+    tier.data.channels.map((channel) => ({ ...tier, channel })),
+  );
+  for (let index = 1; index < rows.length; index += 1) {
     const targetRowNumber = 2 + index;
     worksheet.insertRow(targetRowNumber, []);
     copyBlueprintRow(worksheet, 2, targetRowNumber);
   }
-  for (const [index, channel] of channels.entries()) {
-    setCouponRow(worksheet, 2 + index, input.data, input.computed, channel);
+  for (const [index, row] of rows.entries()) {
+    setCouponRow(
+      worksheet,
+      2 + index,
+      row.data,
+      row.computed,
+      row.channel,
+    );
   }
 
   const bytes = xlsxBytes(await workbook.xlsx.writeBuffer());
-  await verifyRegularFullReductionWorkbook(bytes, channels.length);
-  const activitySlug = input.data.activityName.replace(/[\\/:*?"<>|]/g, "-");
+  await verifyRegularFullReductionWorkbook(bytes, rows.length);
+  const activitySlug = input.tiers[0].data.activityName.replace(
+    /[\\/:*?"<>|]/g,
+    "-",
+  );
   return {
     bytes,
     mimeType: xlsxMimeType,
     fileName: `配券信息表_${activitySlug}_v${input.revision}.xlsx`,
     sha256: sha256(bytes),
-    rowCount: channels.length,
+    rowCount: rows.length,
   };
 }
 

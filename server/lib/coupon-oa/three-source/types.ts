@@ -234,12 +234,19 @@ export interface AiListCandidate {
   reason: string;
 }
 
+export interface AiActivityCopyCandidate {
+  key: "activityName" | "activityBackground";
+  value: string;
+  evidenceCells: string[];
+}
+
 export interface ValidatedAiRecognition {
   sourceHash: string;
   roleCandidates: AiSourceRoleCandidate[];
   couponCandidates: CouponCandidate[];
   fieldCandidates: AiCouponFieldCandidate[];
   listCandidates: AiListCandidate[];
+  activityCopyCandidates?: AiActivityCopyCandidate[];
   issues: string[];
 }
 

@@ -96,6 +96,18 @@ describe("coupon three-source AI recognition", () => {
             reason: "sku 表头",
           },
         ],
+        activityCopyCandidates: [
+          {
+            key: "activityName",
+            value: "满100减20测试活动",
+            evidence: { sheetName: "配券", cells: ["A2", "B2"] },
+          },
+          {
+            key: "activityBackground",
+            value: "面向满100减20券档的测试活动",
+            evidence: { sheetName: "配券", cells: ["A2", "B2"] },
+          },
+        ],
         warnings: [],
       },
     });
@@ -103,6 +115,7 @@ describe("coupon three-source AI recognition", () => {
     expect(result.couponCandidates).toHaveLength(1);
     expect(result.fieldCandidates).toHaveLength(1);
     expect(result.listCandidates).toHaveLength(1);
+    expect(result.activityCopyCandidates).toHaveLength(2);
     expect(result.issues).toContain("AI 优惠券候选引用不存在的坐标：配券!A9");
   });
 

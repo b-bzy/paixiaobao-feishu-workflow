@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import type {
   AiCouponFieldCandidate,
+  AiActivityCopyCandidate,
   AiListCandidate,
   AiSourceRoleCandidate,
   CouponCandidate,
@@ -11,7 +12,7 @@ import type {
   ValidatedAiRecognition,
 } from "./types";
 
-export const couponThreeSourceAiPromptVersion = "coupon-three-source-p0-ai-v1";
+export const couponThreeSourceAiPromptVersion = "coupon-three-source-p0-ai-v2";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -224,6 +225,16 @@ export const couponThreeSourceAiProposalSchema = z.object({
     )
     .max(100)
     .default([]),
+  activityCopyCandidates: z
+    .array(
+      z.object({
+        key: z.enum(["activityName", "activityBackground"]),
+        value: z.string().trim().min(1).max(4000),
+        evidence: evidenceSchema,
+      }),
+    )
+    .max(2)
+    .default([]),
   warnings: z.array(z.string().max(1000)).max(100).default([]),
 });
 
@@ -253,6 +264,7 @@ export function validateCouponThreeSourceAiProposal(input: {
       couponCandidates: [],
       fieldCandidates: [],
       listCandidates: [],
+      activityCopyCandidates: [],
       issues: ["AI 返回结构不符合严格候选 schema"],
     };
   }
@@ -338,12 +350,47 @@ export function validateCouponThreeSourceAiProposal(input: {
     listCandidates.push(candidate);
   }
 
+  const activityCopyCandidates: AiActivityCopyCandidate[] = [];
+  const couponRows = new Set(
+    couponCandidates.map((candidate) => `${candidate.sheetName}!${candidate.row}`),
+  );
+  for (const candidate of parsed.data.activityCopyCandidates) {
+    const invalid = candidate.evidence.cells.filter(
+      (cell) => !has(candidate.evidence.sheetName, cell),
+    );
+    const evidenceCells = candidate.evidence.cells.map(
+      (cell) => `${candidate.evidence.sheetName}!${cell}`,
+    );
+    const evidencedRows = new Set(
+      candidate.evidence.cells.map(
+        (cell) => `${candidate.evidence.sheetName}!${Number(cell.match(/\d+$/)?.[0])}`,
+      ),
+    );
+    if (invalid.length) {
+      issues.push(`AI 活动文案候选引用不存在的来源坐标：${invalid.join(",")}`);
+      continue;
+    }
+    if (
+      candidate.key === "activityBackground" &&
+      [...couponRows].some((row) => !evidencedRows.has(row))
+    ) {
+      issues.push("AI 活动背景没有覆盖全部券档来源行");
+      continue;
+    }
+    activityCopyCandidates.push({
+      key: candidate.key,
+      value: candidate.value,
+      evidenceCells,
+    });
+  }
+
   return {
     sourceHash: input.workbook.sourceHash,
     roleCandidates,
     couponCandidates,
     fieldCandidates,
     listCandidates,
+    activityCopyCandidates,
     issues,
   };
 }
@@ -359,9 +406,10 @@ export function buildCouponThreeSourceAiRequest(
       "只返回严格 JSON 候选；不得决定业务事实、模板、权限、生成或审批。",
       "所有候选必须引用输入中真实存在的 Sheet 和单元格坐标。",
       "P0 唯一支持的券型是 regular_full_reduction；无法识别时标为 unknown，明确为其他券型时标为 unsupported。",
+      "可根据已提供事实生成 activityName 和 activityBackground 候选；活动背景必须覆盖全部券档，不能编造日期、渠道、预算、GMV 或审批理由。",
     ].join("\n"),
     user: JSON.stringify({
-      task: "识别材料角色、优惠券行、字段坐标和名单列候选",
+      task: "识别材料角色、优惠券行、字段坐标、名单列和活动文案候选",
       promptVersion: couponThreeSourceAiPromptVersion,
       workbook,
     }),

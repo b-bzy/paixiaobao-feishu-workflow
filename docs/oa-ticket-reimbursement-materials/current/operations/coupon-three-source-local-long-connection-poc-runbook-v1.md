@@ -41,6 +41,8 @@
 
 部署明确 Git revision 后，配置现有 App/OA 草稿/三源资源变量，以及：
 
+`p0-three-source-direct-http` 的 Preview 构建会在 `DATABASE_URL` 有效时先执行仓库内追加式 control-plane migration；其他 Preview 分支、本地构建和 Production 均跳过。构建日志只能记录 migration 文件名与 applied/already applied 状态，不能打印连接串。
+
 | 变量 | POC 要求 |
 | --- | --- |
 | `FEISHU_RUNTIME_STAGE` | `local`。 |

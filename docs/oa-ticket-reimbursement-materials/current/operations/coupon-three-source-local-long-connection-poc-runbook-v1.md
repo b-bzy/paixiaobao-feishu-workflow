@@ -31,7 +31,7 @@
 | 产物 | 标准配券表、标准白名单、可选标准黑名单；源文件不进入 OA 附件。 |
 | OA | 只创建既有 OA 测试稿；`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`。 |
 | 恢复 | 不保证。forward failure、timeout、重复或未知状态一律停止并人工核对。 |
-| AI | 默认关闭；启用时只识别候选。第二轮 owner 确认后由确定性模板生成，DeepSeek 不参与生成。 |
+| AI | 默认关闭；启用 AI-primary 时优先理解任意 Excel 布局并提出带证据候选和活动文案。第二轮 owner 确认后由确定性模板生成，DeepSeek 不生成 Excel。 |
 
 ## 2. 部署前配置
 
@@ -56,6 +56,11 @@
 | `FEISHU_COUPON_OA_APPROVAL_CODE`、`FEISHU_COUPON_DRAFT_TABLE_ID` | 已验证的隔离 OA 测试稿配置。 |
 | `FEISHU_COUPON_THREE_SOURCE_PILOT_*` | 已创建的专属 Base/表/Drive；`..._PILOT_ENABLED=false` 直到测试窗口。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED` | 默认 `false`。只有完成迁移、worker、隐私与 kill-switch 核对后才可在单次窗口设为 `true`。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED` | 默认 `false`。仅在 AI recognition 已启用时可设为 `true`；开启后 AI 候选优先，规则只补缺项。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_AI_SHADOW_ENABLED` | 默认 `false`。只记录候选、不改变用户可见结果；不得与 primary 同时开启。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_ACTIVITY_COPY_ENABLED` | 默认 `false`。开启后才把通过事实校验的活动名称/背景候选回填第二轮卡。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED` | 默认 `false`。只用于缺年份日期和公开活动主题的软证据，不是通用互联网搜索。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT`、`..._TIMEOUT_MS` | 仅日历 Gate 开启时配置受控 HTTPS JSON endpoint；请求不得包含工作簿、员工、SKU 或券额。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS` | 默认 `45000`，允许范围 1000–120000。 |
 | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` | 只在 AI Gate 开启时需要；base URL 必须是官方 HTTPS endpoint。实际值不得进入聊天、日志或文档。 |
 | `DATABASE_URL`、`FEISHU_WORKER_ID`、`CONTROL_PLANE_TICK_TOKEN` | AI Gate 开启时必须配置；用于 migration 0005、durable effect 与受保护 tick。 |
@@ -114,7 +119,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 1. 在明确窗口为唯一测试用户打开 `FEISHU_COUPON_THREE_SOURCE_PILOT_ENABLED=true`。
 2. 在 Bot 单聊发送精确 `/OA优惠券提报`，确认收到材料收集卡。
 3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。上传阶段不应逐文件发卡或调用 DeepSeek；全部材料发送完后，在最初的收集卡点击“材料已上传完毕，开始统一识别”。
-4. AI 开启时只应出现一张“AI 识别中”；worker 完成整批识别后只应再出现一张汇总第二轮卡。在该卡确认唯一券模板类型、缺失字段、名单异常、OA 活动点位，以及未上传黑名单时的“本次无黑名单”声明；同一常规满减模板的多行是多个券档，不要求只选一行。已登记的名单多 Sheet 自动映射到对应券档。业务员也可用系统输入法把语音转写到可编辑补充说明框，检查文字后点击识别回填，再修改并提交。有白黑名单交集时再作出明确决定。
+4. AI-primary 开启时只应出现一张“AI 识别中”；worker 完成整批识别后只应再出现一张汇总第二轮卡。卡片必须只显示中文业务字段和摘要，不得出现 Sheet、列号、坐标、内部 key 或技术映射选择器。在该卡检查系统识别的唯一券模板、全部券档、缺失字段、名单摘要、OA 活动点位，以及未上传黑名单时的“本次无黑名单”声明；同一常规满减模板的多行是多个券档，不要求只选一行。已登记的名单多 Sheet 自动对应全部券档。无年份日期或公开活动主题必须标记“系统推测”并由 owner 确认。活动名称不得是占位语，活动背景必须覆盖全部券档。业务员也可用系统输入法把语音转写到可编辑补充说明框，检查文字后点击识别回填，再修改并提交。有白黑名单交集时再作出明确决定。
 5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀；严选 P0 不要求 `calcImage`。
 6. 点击“确认并创建 OA 测试稿”。收到既有 OA 草稿预览卡即为本次成功终点。
 7. **不点击**预览卡中的最终正式发送动作。核对 native kill switch 仍关闭，审批中心没有新增原生实例，草稿无 instance code/link。
@@ -129,7 +134,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 处理顺序：
 
 1. 保持 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`；有疑义先关闭所有 coupon pilot flag。
-2. 立即设置 `FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED=false`，停止新的 AI effect；已是终态但尚未投影的 run 只允许人工核对，不得重新外发。
+2. 立即设置 `FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED=false`、`FEISHU_COUPON_THREE_SOURCE_P0_ACTIVITY_COPY_ENABLED=false`、`FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED=false` 和 `FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED=false`，停止新的 AI effect；已是终态但尚未投影的 run 只允许人工核对，不得重新外发。
 3. Ctrl-C 停止本机 runner，确认其 child consumer 已退出。
 4. 不把飞书 ACK、runner stdout、HTTP 200 或卡片重试解释为已安全处理。
 5. 人工核对已有 Base/Drive 标准产物和 OA 测试稿；不得以“补偿”为由创建真实 OA。

@@ -11,6 +11,19 @@ import type {
 export const threeSourceRuleVersion = "three-source-offline-v1";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
+export type CandidateOrigin =
+  | "source_explicit"
+  | "ai_derived"
+  | "ai_inferred"
+  | "rule_fallback"
+  | "owner_supplied";
+
+export interface CandidateEvidence {
+  sourceHash: string;
+  sheetName: string;
+  cells: string[];
+  region?: { startCell: string; endCell: string };
+}
 export type CouponType = "regular_full_reduction";
 export type CouponTemplateKind =
   | "regular_full_reduction"
@@ -223,6 +236,9 @@ export interface AiCouponFieldCandidate {
   valueCell: string;
   confidence: number;
   reason: string;
+  value?: string | number | boolean | string[];
+  origin?: CandidateOrigin;
+  evidence?: CandidateEvidence;
 }
 
 export interface AiListCandidate {
@@ -240,6 +256,34 @@ export interface AiActivityCopyCandidate {
   evidenceCells: string[];
 }
 
+export interface AiTemplateCandidate {
+  id: string;
+  templateKind: CouponTemplateKind;
+  confidence: number;
+  supported: boolean;
+  evidence: CandidateEvidence;
+  reason: string;
+}
+
+export interface AiTierCandidate {
+  id: string;
+  templateKind: CouponTemplateKind;
+  displayName: string;
+  row: number;
+  evidence: CandidateEvidence;
+}
+
+export interface AiSkuRegionCandidate {
+  id: string;
+  role: "whitelist" | "blacklist" | "unknown";
+  dimension: IdentifierDimension;
+  tierDisplayName?: string;
+  headerCell: string;
+  confidence: number;
+  reason: string;
+  evidence: CandidateEvidence;
+}
+
 export interface ValidatedAiRecognition {
   sourceHash: string;
   roleCandidates: AiSourceRoleCandidate[];
@@ -247,6 +291,20 @@ export interface ValidatedAiRecognition {
   fieldCandidates: AiCouponFieldCandidate[];
   listCandidates: AiListCandidate[];
   activityCopyCandidates?: AiActivityCopyCandidate[];
+  templateCandidates?: AiTemplateCandidate[];
+  tierCandidates?: AiTierCandidate[];
+  skuRegionCandidates?: AiSkuRegionCandidate[];
+  issues: string[];
+}
+
+export interface AiPrimaryRecognitionProjection {
+  sourceHash: string;
+  mode: "ai_primary" | "rule_fallback";
+  couponCandidates: CouponCandidate[];
+  fieldCandidates: AiCouponFieldCandidate[];
+  templateCandidates: AiTemplateCandidate[];
+  tierCandidates: AiTierCandidate[];
+  skuRegionCandidates: AiSkuRegionCandidate[];
   issues: string[];
 }
 

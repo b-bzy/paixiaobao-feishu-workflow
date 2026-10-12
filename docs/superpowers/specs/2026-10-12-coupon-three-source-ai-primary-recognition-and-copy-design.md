@@ -288,6 +288,10 @@ AI 首先判断模板类型，再在该模板内部识别全部券档和名单�
 ## 10. 任务、幂等和错误处理
 
 AI 调用继续通过 durable task/effect 执行，不能放进飞书同步事件或卡片回调。
+P0 实现把公共日历软证据和活动文案 proposal 合并到现有工作簿识别 effect：日历
+只接收月日窗口并在 DeepSeek 调用前完成，文案与字段候选由同一响应返回并分别
+校验。这样 projection 重试不会重复查询日历或调用 DeepSeek，也不新增可独立
+重放的外发副作用。
 
 工作簿识别 effect 的语义键至少绑定：
 
@@ -295,30 +299,23 @@ AI 调用继续通过 durable task/effect 执行，不能放进飞书同步事�
 draft_id + revision + source_role + source_sha256 + model + prompt_version
 ```
 
-活动文案 effect 的语义键至少绑定：
-
-```text
-draft_id + revision + canonical_fact_hash + model + copy_prompt_version
-```
-
-公共日历 effect 的语义键至少绑定：
-
-```text
-date_window + locale + provider + query_version
-```
+文案事实合同版本和公共日历查询版本进入识别请求及审计摘要；它们不作为独立
+effect 运行。若未来拆分，必须新增 ADR 和各自的稳定语义键，不能直接复用当前
+投影重试。
 
 错误处理：
 
 | 场景 | 行为 |
 | --- | --- |
-| DeepSeek 短暂网络错误、429 或 5xx | 同一 effect 最多自动重试一次 |
+| DeepSeek 超时或网络结果未知 | 记录终态 `outcome_unknown`，不自动再次外发 |
+| DeepSeek 429 或 5xx | 记录失败并进入规则降级，不在投影重试中再次外发 |
 | 上下文过长、schema 无效或引用不存在 | 不重复外发，进入规则降级 |
 | AI 部分字段有效 | 保留通过验证的候选，其余进入统一二轮询问 |
 | 公共日历失败或冲突 | 不阻断识别；年份/主题标记为待确认或留空 |
 | 规则降级仍失败 | 用中文问题让业务员补充，不暴露映射界面 |
 | 旧 revision、错误 owner 或篡改 action | 拒绝并提示使用最新卡片 |
 | 重复事件、点击或投影 | 返回同一结果，不重复外发、不重复发卡、不重复生成 |
-| 文案事实覆盖校验失败 | 最多重生成一次，仍失败则人工编辑 |
+| 文案事实覆盖校验失败 | 丢弃该文案候选并由业务员人工编辑 |
 
 AI 失败不能清空业务员已输入内容，也不能返回成功后继续执行不完整副作用。
 

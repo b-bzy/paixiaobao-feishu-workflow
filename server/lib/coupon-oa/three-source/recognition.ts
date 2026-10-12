@@ -5,6 +5,7 @@ import {
   regularFullReductionInputSchema,
 } from "../calculation";
 import type {
+  AiPrimaryRecognitionProjection,
   ConfirmedCouponSetSource,
   ConfirmedCouponSource,
   CouponCandidate,
@@ -470,6 +471,48 @@ export async function discoverRegularFullReductionCoupons(input: {
   return discovered;
 }
 
+export async function resolveAiPrimaryRecognition(input: {
+  recognition: WorkbookRecognition;
+  aiRecognition?: ValidatedAiRecognition;
+}): Promise<AiPrimaryRecognitionProjection> {
+  const deterministic = await discoverRegularFullReductionCoupons({
+    recognition: input.recognition,
+  });
+  const ai =
+    input.aiRecognition?.sourceHash === input.recognition.sourceHash &&
+    !input.aiRecognition.issues.some((issue) => issue.includes("schema"))
+      ? input.aiRecognition
+      : undefined;
+  const couponCandidates = [...(ai?.couponCandidates ?? [])];
+  for (const candidate of deterministic) {
+    if (
+      !couponCandidates.some(
+        (current) =>
+          current.sheetName === candidate.sheetName &&
+          current.row === candidate.row,
+      )
+    ) {
+      couponCandidates.push(candidate);
+    }
+  }
+  return {
+    sourceHash: input.recognition.sourceHash,
+    mode: ai ? "ai_primary" : "rule_fallback",
+    couponCandidates,
+    fieldCandidates: ai?.fieldCandidates ?? [],
+    templateCandidates: ai?.templateCandidates ?? [],
+    tierCandidates: ai?.tierCandidates ?? [],
+    skuRegionCandidates: ai?.skuRegionCandidates ?? [],
+    issues: [
+      ...(ai?.issues ?? []),
+      ...(!ai && input.aiRecognition
+        ? ["AI 识别结果无效，已使用规则降级"]
+        : []),
+      ...input.recognition.issues,
+    ],
+  };
+}
+
 export function resolveCouponType(input: {
   candidates: CouponCandidate[];
   ownerConfirmedCouponType?: CouponType;
@@ -556,6 +599,21 @@ function normalizedOwnerValue(key: CouponFieldKey, value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
 }
 
+function normalizedValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function safelyNormalizeOwnerValue(
+  key: CouponFieldKey,
+  value: unknown,
+): unknown {
+  try {
+    return normalizedOwnerValue(key, value);
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ConfirmRegularFullReductionCouponInput {
   recognition: WorkbookRecognition;
   ownerId: string;
@@ -580,22 +638,9 @@ export class MultipleCouponCandidatesError extends Error {
 export async function confirmRegularFullReductionCoupon(
   input: ConfirmRegularFullReductionCouponInput,
 ): Promise<ConfirmedCouponSource> {
-  const deterministic = await discoverRegularFullReductionCoupons(input);
-  const aiCandidates =
-    input.aiRecognition?.sourceHash === input.recognition.sourceHash
-      ? input.aiRecognition.couponCandidates
-      : [];
-  const discovered = [...deterministic];
-  for (const candidate of aiCandidates) {
-    if (
-      !discovered.some(
-        (item) =>
-          item.sheetName === candidate.sheetName && item.row === candidate.row,
-      )
-    ) {
-      discovered.push(candidate);
-    }
-  }
+  const discovered = [
+    ...(await resolveAiPrimaryRecognition(input)).couponCandidates,
+  ];
   const resolution = resolveCouponType({
     candidates: discovered,
     ownerConfirmedCouponType: input.ownerConfirmedCouponType,
@@ -639,23 +684,21 @@ export async function confirmRegularFullReductionCoupon(
     const candidateIdValue =
       input.fieldCandidateIds?.[key] ?? selected.fieldCandidateIds[key];
     const candidates = input.recognition.couponFieldCandidates[key] ?? [];
-    const candidate = candidateIdValue
+    const explicitlySelectedCandidate = candidateIdValue
       ? candidates.find((item) => item.id === candidateIdValue)
-      : candidates.length === 1
-        ? candidates[0]
-        : undefined;
+      : undefined;
+    const aiCandidate = input.aiRecognition?.fieldCandidates.find(
+      (item) =>
+        item.key === key &&
+        item.sheetName === selected.sheetName &&
+        Number(item.valueCell.match(/\d+$/)?.[0]) === selected.row,
+    );
+    const candidate =
+      explicitlySelectedCandidate ??
+      (!aiCandidate && candidates.length === 1 ? candidates[0] : undefined);
     if (candidate && candidate.sheetName !== selected.sheetName) {
       throw new Error(`字段 ${key} 与已选择优惠券不在同一 Sheet`);
     }
-    const aiCandidate =
-      !candidate && input.aiRecognition
-        ? input.aiRecognition.fieldCandidates.find(
-            (item) =>
-              item.key === key &&
-              item.sheetName === selected.sheetName &&
-              Number(item.valueCell.match(/\d+$/)?.[0]) === selected.row,
-          )
-        : undefined;
     const aiColumn = aiCandidate?.valueCell.match(/^[A-Z]+/)?.[0];
     const source = candidate
       ? sourceCell(
@@ -676,21 +719,45 @@ export async function confirmRegularFullReductionCoupon(
         : undefined;
     const ownerProvided = Object.hasOwn(input.ownerFieldValues ?? {}, key);
     if (ownerProvided) {
-      if (source?.rawValue && !input.overrideReasons?.[key]?.trim()) {
-        throw new Error(`覆盖来源字段 ${key} 时必须填写原因`);
-      }
       const ownerValue = normalizedOwnerValue(
         key,
         input.ownerFieldValues?.[key],
       );
+      const sourceValue = source?.rawValue
+        ? safelyNormalizeOwnerValue(key, source.rawValue)
+        : undefined;
+      const aiValue =
+        aiCandidate?.value !== undefined
+          ? safelyNormalizeOwnerValue(key, aiCandidate.value)
+          : undefined;
+      const activityCopyValue = input.aiRecognition?.activityCopyCandidates
+        ?.filter((candidate) => candidate.key === key)
+        .map((candidate) => safelyNormalizeOwnerValue(key, candidate.value))
+        .find((value) => normalizedValuesEqual(value, ownerValue));
+      const confirmsRecognizedValue =
+        normalizedValuesEqual(sourceValue, ownerValue) ||
+        normalizedValuesEqual(aiValue, ownerValue) ||
+        activityCopyValue !== undefined ||
+        ((key === "activityName" || key === "activityBackground") &&
+          Boolean(ownerValue));
+      if (
+        source?.rawValue &&
+        !confirmsRecognizedValue &&
+        !input.overrideReasons?.[key]?.trim()
+      ) {
+        throw new Error("修改表格中的明确值时必须填写原因");
+      }
       values[key] = ownerValue;
       provenance[key] = {
         sourceHash: input.recognition.sourceHash,
         fileName: input.recognition.source.fileName,
         sheetName: selected.sheetName,
         row: selected.row,
-        column: candidate?.column ?? "OWNER",
-        cell: candidate ? `${candidate.column}${selected.row}` : "OWNER",
+        column: candidate?.column ?? aiColumn ?? "OWNER",
+        cell:
+          candidate || aiColumn
+            ? `${candidate?.column ?? aiColumn}${selected.row}`
+            : "OWNER",
         rawValue: String(input.ownerFieldValues?.[key] ?? ""),
         normalizedValue: String(ownerValue ?? ""),
         ruleVersion: threeSourceRuleVersion,
@@ -756,22 +823,9 @@ export async function confirmRegularFullReductionCoupon(
 export async function confirmRegularFullReductionCouponSet(
   input: Omit<ConfirmRegularFullReductionCouponInput, "couponCandidateId">,
 ): Promise<ConfirmedCouponSetSource> {
-  const deterministic = await discoverRegularFullReductionCoupons(input);
-  const aiCandidates =
-    input.aiRecognition?.sourceHash === input.recognition.sourceHash
-      ? input.aiRecognition.couponCandidates
-      : [];
-  const candidates = [...deterministic];
-  for (const candidate of aiCandidates) {
-    if (
-      !candidates.some(
-        (item) =>
-          item.sheetName === candidate.sheetName && item.row === candidate.row,
-      )
-    ) {
-      candidates.push(candidate);
-    }
-  }
+  const candidates = [
+    ...(await resolveAiPrimaryRecognition(input)).couponCandidates,
+  ];
   const supported = candidates
     .filter(
       (candidate) =>

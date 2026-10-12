@@ -382,11 +382,15 @@ Feishu transport
 - 第二轮按券模板而不是满减金额行判断歧义；同一常规满减模板中的多行作为多券档生成。缺字段记录 `ownerSupplement` provenance，覆盖非空源值必须附原因。活动点位不能从优惠比例推导。
 - 已登记白名单 Sheet 名自动映射到对应券档并保留多 Sheet 输出；生成器校验原模板 SHA-256，写入文本 SKU 后重新打开校验。
 - 卡片业务字段使用中文标签，业务模式提供“严选 / 寄卖 / POP”选择；补充说明使用可编辑多行文本框，兼容系统输入法语音转写。DeepSeek 可提出活动名称/背景候选，但确定性模板引擎只消费 owner 最终确认值。
+- AI-primary 开启时，`ai-recognition.ts` 的完整语义候选优先于表头别名；服务端逐项校验证据坐标、来源 hash、模板和券档。规则识别仅补足 AI 缺项。多行满减和多 Sheet 名单均属于同一模板的多个券档，不再显示技术列/Sheet 选择器。
+- 活动文案使用版本化合同：名称遵循“活动周期 + 业务模式 + 商品或活动主题 + 优惠券申请”，背景遵循“本期申请……，本期配置 N 档优惠券：全部券档；配合已证实主题或说明”。服务端校验占位名称、结构、全部券档覆盖和禁止编造事实；文案开关关闭时不得将 AI 文案投影到卡片。owner 已修改的值优先于任何 AI 或规则候选。
+- 无年份月日可生成标记为 `ai_inferred` 的完整日期候选。公共日历 gateway 默认关闭，只接收月日窗口、`zh-CN` 和查询版本；其候选与工作簿一起进入同一次 durable recognition 外发。日历失败安全降级，识别终态投影重试不再查询日历或外发工作簿。
 
-该增量由 [ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) 约束。`FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED` 默认 `false`；AI 关闭或失败时保留确定性识别和 owner 人工补充路径。它不改变 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`、源文件不得进入 OA 附件或 P0 单用户限制。
+该增量由 [ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) 和 [ADR-0012](../../../adr/0012-make-ai-primary-for-p0-three-source-recognition.md) 约束。所有 AI-primary、文案和公共日历开关默认 `false`；AI 关闭或失败时保留确定性识别和 owner 人工补充路径。它不改变 `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false`、源文件不得进入 OA 附件或 P0 单用户限制。
 
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-12 | v1.6 | 增加默认关闭的 AI-primary 证据合同、活动文案校验、无年份推测和公共日历软证据 | 当前仅代码与本地测试；不表示 Preview 已配置、飞书 E2E 已通过或能力已上线 |
 | 2026-10-11 | v1.5 | 多券档、多 Sheet 名单、中文第二轮卡与耐久补充说明识别 | 仍限常规满减、draft-only；寄卖/POP 生成 Gate 仍按当前能力拒绝 |
 | 2026-10-11 | v1.4 | 增加显式“上传完成”批量识别、prepare→Base→activate 顺序与同任务串行投影；无黑名单确认并入汇总第二轮 | 修复并发 AI 投影覆盖导致 pending 无 effect、无法返回第二轮卡的问题 |
 | 2026-10-11 | v1.3 | 收敛多来源上传与 AI 终态投影的中间卡片，避免每个来源各追加一张“AI 识别中” | 保留每条来源消息与 AI run 的耐久幂等；仅收敛用户可见状态卡 |

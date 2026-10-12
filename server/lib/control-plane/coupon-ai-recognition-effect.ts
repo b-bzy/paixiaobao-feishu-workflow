@@ -3,11 +3,13 @@ import {
   serializeWorkbookForAi,
   validateCouponThreeSourceAiProposal,
 } from "../coupon-oa/three-source/ai-recognition";
+import { findMonthDayWindowInTexts } from "../coupon-oa/three-source/public-calendar";
 import type {
   AiAuditSummary,
   OfflineSourceFile,
 } from "../coupon-oa/three-source/types";
 import type { CouponThreeSourceAiGateway } from "../feishu/deepseek-chat-gateway";
+import type { PublicCampaignCalendarGateway } from "../feishu/public-campaign-calendar-gateway";
 import type { DurableEffectResult } from "./durable-effect-worker";
 import { sha256Bytes } from "./object-store";
 import type {
@@ -77,6 +79,7 @@ export function createCouponAiRecognitionEffectHandler(input: {
   gateway: CouponThreeSourceAiGateway;
   sourceLoader: CouponAiSourceLoader;
   projector: CouponAiRecognitionProjector;
+  calendarGateway?: PublicCampaignCalendarGateway;
 }): (effect: DurableEffect) => Promise<DurableEffectResult> {
   return async (effect) => {
     let reference: { runId: string; businessTaskId: string };
@@ -114,7 +117,35 @@ export function createCouponAiRecognitionEffectHandler(input: {
         };
       }
       const workbook = await serializeWorkbookForAi(source);
-      const gateway = await input.gateway.recognize({ workbook });
+      const monthDayWindow = findMonthDayWindowInTexts(
+        workbook.sheets.flatMap((sheet) =>
+          sheet.rows.flatMap((row) =>
+            row.cells.flatMap((cell) =>
+              typeof cell.value === "string" ? [cell.value] : [],
+            ),
+          ),
+        ),
+      );
+      let calendar:
+        | Awaited<ReturnType<PublicCampaignCalendarGateway["lookup"]>>
+        | undefined;
+      if (monthDayWindow && input.calendarGateway) {
+        try {
+          calendar = await input.calendarGateway.lookup({
+            ...monthDayWindow,
+            locale: "zh-CN",
+            queryVersion: "coupon-public-calendar-v1",
+          });
+        } catch {
+          calendar = { ok: false, code: "network_error" };
+        }
+      }
+      const gateway = await input.gateway.recognize({
+        workbook,
+        publicCampaignCandidates: calendar?.ok
+          ? calendar.candidates
+          : undefined,
+      });
       if (gateway.ok) {
         const result = validateCouponThreeSourceAiProposal({
           proposal: gateway.proposal,

@@ -9,6 +9,7 @@ import {
   confirmRegularFullReductionCouponSet,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
+  resolveAiPrimaryRecognition,
   resolveCouponType,
 } from "./recognition";
 import type { OfflineSourceFile } from "./types";
@@ -83,6 +84,71 @@ async function couponSource(rows: string[][]): Promise<OfflineSourceFile> {
 }
 
 describe("single coupon confirmation", () => {
+  it("uses validated AI candidates first and rules only for missing rows", async () => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([
+        couponRow("活动A", "100", "20"),
+        couponRow("活动B", "200", "30"),
+      ]),
+    );
+    const projection = await resolveAiPrimaryRecognition({
+      recognition,
+      aiRecognition: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [
+          {
+            id: "ai-row-2",
+            couponType: "regular_full_reduction",
+            displayName: "AI识别活动A",
+            sourceHash: recognition.sourceHash,
+            sheetName: "配券表",
+            row: 2,
+            evidenceCells: ["A2", "H2", "I2"],
+            fieldCandidateIds: {},
+            source: "ai",
+          },
+        ],
+        fieldCandidates: [],
+        listCandidates: [],
+        templateCandidates: [],
+        tierCandidates: [],
+        skuRegionCandidates: [],
+        issues: [],
+      },
+    });
+    expect(projection.mode).toBe("ai_primary");
+    expect(projection.couponCandidates).toHaveLength(2);
+    expect(projection.couponCandidates[0]).toMatchObject({
+      id: "ai-row-2",
+      source: "ai",
+    });
+    expect(projection.couponCandidates[1]).toMatchObject({
+      row: 3,
+      source: "deterministic",
+    });
+  });
+
+  it("falls back to rules after an invalid AI schema", async () => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([couponRow("活动A", "100", "20")]),
+    );
+    const projection = await resolveAiPrimaryRecognition({
+      recognition,
+      aiRecognition: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [],
+        listCandidates: [],
+        issues: ["AI 返回结构不符合严格候选 schema"],
+      },
+    });
+    expect(projection.mode).toBe("rule_fallback");
+    expect(projection.couponCandidates[0].source).toBe("deterministic");
+    expect(projection.issues).toContain("AI 识别结果无效，已使用规则降级");
+  });
+
   it("discovers one row and binds confirmation to its stable ID", async () => {
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([couponRow("活动A", "100", "20")]),
@@ -158,11 +224,58 @@ describe("single coupon confirmation", () => {
         revision: 1,
         couponCandidateId: candidate.id,
         ownerFieldValues: {
-          activityName: "覆盖活动",
+          thresholdYuan: 999,
           activityPointPercent: 6,
         },
       }),
-    ).rejects.toThrow("覆盖来源字段 activityName 时必须填写原因");
+    ).rejects.toThrow("修改表格中的明确值时必须填写原因");
+  });
+
+  it("accepts an owner-confirmed AI inference without a separate override reason", async () => {
+    const row = couponRow("活动A", "100", "20");
+    row[4] = "9月30日";
+    row[5] = "2030-10-10";
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row]),
+    );
+    const [candidate] = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    const confirmed = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 2,
+      couponCandidateId: candidate.id,
+      ownerFieldValues: {
+        activityStartAt: "2030-09-30",
+        activityPointPercent: 6,
+      },
+      aiRecognition: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [
+          {
+            key: "activityStartAt",
+            sheetName: "配券表",
+            headerCell: "E1",
+            valueCell: "E2",
+            confidence: 0.8,
+            reason: "缺少年份，按当前时间推测",
+            value: "2030-09-30",
+            origin: "ai_inferred",
+          },
+        ],
+        listCandidates: [],
+        issues: [],
+      },
+    });
+
+    expect(confirmed.input.activityStartAt).toBe("2030-09-30");
+    expect(confirmed.provenance.activityStartAt).toMatchObject({
+      sourceKind: "ownerSupplement",
+      cell: "E2",
+    });
   });
 
   it("allows validated owner supplements for a missing source field", async () => {
@@ -224,6 +337,49 @@ describe("single coupon identifier list", () => {
 });
 
 describe("multi-sheet identifier list", () => {
+  it("uses AI-primary SKU regions before deterministic header aliases", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("业务导出页");
+    sheet.getCell("C2").value = "货号信息";
+    sheet.getCell("C3").value = "00123";
+    sheet.getCell("C3").numFmt = "@";
+    sheet.getCell("C4").value = "00999";
+    sheet.getCell("C4").numFmt = "@";
+    const source: OfflineSourceFile = {
+      fileName: "任意布局白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      aiSkuRegions: [
+        {
+          id: "ai-region-1",
+          role: "whitelist",
+          dimension: "SKU",
+          tierDisplayName: "满1999减120",
+          headerCell: "C2",
+          confidence: 0.98,
+          reason: "AI 识别为商品 SKU 数据区域",
+          evidence: {
+            sourceHash: recognition.sourceHash,
+            sheetName: "业务导出页",
+            cells: ["C2", "C3", "C4"],
+            region: { startCell: "C3", endCell: "C4" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["满1999减120", "00123"],
+      ["满1999减120", "00999"],
+    ]);
+  });
+
   it("parses every registered tier Sheet without selecting one Sheet", async () => {
     const workbook = new ExcelJS.Workbook();
     for (const [sheetName, sku] of [

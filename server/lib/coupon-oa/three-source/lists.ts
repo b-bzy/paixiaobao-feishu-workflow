@@ -6,6 +6,7 @@ import {
 } from "../../excel-template-engine/template-manifests";
 import { selectUniqueListCandidate } from "./recognition";
 import type {
+  AiSkuRegionCandidate,
   ListColumnCandidate,
   MultiSheetListSelection,
   OfflineSourceFile,
@@ -53,6 +54,13 @@ function tierName(value: string): MultiTierSkuSheetName | undefined {
   return multiTierSkuSheetNames.find(
     (tier) =>
       tier.toLowerCase().replace(/[\s_\-－—（）()：:]/g, "") === normalized,
+  );
+}
+
+function columnNumber(column: string): number {
+  return [...column].reduce(
+    (value, character) => value * 26 + character.charCodeAt(0) - 64,
+    0,
   );
 }
 
@@ -240,6 +248,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   recognition: WorkbookRecognition;
   role: "whitelist" | "blacklist";
   selection?: MultiSheetListSelection;
+  aiSkuRegions?: AiSkuRegionCandidate[];
 }): Promise<ParsedTieredIdentifierList> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
@@ -254,6 +263,106 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   const identifierCandidates = input.recognition.listCandidates.filter(
     (candidate) => candidate.kind === "identifier",
   );
+  const aiRegions = (input.aiSkuRegions ?? []).filter(
+    (candidate) => candidate.role === input.role,
+  );
+
+  if (aiRegions.length) {
+    for (const region of aiRegions) {
+      const worksheet = workbook.getWorksheet(region.evidence.sheetName);
+      const bounds = region.evidence.region;
+      if (!worksheet || !bounds) {
+        issues.push("系统识别的名单区域已失效，请重新上传材料");
+        continue;
+      }
+      if (region.dimension !== "SKU") {
+        issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
+        continue;
+      }
+      const headerColumnName = region.headerCell.match(/^[A-Z]+/)?.[0];
+      const startColumnName = bounds.startCell.match(/^[A-Z]+/)?.[0];
+      const endColumnName = bounds.endCell.match(/^[A-Z]+/)?.[0];
+      const startRow = Number(bounds.startCell.match(/\d+$/)?.[0]);
+      const endRow = Number(bounds.endCell.match(/\d+$/)?.[0]);
+      if (
+        !headerColumnName ||
+        !startColumnName ||
+        !endColumnName ||
+        !Number.isInteger(startRow) ||
+        !Number.isInteger(endRow)
+      ) {
+        issues.push(`${worksheet.name} 的名单坐标无法通过服务端校验`);
+        continue;
+      }
+      const headerColumn = columnNumber(headerColumnName);
+      const startColumn = columnNumber(startColumnName);
+      const endColumn = columnNumber(endColumnName);
+      if (
+        startRow > endRow ||
+        headerColumn < Math.min(startColumn, endColumn) ||
+        headerColumn > Math.max(startColumn, endColumn)
+      ) {
+        issues.push(`${worksheet.name} 的名单区域无法通过服务端校验`);
+        continue;
+      }
+      const resolvedTier =
+        (region.tierDisplayName
+          ? tierName(region.tierDisplayName)
+          : undefined) ??
+        tierName(worksheet.name) ??
+        (aiRegions.length === 1 ? multiTierSkuSheetNames[0] : undefined);
+      if (!resolvedTier) {
+        issues.push(`${worksheet.name} 无法唯一对应已登记券档`);
+        continue;
+      }
+      for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+        const cell = worksheet.getRow(rowNumber).getCell(headerColumn);
+        const raw = cellText(cell);
+        if (!raw) continue;
+        const location = `${worksheet.name}!${cell.address}`;
+        if (isFormula(cell) || /^[=+@-]/.test(raw)) {
+          issues.push(`${location} 不能使用公式作为 SKU`);
+          continue;
+        }
+        if (typeof cell.value === "number") {
+          issues.push(`${location} 是数值格式，无法确认前导零`);
+          continue;
+        }
+        if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
+          issues.push(`${location} 包含多个 SKU 或分隔符`);
+          continue;
+        }
+        if (seenIds.has(raw)) {
+          issues.push(`${location} 与前序 SKU 重复：${raw}`);
+          continue;
+        }
+        seenIds.add(raw);
+        entries.push({
+          id: raw,
+          tier: resolvedTier,
+          provenance: provenance({
+            source: input.recognition.source,
+            sourceHash: sourceHashValue,
+            worksheet,
+            row: rowNumber,
+            column: headerColumnName,
+            rawValue: raw,
+            normalizedValue: raw,
+          }),
+        });
+      }
+    }
+    if (!entries.length && !issues.length) {
+      issues.push("系统识别的名单区域没有可用 SKU");
+    }
+    return {
+      role: input.role,
+      sourceHash: sourceHashValue,
+      dimension: "SKU",
+      entries,
+      issues,
+    };
+  }
 
   for (const worksheet of workbook.worksheets) {
     const sheetCandidates = identifierCandidates.filter(

@@ -46,6 +46,21 @@ describe("coupon supplement text AI contract", () => {
     expect(result.warnings).toContain("AI 返回结构不符合补充字段格式");
   });
 
+  it("keeps month-day ranges for later year confirmation", () => {
+    const result = validateCouponSupplementTextProposal({
+      fields: {},
+      partialDates: {
+        activityStartMonthDay: "9-30",
+        activityEndMonthDay: "10-10",
+      },
+    });
+    expect(result.partialDates).toEqual({
+      activityStartMonthDay: "9-30",
+      activityEndMonthDay: "10-10",
+      needsYearConfirmation: true,
+    });
+  });
+
   it("sends only the reviewed text and candidate-only instructions", () => {
     const request = buildCouponSupplementTextAiRequest(
       "业务模式是严选，活动从2030-01-01开始",

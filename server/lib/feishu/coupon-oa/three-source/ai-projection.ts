@@ -87,6 +87,8 @@ export function createCouponThreeSourceAiProjector(
                 result: run.result,
                 audit: run.audit,
                 fallbackCode: run.fallbackCode,
+                primary: recognition.ai?.primary,
+                activityCopyEnabled: recognition.ai?.activityCopyEnabled,
               },
             },
           },

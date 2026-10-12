@@ -52,6 +52,8 @@ export interface StoredWorkbookRecognition
     result?: ValidatedAiRecognition;
     audit?: AiAuditSummary;
     fallbackCode?: string;
+    primary?: boolean;
+    activityCopyEnabled?: boolean;
   };
 }
 

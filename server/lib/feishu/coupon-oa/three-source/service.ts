@@ -32,6 +32,8 @@ import { uploadFeishuDriveFile } from "../../drive-client";
 import { downloadFeishuMessageResource } from "../../message-client";
 import {
   getCouponThreeSourceAiConfig,
+  isCouponActivityCopyEnabled,
+  isCouponThreeSourceAiPrimaryEnabled,
   isCouponThreeSourceAiRecognitionEnabled,
 } from "./ai-config";
 import { loadCouponThreeSourceTemplates } from "./assets";
@@ -164,6 +166,8 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
         result: run.result,
         audit: run.audit,
         fallbackCode: run.fallbackCode,
+        primary: isCouponThreeSourceAiPrimaryEnabled(),
+        activityCopyEnabled: isCouponActivityCopyEnabled(),
       };
     },
     async activateAiRecognition(runId) {
@@ -535,6 +539,10 @@ export class CouponThreeSourcePilotService {
       }
     }
     const storedCoupon = storedRecognitionForRole(input.draft, "couponTable");
+    const storedWhitelist = storedRecognitionForRole(input.draft, "whitelist");
+    const storedBlacklist = input.draft.task.sources.blacklist
+      ? storedRecognitionForRole(input.draft, "blacklist")
+      : undefined;
     const couponSet = await confirmRegularFullReductionCouponSet({
       recognition: couponRecognition,
       ownerId: input.ownerOpenId,
@@ -546,7 +554,9 @@ export class CouponThreeSourcePilotService {
         activityPointPercent,
       },
       overrideReasons: input.draft.selections.overrideReasons,
-      aiRecognition: storedCoupon.ai?.result,
+      aiRecognition: storedCoupon.ai?.primary
+        ? storedCoupon.ai.result
+        : undefined,
     });
     const coupon = couponSet.tiers[0];
     if (coupon.input.businessMode !== "严选") {
@@ -555,11 +565,17 @@ export class CouponThreeSourcePilotService {
     const whitelist = await parseMultiSheetTieredIdentifierList({
       recognition: whitelistRecognition,
       role: "whitelist",
+      aiSkuRegions: storedWhitelist.ai?.primary
+        ? storedWhitelist.ai.result?.skuRegionCandidates
+        : undefined,
     });
     const blacklist = blacklistRecognition
       ? await parseMultiSheetTieredIdentifierList({
           recognition: blacklistRecognition,
           role: "blacklist",
+          aiSkuRegions: storedBlacklist?.ai?.primary
+            ? storedBlacklist.ai.result?.skuRegionCandidates
+            : undefined,
         })
       : undefined;
     const overlapIds = blacklist

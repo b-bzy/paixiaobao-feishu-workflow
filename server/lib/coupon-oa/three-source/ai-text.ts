@@ -41,12 +41,23 @@ const fieldValueSchema = z.union([
 
 export const couponSupplementTextProposalSchema = z.object({
   fields: z.partialRecord(z.enum(allowedKeys), fieldValueSchema).default({}),
+  partialDates: z
+    .object({
+      activityStartMonthDay: z.string().regex(/^\d{1,2}-\d{1,2}$/),
+      activityEndMonthDay: z.string().regex(/^\d{1,2}-\d{1,2}$/),
+    })
+    .optional(),
   warnings: z.array(z.string().max(500)).max(20).default([]),
 });
 
 export interface ValidatedCouponSupplementText {
   fields: Partial<Record<CouponFieldKey, string | number | boolean | string[]>>;
   warnings: string[];
+  partialDates?: {
+    activityStartMonthDay: string;
+    activityEndMonthDay: string;
+    needsYearConfirmation: true;
+  };
 }
 
 function validDate(value: unknown): boolean {
@@ -123,7 +134,18 @@ export function validateCouponSupplementTextProposal(
       );
     }
   }
-  return { fields, warnings };
+  return {
+    fields,
+    warnings,
+    ...(parsed.data.partialDates
+      ? {
+          partialDates: {
+            ...parsed.data.partialDates,
+            needsYearConfirmation: true as const,
+          },
+        }
+      : {}),
+  };
 }
 
 export function buildCouponSupplementTextAiRequest(text: string): {
@@ -140,7 +162,7 @@ export function buildCouponSupplementTextAiRequest(text: string): {
       `允许字段：${allowedKeys.join(", ")}。`,
       "businessMode 只能输出严选、寄卖或 POP；语音转写为“泡泡”时按 POP 候选处理。",
       "overDeduction 只能输出是或否；“不超扣”输出否。",
-      "日期使用 YYYY-MM-DD；用户未提供年份时不得猜测年份，应省略该日期并在 warnings 说明。",
+      "日期有年份时使用 YYYY-MM-DD；未提供年份、只有月日时不得补猜年份，应返回 partialDates 并等待业务员确认。",
     ].join("\n"),
     user: JSON.stringify({
       task: "从业务员已检查的补充文字中提取字段候选",

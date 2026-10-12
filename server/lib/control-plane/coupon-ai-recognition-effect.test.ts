@@ -9,11 +9,12 @@ import type {
 } from "./postgres-coupon-ai-recognition-repository";
 import type { DurableEffect } from "./postgres-durable-effect-repository";
 
-async function sourceBytes() {
+async function sourceBytes(dateWindow?: string) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("配券");
   sheet.getCell("A1").value = "活动名称";
   sheet.getCell("A2").value = "活动A";
+  if (dateWindow) sheet.getCell("A3").value = dateWindow;
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }
 
@@ -172,5 +173,66 @@ describe("coupon AI recognition effect", () => {
       }),
     );
     expect(gateway.recognize).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes bounded public-calendar candidates to recognition and degrades safely", async () => {
+    const bytes = await sourceBytes("9月30日-10月10日");
+    const { createHash } = await import("node:crypto");
+    const pending = {
+      ...run("pending"),
+      sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const repo = repository(pending);
+    const gateway: CouponThreeSourceAiGateway = {
+      recognize: vi.fn(async () => ({
+        ok: true as const,
+        proposal: { warnings: [] },
+        requestSha256: "r".repeat(64),
+        responseSha256: "s".repeat(64),
+        startedAt: "2030-01-01T00:00:00.000Z",
+        completedAt: "2030-01-01T00:00:01.000Z",
+        durationMs: 1000,
+      })),
+    };
+    const calendarGateway = {
+      lookup: vi.fn(async () => ({
+        ok: true as const,
+        candidates: [
+          {
+            name: "国庆促销期",
+            startDate: "2030-09-30",
+            endDate: "2030-10-10",
+            sourceUrl: "https://calendar.example.test/campaign/1",
+            fetchedAt: "2030-01-01T00:00:00.000Z",
+          },
+        ],
+      })),
+    };
+    const handler = createCouponAiRecognitionEffectHandler({
+      repository: repo,
+      gateway,
+      calendarGateway,
+      sourceLoader: {
+        load: vi.fn(async () => ({ fileName: "coupon.xlsx", bytes })),
+      },
+      projector: { project: vi.fn(async () => undefined) },
+    });
+
+    await expect(handler(effect())).resolves.toMatchObject({
+      kind: "succeeded",
+    });
+    expect(calendarGateway.lookup).toHaveBeenCalledWith({
+      startMonthDay: "09-30",
+      endMonthDay: "10-10",
+      locale: "zh-CN",
+      queryVersion: "coupon-public-calendar-v1",
+    });
+    expect(gateway.recognize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicCampaignCandidates: [
+          expect.objectContaining({ name: "国庆促销期" }),
+        ],
+      }),
+    );
   });
 });

@@ -1,8 +1,7 @@
+import { isPlaceholderActivityName } from "../../../coupon-oa/three-source/activity-copy";
 import type {
   CouponCandidate,
-  CouponFieldCandidate,
   CouponFieldKey,
-  ListColumnCandidate,
 } from "../../../coupon-oa/three-source/types";
 import type { FeishuCard } from "../../expense-poc";
 import type {
@@ -78,31 +77,6 @@ function cancelButton(
     text: "结束当前三源提报",
     type: "danger",
   });
-}
-
-function candidateText(
-  candidate: CouponFieldCandidate | ListColumnCandidate,
-): string {
-  return `${candidate.sheetName} / ${candidate.column}（${candidate.header}）`;
-}
-
-function candidateSelect(input: {
-  name: string;
-  label: string;
-  candidates: Array<CouponFieldCandidate | ListColumnCandidate>;
-  required?: boolean;
-}): Record<string, unknown> {
-  return {
-    tag: "select_static",
-    name: input.name,
-    placeholder: plainText(`请选择${input.label}`),
-    required: input.required ?? false,
-    width: "fill",
-    options: input.candidates.map((candidate) => ({
-      text: plainText(candidateText(candidate)),
-      value: candidate.id,
-    })),
-  };
 }
 
 function sourcesSummary(draft: CouponThreeSourcePilotDraft): string[] {
@@ -275,8 +249,11 @@ function combinedCouponCandidates(
   recognition: StoredWorkbookRecognition | undefined,
 ): CouponCandidate[] {
   if (!recognition) return [];
-  const result = [...(recognition.couponCandidates ?? [])];
-  for (const candidate of recognition.ai?.result?.couponCandidates ?? []) {
+  const aiCandidates = recognition.ai?.primary
+    ? (recognition.ai.result?.couponCandidates ?? [])
+    : [];
+  const result = [...aiCandidates];
+  for (const candidate of recognition.couponCandidates ?? []) {
     if (
       !result.some(
         (item) =>
@@ -354,14 +331,44 @@ function ownerDefaultValue(
       ? ownerValue.join("、")
       : String(ownerValue);
   }
+  const couponAi = draft.recognitions.couponTable?.ai;
   const copy =
-    draft.recognitions.couponTable?.ai?.result?.activityCopyCandidates?.find(
-      (candidate) => candidate.key === key,
-    );
-  if (copy?.value) return copy.value;
-  return draft.recognitions.couponTable?.couponFieldCandidates[key]
+    couponAi?.primary && couponAi.activityCopyEnabled
+      ? couponAi.result?.activityCopyCandidates?.find(
+          (candidate) => candidate.key === key,
+        )
+      : undefined;
+  if (
+    copy?.value &&
+    (key !== "activityName" || !isPlaceholderActivityName(copy.value))
+  ) {
+    return copy.value;
+  }
+  const aiField = couponAi?.primary
+    ? couponAi.result?.fieldCandidates.find(
+        (candidate) => candidate.key === key && candidate.value !== undefined,
+      )
+    : undefined;
+  if (aiField?.value !== undefined) {
+    const value = Array.isArray(aiField.value)
+      ? aiField.value.join("、")
+      : String(aiField.value);
+    if (key !== "activityName" || !isPlaceholderActivityName(value)) {
+      return value;
+    }
+  }
+  const deterministic = draft.recognitions.couponTable?.couponFieldCandidates[
+    key
+  ]
     ?.flatMap((candidate) => candidate.sampleValues)
     .find((value) => value.trim());
+  if (
+    deterministic &&
+    (key !== "activityName" || !isPlaceholderActivityName(deterministic))
+  ) {
+    return deterministic;
+  }
+  return undefined;
 }
 
 function missingOwnerFields(
@@ -400,11 +407,23 @@ export function buildCouponThreeSourceMappingCard(
     coupons.length > 0 &&
     coupons.every((candidate) => candidate.couponType === "unsupported");
   const selectedOverDeduction = overDeductionChoice(draft);
+  const reviewAiFields = coupon?.ai?.primary
+    ? (coupon.ai.result?.fieldCandidates.filter(
+        (candidate) =>
+          candidate.origin === "ai_inferred" || candidate.confidence < 0.85,
+      ) ?? [])
+    : [];
+  const fieldsForOwnerReview = [
+    ...new Set([
+      ...missingOwnerFields(coupon),
+      ...reviewAiFields.map((candidate) => candidate.key),
+    ]),
+  ];
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
       content: [
-        "第二轮：确认券模板、活动点位和缺失字段。",
+        "第二轮：请检查系统识别结果，并一次性补充或修改信息。",
         "可使用手机或电脑自带语音输入，把转写文字放入补充说明后先识别并回填；提交前仍可逐项修改。",
         ...(onlyUnsupported
           ? [
@@ -413,6 +432,20 @@ export function buildCouponThreeSourceMappingCard(
           : []),
       ].join("\n"),
     },
+    ...(reviewAiFields.length
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              "**以下内容为系统推测或识别不确定，请务必检查：**",
+              ...reviewAiFields.map(
+                (candidate) =>
+                  `- ${fieldLabels[candidate.key] ?? "业务信息"}：${Array.isArray(candidate.value) ? candidate.value.join("、") : String(candidate.value ?? "待确认")}`,
+              ),
+            ].join("\n"),
+          },
+        ]
+      : []),
     {
       tag: "form",
       name: "coupon_three_source_supplement_submit",
@@ -540,17 +573,7 @@ export function buildCouponThreeSourceMappingCard(
               },
             ]
           : []),
-        ...Object.entries(coupon?.couponFieldCandidates ?? {})
-          .filter(([, candidates]) => candidates.length > 1)
-          .map(([key, candidates]) =>
-            candidateSelect({
-              name: `coupon_${key}`,
-              label: `配券表${fieldLabels[key as CouponFieldKey] ?? "字段"}`,
-              candidates,
-              required: true,
-            }),
-          ),
-        ...missingOwnerFields(coupon)
+        ...fieldsForOwnerReview
           .filter(
             (key) =>
               ![
@@ -630,14 +653,30 @@ export function buildCouponThreeSourceMappingCard(
             required: false,
             width: "fill",
           })),
-        ...listCandidateElements("whitelist", whitelist),
-        ...listCandidateElements("blacklist", blacklist),
+        ...(whitelist
+          ? [
+              {
+                tag: "markdown",
+                content:
+                  "**商品白名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
+              },
+            ]
+          : []),
+        ...(blacklist
+          ? [
+              {
+                tag: "markdown",
+                content:
+                  "**商品黑名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
+              },
+            ]
+          : []),
         ...(!onlyUnsupported
           ? [
               {
                 tag: "button",
                 name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}`,
-                text: plainText("确认来源并生成标准附件"),
+                text: plainText("确认信息并生成标准附件"),
                 type: "primary_filled",
                 width: "fill",
                 form_action_type: "submit",
@@ -649,52 +688,11 @@ export function buildCouponThreeSourceMappingCard(
     cancelButton(draft),
   ];
   return card({
-    title: "确认来源映射",
-    subtitle: "第二轮：异常、缺失字段与来源确认",
+    title: "检查并补充活动信息",
+    subtitle: "第二轮：系统识别结果与业务确认",
     template: "orange",
     elements,
   });
-}
-
-function listCandidateElements(
-  prefix: "whitelist" | "blacklist",
-  recognition: StoredWorkbookRecognition | undefined,
-): Array<Record<string, unknown>> {
-  if (!recognition) return [];
-  const identifier = recognition.listCandidates.filter(
-    (candidate) => candidate.kind === "identifier",
-  );
-  return [
-    ...(identifier.length > 1
-      ? [
-          candidateSelect({
-            name: `${prefix}_identifierCandidateId`,
-            label: `${prefix === "whitelist" ? "白名单" : "黑名单"} SKU 列`,
-            candidates: identifier,
-            required: true,
-          }),
-        ]
-      : []),
-    ...(identifier.length > 1
-      ? [
-          {
-            tag: "select_static",
-            name: `${prefix}_selectedSheetName`,
-            placeholder: plainText(
-              `请选择${prefix === "whitelist" ? "白名单" : "黑名单"} Sheet`,
-            ),
-            required: true,
-            width: "fill",
-            options: [
-              ...new Set(identifier.map((candidate) => candidate.sheetName)),
-            ].map((sheetName) => ({
-              text: plainText(sheetName),
-              value: sheetName,
-            })),
-          },
-        ]
-      : []),
-  ];
 }
 
 export function buildCouponThreeSourceOverlapCard(input: {

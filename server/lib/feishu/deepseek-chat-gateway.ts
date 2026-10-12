@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SerializedWorkbookForAi } from "../coupon-oa/three-source/ai-recognition";
 import { buildCouponThreeSourceAiRequest } from "../coupon-oa/three-source/ai-recognition";
+import type { PublicCampaignCandidate } from "../coupon-oa/three-source/public-calendar";
 import type { CouponThreeSourceAiConfig } from "./coupon-oa/three-source/ai-config";
 
 export type AiGatewayFailureCode =
@@ -15,6 +16,7 @@ export type AiGatewayFailureCode =
 
 export interface AiRecognitionRequest {
   workbook: SerializedWorkbookForAi;
+  publicCampaignCandidates?: PublicCampaignCandidate[];
 }
 
 export type AiGatewayResponse =
@@ -92,7 +94,9 @@ export function createDeepSeekChatGateway(
     async recognize(input) {
       const startedAt = timestamp();
       const start = Date.now();
-      const prompt = buildCouponThreeSourceAiRequest(input.workbook);
+      const prompt = buildCouponThreeSourceAiRequest(input.workbook, {
+        publicCampaignCandidates: input.publicCampaignCandidates,
+      });
       const body = JSON.stringify({
         model: config.model,
         temperature: 0,

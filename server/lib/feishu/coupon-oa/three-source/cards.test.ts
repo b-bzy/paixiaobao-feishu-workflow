@@ -127,13 +127,15 @@ describe("three-source Bot cards", () => {
     expect(rendered).not.toContain("未上传黑名单时");
   });
 
-  it("asks for ambiguous fields and never infers a coupon from template tiers", () => {
+  it("asks business questions without exposing technical field mappings", () => {
     const current = draft();
     current.task.blacklistStatus = "absent_pending_confirmation";
     const card = buildCouponThreeSourceMappingCard(current);
     const rendered = JSON.stringify(card);
 
-    expect(rendered).toContain("coupon_activityName");
+    expect(rendered).toContain("owner_activityName");
+    expect(rendered).not.toContain("coupon_activityName");
+    expect(rendered).not.toContain("确认来源映射");
     expect(rendered).toContain("couponType");
     expect(rendered).not.toContain("whitelist_defaultTier");
     expect(rendered).not.toContain("满999减60");
@@ -287,5 +289,61 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("couponType");
     expect(rendered).toContain("语音或文字补充说明");
     expect(rendered).not.toContain('"selected":true');
+  });
+
+  it("projects validated activity copy only when its gate is enabled", () => {
+    const current = draft();
+    const recognition = current.recognitions.couponTable;
+    if (!recognition) throw new Error("missing fixture recognition");
+    recognition.ai = {
+      runId: "run-copy",
+      revision: 4,
+      sourceSha256: recognition.sourceHash,
+      status: "succeeded",
+      primary: true,
+      activityCopyEnabled: false,
+      result: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [
+          {
+            key: "activityStartAt",
+            sheetName: "Sheet1",
+            headerCell: "C1",
+            valueCell: "C2",
+            confidence: 0.8,
+            reason: "源表日期缺少年份",
+            value: "2030-09-30",
+            origin: "ai_inferred",
+          },
+        ],
+        listCandidates: [],
+        activityCopyCandidates: [
+          {
+            key: "activityName",
+            value: "双十一满减优惠券申请",
+            evidenceCells: ["A1"],
+          },
+          {
+            key: "activityBackground",
+            value: "围绕满100减20券档开展双十一促销。",
+            evidenceCells: ["A2"],
+          },
+        ],
+        issues: [],
+      },
+    };
+
+    expect(
+      JSON.stringify(buildCouponThreeSourceMappingCard(current)),
+    ).not.toContain("双十一满减优惠券申请");
+    recognition.ai.activityCopyEnabled = true;
+    const enabled = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(enabled).toContain("双十一满减优惠券申请");
+    expect(enabled).toContain("围绕满100减20券档开展双十一促销");
+    expect(enabled).toContain("以下内容为系统推测或识别不确定，请务必检查");
+    expect(enabled).toContain('"name":"owner_activityStartAt"');
+    expect(enabled).toContain('"default_value":"2030-09-30"');
   });
 });

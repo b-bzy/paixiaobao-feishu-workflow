@@ -1,12 +1,22 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  getCouponPublicCalendarConfig,
   getCouponThreeSourceAiConfig,
+  isCouponActivityCopyEnabled,
+  isCouponThreeSourceAiPrimaryEnabled,
   isCouponThreeSourceAiRecognitionEnabled,
+  isCouponThreeSourceAiShadowEnabled,
 } from "./ai-config";
 
 const ENV_KEYS = [
   "FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED",
   "FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS",
+  "FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED",
+  "FEISHU_COUPON_THREE_SOURCE_P0_AI_SHADOW_ENABLED",
+  "FEISHU_COUPON_THREE_SOURCE_P0_ACTIVITY_COPY_ENABLED",
+  "FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED",
+  "FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT",
+  "FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_TIMEOUT_MS",
   "DEEPSEEK_API_KEY",
   "DEEPSEEK_BASE_URL",
   "DEEPSEEK_MODEL",
@@ -35,6 +45,61 @@ describe("coupon three-source AI config", () => {
       model: "deepseek-chat",
       timeoutMs: 45_000,
       maxResponseBytes: 1_048_576,
+    });
+    expect(isCouponThreeSourceAiPrimaryEnabled()).toBe(false);
+    expect(isCouponThreeSourceAiShadowEnabled()).toBe(false);
+    expect(isCouponActivityCopyEnabled()).toBe(false);
+    expect(getCouponPublicCalendarConfig()).toEqual({
+      enabled: false,
+      timeoutMs: 5_000,
+      maxResponseBytes: 262_144,
+    });
+  });
+
+  it("requires the recognition gate before enabling primary or shadow mode", () => {
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED = "true";
+    expect(() => isCouponThreeSourceAiPrimaryEnabled()).toThrow(
+      "requires FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED=true",
+    );
+
+    delete process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED;
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_SHADOW_ENABLED = "true";
+    expect(() => isCouponThreeSourceAiShadowEnabled()).toThrow(
+      "requires FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED=true",
+    );
+  });
+
+  it("does not allow primary and shadow mode at the same time", () => {
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_RECOGNITION_ENABLED = "true";
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_PRIMARY_ENABLED = "true";
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_AI_SHADOW_ENABLED = "true";
+    expect(() => isCouponThreeSourceAiPrimaryEnabled()).toThrow(
+      "cannot both be true",
+    );
+  });
+
+  it("validates a default-closed public calendar endpoint", () => {
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED = "true";
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT =
+      "http://calendar.example/path?secret=must-not-leak";
+    let message = "";
+    try {
+      getCouponPublicCalendarConfig();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("must use HTTPS");
+    expect(message).not.toContain("must-not-leak");
+
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT =
+      "https://calendar.example/v1/campaigns";
+    process.env.FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_TIMEOUT_MS =
+      "30000";
+    expect(getCouponPublicCalendarConfig()).toEqual({
+      enabled: true,
+      endpoint: "https://calendar.example/v1/campaigns",
+      timeoutMs: 30_000,
+      maxResponseBytes: 262_144,
     });
   });
 

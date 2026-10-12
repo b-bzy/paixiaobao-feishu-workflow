@@ -552,7 +552,7 @@ function durationDays(startAt: string, endAt: string): number {
 export interface BuildOaPrefillSnapshotInput {
   package: CanonicalPackage;
   artifacts: OfflineArtifact[];
-  screenshot?: RenderedCouponScreenshot;
+  screenshots: RenderedCouponScreenshot[];
   /**
    * The OA “活动点位” mapping remains a business-owned decision. Requiring it
    * here prevents the offline workflow from silently assuming it equals coupon
@@ -595,26 +595,37 @@ export function buildOaPrefillSnapshot(
   if (!couponArtifact) {
     throw new Error("缺少用于生成标准配券表截图的产物");
   }
-  if (screenshotRequired && !input.screenshot) {
+  if (screenshotRequired && !input.screenshots.length) {
     throw new Error("当前业务模式缺少标准配券表截图");
   }
-  if (input.screenshot) {
+  if (!screenshotRequired && input.screenshots.length) {
+    throw new Error("严选业务模式不能包含测算图片");
+  }
+  const screenshotIds = new Set(
+    input.screenshots.map((screenshot) => screenshot.artifactId),
+  );
+  if (screenshotIds.size !== input.screenshots.length) {
+    throw new Error("测算图片产物 ID 不能重复");
+  }
+  for (const [index, screenshot] of input.screenshots.entries()) {
+    if (screenshot.order !== index) throw new Error("测算图片顺序无效");
+    if (screenshot.sha256 !== sha256(screenshot.bytes)) {
+      throw new Error("测算图片 bytes 与 hash 不一致");
+    }
     if (
-      input.screenshot.sourceArtifactSha256 !== couponArtifact.sha256 ||
-      input.screenshot.sha256 !== sha256(input.screenshot.bytes)
+      screenshot.provenance === "generated" &&
+      (screenshot.sourceArtifactSha256 !== couponArtifact.sha256 ||
+        !screenshot.renderRange?.trim() ||
+        !screenshot.templateId?.trim() ||
+        !screenshot.templateVersion?.trim())
     ) {
       throw new Error("标准配券表截图未绑定到已验证的同 revision 配券表");
     }
-    if (
-      !input.screenshot.fileName.trim() ||
-      !input.screenshot.renderRange.trim() ||
-      !input.screenshot.templateId.trim() ||
-      !input.screenshot.templateVersion.trim()
-    ) {
-      throw new Error("标准配券表截图缺少可审计的渲染元数据");
-    }
+    if (!screenshot.fileName.trim()) throw new Error("测算图片文件名不能为空");
   }
-  const attachmentMetadata = input.artifacts.map((artifact) => ({
+  const attachmentMetadata = input.artifacts.map((artifact, order) => ({
+    artifactId: `${artifact.role}-${artifact.sha256}`,
+    order,
     role: artifact.role,
     fileName: artifact.fileName,
     sha256: artifact.sha256,
@@ -623,19 +634,18 @@ export function buildOaPrefillSnapshot(
   }));
   const attachments: OaPrefillSnapshot["attachments"] = [
     ...attachmentMetadata,
-    ...(input.screenshot
-      ? [
-          {
-            role: "calcImage" as const,
-            fileName: input.screenshot.fileName,
-            sha256: input.screenshot.sha256,
-            bytes: input.screenshot.bytes.byteLength,
-            offlineReference: `offline://${input.package.sourceConfirmationHash}/standard-coupon-screenshot`,
-            sourceArtifactSha256: input.screenshot.sourceArtifactSha256,
-            renderRange: input.screenshot.renderRange,
-          },
-        ]
-      : []),
+    ...input.screenshots.map((screenshot) => ({
+      artifactId: screenshot.artifactId,
+      order: screenshot.order,
+      role: "calcImage" as const,
+      fileName: screenshot.fileName,
+      sha256: screenshot.sha256,
+      bytes: screenshot.bytes.byteLength,
+      offlineReference: `offline://${input.package.sourceConfirmationHash}/${screenshot.artifactId}`,
+      sourceArtifactSha256: screenshot.sourceArtifactSha256,
+      renderRange: screenshot.renderRange,
+      contentType: screenshot.contentType,
+    })),
   ];
   const snapshotHash = stableHash({
     packageHash: input.package.sourceConfirmationHash,
@@ -645,15 +655,16 @@ export function buildOaPrefillSnapshot(
         sha256: attachmentHash,
       }),
     ),
-    screenshot: input.screenshot
-      ? {
-          sha256: input.screenshot.sha256,
-          sourceArtifactSha256: input.screenshot.sourceArtifactSha256,
-          templateId: input.screenshot.templateId,
-          templateVersion: input.screenshot.templateVersion,
-          renderRange: input.screenshot.renderRange,
-        }
-      : undefined,
+    screenshots: input.screenshots.map((screenshot) => ({
+      artifactId: screenshot.artifactId,
+      order: screenshot.order,
+      provenance: screenshot.provenance,
+      sha256: screenshot.sha256,
+      sourceArtifactSha256: screenshot.sourceArtifactSha256,
+      templateId: screenshot.templateId,
+      templateVersion: screenshot.templateVersion,
+      renderRange: screenshot.renderRange,
+    })),
     activityPointPercent: input.activityPointPercent,
   });
   return {

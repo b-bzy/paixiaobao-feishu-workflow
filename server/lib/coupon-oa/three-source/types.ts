@@ -421,14 +421,22 @@ export interface OfflineArtifact {
 }
 
 export interface RenderedCouponScreenshot {
+  artifactId: string;
+  order: number;
   role: "calcImage";
+  provenance: "user" | "generated";
   fileName: string;
   bytes: Uint8Array;
   sha256: string;
-  sourceArtifactSha256: string;
-  templateId: string;
-  templateVersion: string;
-  renderRange: string;
+  sourceArtifactSha256?: string;
+  templateId?: string;
+  templateVersion?: string;
+  renderRange?: string;
+  contentType: "image/png" | "image/jpeg";
+  rendererVersion?: string;
+  page: number;
+  pageCount: number;
+  displayedValuesSha256?: string;
 }
 
 /**
@@ -439,7 +447,7 @@ export interface WorkbookScreenshotRenderer {
   render(input: {
     couponArtifact: OfflineArtifact;
     revision: number;
-  }): Promise<RenderedCouponScreenshot>;
+  }): Promise<RenderedCouponScreenshot[]>;
 }
 
 export interface OaPrefillSnapshot {
@@ -474,6 +482,8 @@ export interface OaPrefillSnapshot {
     durationDays: number;
   };
   attachments: Array<{
+    artifactId: string;
+    order: number;
     role: OfflineArtifact["role"] | "calcImage";
     fileName: string;
     sha256: string;
@@ -481,6 +491,7 @@ export interface OaPrefillSnapshot {
     offlineReference: string;
     sourceArtifactSha256?: string;
     renderRange?: string;
+    contentType?: "image/png" | "image/jpeg";
   }>;
   blacklistStatus: BlacklistStatus;
   overlap: OverlapSnapshot;

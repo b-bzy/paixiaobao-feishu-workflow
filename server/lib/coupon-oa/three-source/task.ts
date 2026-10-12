@@ -1,6 +1,26 @@
 import type { BlacklistStatus, OverlapDecision, SourceRole } from "./types";
 
-export const couponThreeSourceTaskSchemaVersion = "coupon-three-source-r2-v1";
+export const couponThreeSourceTaskSchemaVersion = "coupon-three-source-r2-v2";
+
+export type CalcImageMergeMode = "append" | "replace_all";
+
+export interface UserCalcImageSource {
+  artifactId: string;
+  messageId: string;
+  resourceKey: string;
+  resourceType: "file" | "image";
+  sourceType: "feishu_file" | "feishu_image";
+  fileName: string;
+  contentType: "image/png" | "image/jpeg";
+  bytes: number;
+  width: number;
+  height: number;
+  sha256: string;
+  receivedOrder: number;
+  receivedAt: string;
+  revision: number;
+  actorOpenId: string;
+}
 
 export const couponThreeSourceTaskStatuses = [
   "Collecting",
@@ -23,6 +43,8 @@ export interface CouponThreeSourceSourceFile {
 }
 
 export interface CouponThreeSourceArtifact {
+  artifactId: string;
+  order: number;
   role: "couponTable" | "productWhitelist" | "productBlacklist" | "calcImage";
   fileName: string;
   bytes: number;
@@ -31,6 +53,7 @@ export interface CouponThreeSourceArtifact {
   sourceArtifactSha256?: string;
   rendererVersion?: string;
   renderRange?: string;
+  contentType?: "image/png" | "image/jpeg";
 }
 
 export interface CouponThreeSourceConfirmation {
@@ -50,6 +73,9 @@ export interface CouponThreeSourceTask {
   overlap?: { sha256: string; count: number; decision?: OverlapDecision };
   sourceConfirmation?: CouponThreeSourceConfirmation;
   finalConfirmation?: CouponThreeSourceConfirmation;
+  confirmedCalcImages: UserCalcImageSource[];
+  pendingCalcImages: UserCalcImageSource[];
+  processedCalcImageOperationIds: string[];
   artifacts: CouponThreeSourceArtifact[];
 }
 
@@ -106,8 +132,113 @@ export function createCouponThreeSourceTask(input: {
     status: "Collecting",
     sources: {},
     blacklistStatus: "absent_pending_confirmation",
+    confirmedCalcImages: [],
+    pendingCalcImages: [],
+    processedCalcImageOperationIds: [],
     artifacts: [],
   };
+}
+
+export function stageCouponThreeSourceCalcImage(input: {
+  task: CouponThreeSourceTask;
+  ownerOpenId: string;
+  expectedRevision: number;
+  image: Omit<
+    UserCalcImageSource,
+    "revision" | "actorOpenId" | "receivedOrder"
+  >;
+}): CouponThreeSourceTask {
+  assertOwnerAndRevision(input.task, input);
+  if (
+    !input.image.artifactId ||
+    !input.image.messageId ||
+    !input.image.resourceKey
+  ) {
+    throw new Error("测算图片缺少稳定资源标识");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(input.image.sha256)) {
+    throw new Error("测算图片 hash 无效");
+  }
+  if (
+    !Number.isSafeInteger(input.image.bytes) ||
+    input.image.bytes <= 0 ||
+    !Number.isSafeInteger(input.image.width) ||
+    input.image.width <= 0 ||
+    !Number.isSafeInteger(input.image.height) ||
+    input.image.height <= 0
+  ) {
+    throw new Error("测算图片尺寸或大小无效");
+  }
+  if (
+    input.task.pendingCalcImages.some(
+      (image) =>
+        image.messageId === input.image.messageId ||
+        image.sha256 === input.image.sha256,
+    ) ||
+    input.task.confirmedCalcImages.some(
+      (image) =>
+        image.messageId === input.image.messageId ||
+        image.sha256 === input.image.sha256,
+    )
+  ) {
+    return input.task;
+  }
+  if (
+    input.task.confirmedCalcImages.length +
+      input.task.pendingCalcImages.length >=
+    20
+  ) {
+    throw new Error("每次三源提报最多接收 20 张测算图片");
+  }
+  const image: UserCalcImageSource = {
+    ...input.image,
+    receivedOrder:
+      input.task.confirmedCalcImages.length +
+      input.task.pendingCalcImages.length,
+    revision: input.task.revision + 1,
+    actorOpenId: input.ownerOpenId,
+  };
+  return nextRevision(input.task, {
+    pendingCalcImages: [...input.task.pendingCalcImages, image],
+    status: collectingStatus(input.task),
+  });
+}
+
+export function commitCouponThreeSourceCalcImageBatch(input: {
+  task: CouponThreeSourceTask;
+  ownerOpenId: string;
+  expectedRevision: number;
+  mode: CalcImageMergeMode;
+  operationId: string;
+}): CouponThreeSourceTask {
+  assertOwnerAndRevision(input.task, input);
+  if (!input.operationId.trim()) throw new Error("测算图片操作 ID 不能为空");
+  if (input.task.processedCalcImageOperationIds.includes(input.operationId)) {
+    return input.task;
+  }
+  if (!input.task.pendingCalcImages.length) {
+    throw new Error("当前没有待确认的测算图片");
+  }
+  const merged =
+    input.mode === "replace_all"
+      ? input.task.pendingCalcImages
+      : [...input.task.confirmedCalcImages, ...input.task.pendingCalcImages];
+  if (merged.length > 20) throw new Error("每次三源提报最多确认 20 张测算图片");
+  const confirmedCalcImages = merged.map((image, order) => ({
+    ...image,
+    receivedOrder: order,
+    revision: input.task.revision + 1,
+    actorOpenId: input.ownerOpenId,
+  }));
+  return nextRevision(input.task, {
+    confirmedCalcImages,
+    pendingCalcImages: [],
+    processedCalcImageOperationIds: [
+      ...input.task.processedCalcImageOperationIds,
+      input.operationId,
+    ],
+    status: collectingStatus(input.task),
+  });
 }
 
 /**
@@ -240,12 +371,32 @@ export function saveCouponThreeSourceArtifacts(input: {
     throw new Error("当前状态不能冻结三源标准产物");
   }
   const byRole = new Map(
-    input.artifacts.map((artifact) => [artifact.role, artifact]),
+    input.artifacts
+      .filter((artifact) => artifact.role !== "calcImage")
+      .map((artifact) => [artifact.role, artifact]),
   );
   const couponTable = byRole.get("couponTable");
   const whitelist = byRole.get("productWhitelist");
-  const image = byRole.get("calcImage");
-  if (!couponTable || !whitelist || (input.requiresCalcImage && !image)) {
+  const images = input.artifacts
+    .filter((artifact) => artifact.role === "calcImage")
+    .sort((left, right) => left.order - right.order);
+  const nonImageArtifacts = input.artifacts.filter(
+    (artifact) => artifact.role !== "calcImage",
+  );
+  if (
+    new Set(nonImageArtifacts.map((artifact) => artifact.role)).size !==
+    nonImageArtifacts.length
+  ) {
+    throw new Error("标准 Excel 产物角色不能重复");
+  }
+  if (!input.requiresCalcImage && images.length) {
+    throw new Error("严选业务模式不能冻结测算图片");
+  }
+  if (
+    !couponTable ||
+    !whitelist ||
+    (input.requiresCalcImage && !images.length)
+  ) {
     throw new Error(
       input.requiresCalcImage
         ? "缺少标准配券表、标准白名单或配券表渲染图片"
@@ -259,10 +410,13 @@ export function saveCouponThreeSourceArtifacts(input: {
     throw new Error("已上传黑名单时必须生成标准黑名单");
   }
   if (
-    image &&
-    (image.sourceArtifactSha256 !== couponTable.sha256 ||
-      !image.rendererVersion ||
-      !image.renderRange)
+    images.some(
+      (image) =>
+        image.sourceArtifactSha256 &&
+        (image.sourceArtifactSha256 !== couponTable.sha256 ||
+          !image.rendererVersion ||
+          !image.renderRange),
+    )
   ) {
     throw new Error("配券表渲染图片未绑定当前标准配券表");
   }
@@ -275,6 +429,18 @@ export function saveCouponThreeSourceArtifacts(input: {
     ) {
       throw new Error("标准产物元数据无效");
     }
+  }
+  const artifactIds = new Set(
+    input.artifacts.map((artifact) => artifact.artifactId),
+  );
+  if (artifactIds.size !== input.artifacts.length) {
+    throw new Error("冻结产物 ID 不能重复");
+  }
+  if (images.some((image, index) => image.order !== index)) {
+    throw new Error("测算图片顺序必须从 0 连续递增");
+  }
+  if (images.some((image) => !image.contentType)) {
+    throw new Error("测算图片缺少真实 MIME");
   }
   return {
     ...input.task,

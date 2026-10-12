@@ -12,7 +12,7 @@ function draft(): CouponThreeSourcePilotDraft {
       taskId: "task-1",
       ownerOpenId: "ou-owner",
     }),
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: "coupon-three-source-pilot-v2",
     recognitions: {},
     selections: {},
     artifacts: [],

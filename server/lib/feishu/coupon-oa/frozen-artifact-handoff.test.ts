@@ -74,4 +74,38 @@ describe("frozen coupon OA artifact handoff", () => {
     ).rejects.toThrow("重复角色");
     expect(downloadFeishuDriveFile).not.toHaveBeenCalled();
   });
+
+  it("checks every image before starting any Approval upload", async () => {
+    const first = new Uint8Array([137, 80, 78, 71, 1]);
+    const second = new Uint8Array([255, 216, 255, 2]);
+    const images = [
+      {
+        artifactId: "image-1",
+        order: 0,
+        role: "calcImage" as const,
+        fileName: "1.png",
+        fileToken: "image-1",
+        bytes: first.byteLength,
+        sha256: sha256(first),
+        contentType: "image/png" as const,
+      },
+      {
+        artifactId: "image-2",
+        order: 1,
+        role: "calcImage" as const,
+        fileName: "2.jpg",
+        fileToken: "image-2",
+        bytes: second.byteLength,
+        sha256: sha256(second),
+        contentType: "image/jpeg" as const,
+      },
+    ];
+    vi.mocked(downloadFeishuDriveFile).mockImplementation(async (token) =>
+      token === "image-1" ? first : new Uint8Array([9]),
+    );
+    await expect(
+      uploadVerifiedCouponOaArtifacts({ artifacts: images }),
+    ).rejects.toThrow("已变更");
+    expect(uploadCouponApprovalFile).not.toHaveBeenCalled();
+  });
 });

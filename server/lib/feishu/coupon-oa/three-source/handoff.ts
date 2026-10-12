@@ -1,5 +1,8 @@
 import type { OaPrefillSnapshot } from "../../../coupon-oa/three-source/types";
-import type { CouponOaDraftValues } from "../approval-schema";
+import {
+  type CouponOaDraftValues,
+  couponApplicationValuesSchema,
+} from "../approval-schema";
 import {
   type CouponOaDraft,
   createCouponOaDraft,
@@ -28,9 +31,6 @@ export function mapThreeSourcePrefillToOaValues(input: {
   attachments: Awaited<ReturnType<typeof uploadVerifiedCouponOaArtifacts>>;
 }): CouponOaDraftValues {
   const { values } = input.prefill;
-  if (values.businessMode !== "严选") {
-    throw new Error("三源 Bot 首期仅支持严选业务模式");
-  }
   if (
     !Number.isFinite(values.activityPointPercent) ||
     values.activityPointPercent <= 0
@@ -40,6 +40,12 @@ export function mapThreeSourcePrefillToOaValues(input: {
   const couponTable = attachmentByRole(input.attachments, "couponTable");
   const whitelist = attachmentByRole(input.attachments, "productWhitelist");
   const blacklist = attachmentByRole(input.attachments, "productBlacklist");
+  const calcImages = attachmentByRole(input.attachments, "calcImage").sort(
+    (left, right) => (left.order ?? 0) - (right.order ?? 0),
+  );
+  const prefillImages = input.prefill.attachments
+    .filter((attachment) => attachment.role === "calcImage")
+    .sort((left, right) => left.order - right.order);
   if (couponTable.length !== 1 || whitelist.length !== 1) {
     throw new Error("三源 OA 草稿必须包含一份标准配券表和一份标准白名单");
   }
@@ -47,14 +53,27 @@ export function mapThreeSourcePrefillToOaValues(input: {
     throw new Error("三源 OA 草稿不能包含多份标准黑名单");
   }
   if (
-    input.prefill.attachments.some(
-      (attachment) => attachment.role === "calcImage",
+    values.businessMode === "严选" &&
+    (prefillImages.length || calcImages.length)
+  ) {
+    throw new Error("严选业务模式不能包含测算图片附件");
+  }
+  if (values.businessMode !== "严选" && !calcImages.length) {
+    throw new Error("寄卖或 POP 业务模式必须包含测算图片附件");
+  }
+  if (
+    prefillImages.length !== calcImages.length ||
+    prefillImages.some(
+      (image, index) =>
+        image.artifactId !== calcImages[index]?.artifactId ||
+        image.order !== calcImages[index]?.order ||
+        image.sha256 !== calcImages[index]?.sha256,
     )
   ) {
-    throw new Error("严选三源首期不接受测算图片附件");
+    throw new Error("测算图片预填快照与审批上传结果不一致");
   }
 
-  return {
+  return couponApplicationValuesSchema.parse({
     applicationType: "优惠券申请",
     businessMode: values.businessMode,
     activityName: values.activityName,
@@ -77,7 +96,10 @@ export function mapThreeSourcePrefillToOaValues(input: {
     ...(blacklist.length
       ? { productBlacklistFileCodes: [blacklist[0].fileCode] }
       : {}),
-  };
+    ...(calcImages.length
+      ? { calcImageFileCodes: calcImages.map((image) => image.fileCode) }
+      : {}),
+  });
 }
 
 export async function handoffThreeSourcePilotToOaDraft(input: {

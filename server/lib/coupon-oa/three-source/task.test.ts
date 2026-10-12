@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  commitCouponThreeSourceCalcImageBatch,
   confirmCouponThreeSourceDraftOnly,
   confirmCouponThreeSourceNoBlacklist,
   confirmCouponThreeSourceSources,
@@ -8,6 +9,7 @@ import {
   replaceCouponThreeSourceSource,
   saveCouponThreeSourceArtifacts,
   setCouponThreeSourceOverlap,
+  stageCouponThreeSourceCalcImage,
 } from "./task";
 
 const hash = (value: string) =>
@@ -25,6 +27,76 @@ function source(role: "couponTable" | "whitelist" | "blacklist") {
 }
 
 describe("coupon three-source R2 task aggregate", () => {
+  it("stages, deduplicates, appends and atomically replaces ordered images", () => {
+    let task = createCouponThreeSourceTask({
+      taskId: "CTS-images",
+      ownerOpenId: "ou_owner",
+    });
+    const image = {
+      artifactId: "image-a",
+      messageId: "om-image-a",
+      resourceKey: "img-a",
+      resourceType: "image" as const,
+      sourceType: "feishu_image" as const,
+      fileName: "a.png",
+      contentType: "image/png" as const,
+      bytes: 100,
+      width: 20,
+      height: 10,
+      sha256: hash("image-a"),
+      receivedAt: "2030-01-01T00:00:00.000Z",
+    };
+    task = stageCouponThreeSourceCalcImage({
+      task,
+      ownerOpenId: "ou_owner",
+      expectedRevision: task.revision,
+      image,
+    });
+    const duplicate = stageCouponThreeSourceCalcImage({
+      task,
+      ownerOpenId: "ou_owner",
+      expectedRevision: task.revision,
+      image: { ...image, messageId: "om-duplicate" },
+    });
+    expect(duplicate).toBe(task);
+    task = commitCouponThreeSourceCalcImageBatch({
+      task,
+      ownerOpenId: "ou_owner",
+      expectedRevision: task.revision,
+      mode: "append",
+      operationId: "append-1",
+    });
+    expect(task.confirmedCalcImages.map((item) => item.fileName)).toEqual([
+      "a.png",
+    ]);
+    task = stageCouponThreeSourceCalcImage({
+      task,
+      ownerOpenId: "ou_owner",
+      expectedRevision: task.revision,
+      image: {
+        ...image,
+        artifactId: "image-b",
+        messageId: "om-image-b",
+        resourceKey: "file-b",
+        resourceType: "file",
+        sourceType: "feishu_file",
+        fileName: "b.jpg",
+        contentType: "image/jpeg",
+        sha256: hash("image-b"),
+      },
+    });
+    task = commitCouponThreeSourceCalcImageBatch({
+      task,
+      ownerOpenId: "ou_owner",
+      expectedRevision: task.revision,
+      mode: "replace_all",
+      operationId: "replace-1",
+    });
+    expect(task.confirmedCalcImages.map((item) => item.fileName)).toEqual([
+      "b.jpg",
+    ]);
+    expect(task.pendingCalcImages).toEqual([]);
+  });
   it("requires explicit no-blacklist confirmation before the first confirmation", () => {
     const created = createCouponThreeSourceTask({
       taskId: "CTS-1",
@@ -108,18 +180,24 @@ describe("coupon three-source R2 task aggregate", () => {
       requiresCalcImage: true,
       artifacts: [
         {
+          artifactId: "coupon",
+          order: 0,
           role: "couponTable",
           fileName: "标准配券表.xlsx",
           bytes: 100,
           sha256: couponHash,
         },
         {
+          artifactId: "whitelist",
+          order: 1,
           role: "productWhitelist",
           fileName: "标准白名单.xlsx",
           bytes: 100,
           sha256: hash("standard-whitelist"),
         },
         {
+          artifactId: "image-1",
+          order: 0,
           role: "calcImage",
           fileName: "标准配券表.png",
           bytes: 100,
@@ -127,6 +205,7 @@ describe("coupon three-source R2 task aggregate", () => {
           sourceArtifactSha256: couponHash,
           rendererVersion: "test-renderer-v1",
           renderRange: "配券表!A1:Z30",
+          contentType: "image/png",
         },
       ],
     });
@@ -193,12 +272,16 @@ describe("coupon three-source R2 task aggregate", () => {
         requiresCalcImage: false,
         artifacts: [
           {
+            artifactId: "coupon",
+            order: 0,
             role: "couponTable",
             fileName: "标准配券表.xlsx",
             bytes: 100,
             sha256: hash("strict-coupon"),
           },
           {
+            artifactId: "whitelist",
+            order: 1,
             role: "productWhitelist",
             fileName: "标准白名单.xlsx",
             bytes: 100,

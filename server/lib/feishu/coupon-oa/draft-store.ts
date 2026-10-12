@@ -17,6 +17,8 @@ export const couponOaDraftStatuses = [
 export type CouponOaDraftStatus = (typeof couponOaDraftStatuses)[number];
 
 export interface CouponOaAttachment {
+  artifactId?: string;
+  order?: number;
   role:
     | "calcImage"
     | "couponTable"
@@ -28,6 +30,7 @@ export interface CouponOaAttachment {
   fileCode: string;
   sha256: string;
   bytes: number;
+  contentType?: "image/png" | "image/jpeg";
 }
 
 export interface CouponOaDraft {

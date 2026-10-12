@@ -2,7 +2,7 @@
 
 > **状态**：需求方已选择的单用户、限时测试手册；仍待相关 Owner 审阅。不是 R1/R2/R3、生产上线、可靠事件接收或原生 OA 授权。
 > **日期**：2026-10-10
-> **适用拓扑**：飞书测试 App 长连接 → 本机 `lark-cli` / P0 bridge runner → Vercel `POST /api/feishu/poc-bridge` → 严选三源 Bot → OA 测试稿。
+> **适用拓扑**：飞书测试 App 长连接 → 本机 `lark-cli` / P0 bridge runner → Vercel `POST /api/feishu/poc-bridge` → 三业务模式三源 Bot → OA 测试稿。
 > **权威边界**：[ADR-0010](../../../adr/0010-timebox-local-long-connection-three-source-poc.md)；业务范围以 [P0 最快 Bot POC 交付计划](../../proposals/three-source/coupon-three-source-fast-poc-delivery-plan-v1.md) 为准。
 
 ## 0. 目的与限制
@@ -25,7 +25,7 @@
 | 项目 | P0 行为 |
 | --- | --- |
 | 用户与会话 | 一个 allowlist 用户、Bot 单聊、同一时刻一笔任务。 |
-| 业务 | 仅常规满减券、`严选`、SKU 名单；白名单必传，黑名单可选但必须显式确认无黑名单。 |
+| 业务 | 仅常规满减券、SKU 名单；支持 `严选`、`寄卖`、`POP`。白名单必传，黑名单可选但必须显式确认无黑名单。严选无测算图片；寄卖/POP 必须有确认后的用户图或自动生成图。 |
 | 事件接入 | 唯一 `lark-cli` consumer → HMAC → `/api/feishu/poc-bridge`；不切换开发者服务器回调。 |
 | 文件 | runner 的预渲染文件文本不能替代真实元数据；服务端只在 active allowlisted P0 任务内回读消息获得 `file_key`。 |
 | 产物 | 标准配券表、标准白名单、可选标准黑名单；源文件不进入 OA 附件。 |
@@ -122,13 +122,22 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 
 ## 4. 单次 E2E
 
-首次只使用已授权、脱敏的 `严选` 常规满减 fixture。
+首次只使用本仓库 `reference/fixtures/three-mode-screenshots/` 中的脱敏 fixture，并先完成本地测试计划。真实飞书验证按严选无图、寄卖用户图、POP 自动图的顺序逐个执行。
 
 1. 在明确窗口为唯一测试用户打开 `FEISHU_COUPON_THREE_SOURCE_PILOT_ENABLED=true`。
 2. 在 Bot 单聊发送精确 `/OA优惠券提报`，确认收到材料收集卡。
 3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。上传阶段不应逐文件发卡或调用 DeepSeek；全部材料发送完后，在最初的收集卡点击“材料已上传完毕，开始统一识别”。
 4. AI-primary 开启时只应出现一张“AI 识别中”；worker 完成整批识别后只应再出现一条汇总第二轮卡片消息。后续无黑名单、超扣选择和补充说明识别必须原位更新这条消息，聊天中不得再追加第二、第三张同名卡片。卡片必须只显示中文业务字段、摘要及不含敏感信息的 DeepSeek 状态，不得出现 Sheet、列号、坐标、内部 key、prompt version 或技术映射选择器。在该卡检查系统识别的唯一券模板、全部券档、缺失字段、名单摘要、OA 活动点位，以及未上传黑名单时的“本次无黑名单”声明；同一常规满减模板的多行是多个券档，不要求只选一行。已登记的名单多 Sheet 自动对应全部券档。无年份日期或公开活动主题必须标记“系统推测”并由 owner 确认。活动名称不得是占位语，活动背景必须覆盖全部券档。业务员也可用系统输入法把语音转写到可编辑补充说明框，检查文字后点击识别回填；AI 只填补空白字段，不能覆盖 owner 已输入的非空内容，提交前仍可修改。有白黑名单交集时再作出明确决定。
-5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀；严选 P0 不要求 `calcImage`。
+5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀。严选不得含 `calcImage`；寄卖/POP 需核对所有图片页数和顺序。用户发送新图片批次时，必须明确选择“追加”或“整组替换”。
+
+### 三业务模式与图片回归矩阵
+
+- 严选无图：生成 Excel 产物，渲染器和审批图片上传均不调用；
+- 寄卖用户图：直接图片消息与 PNG/JPEG 文件均可归一化，用户图优先且保持顺序；
+- POP 自动图：未上传用户图时，从最终标准配券表显示值生成全部分页；
+- 多图追加/替换：重复消息、重复 hash、重复 callback 不增加条目，整组替换遇到任一无效图片时保留旧集合；
+- 错误与回滚：伪装图片、损坏图片、渲染失败、部分 Drive 上传失败、回读 hash 变化均不得创建 OA 测试稿；
+- Gate：全程验证 native-submit 未调用，系统只创建既有 OA 测试稿。
 6. 点击“确认并创建 OA 测试稿”。收到既有 OA 草稿预览卡即为本次成功终点。
 7. **不点击**预览卡中的最终正式发送动作。核对 native kill switch 仍关闭，审批中心没有新增原生实例，草稿无 instance code/link。
 8. 立即关闭 pilot flag、停止 runner，并写入脱敏结论。

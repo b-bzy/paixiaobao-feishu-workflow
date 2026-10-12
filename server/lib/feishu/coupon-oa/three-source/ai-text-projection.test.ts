@@ -15,7 +15,7 @@ function draft(): CouponThreeSourcePilotDraft {
     pilotId: "pilot-1",
     ownerOpenId: "ou-owner",
     task,
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: "coupon-three-source-pilot-v2",
     recognitions: {},
     supplementRecognition: {
       text: "活动名称是双十一严选优惠券申请，活动背景是双十一优惠活动",
@@ -89,5 +89,53 @@ describe("coupon AI supplement projection", () => {
       activityBackground: "AI 活动背景",
     });
     expect(deliverMappingCard).toHaveBeenCalledOnce();
+  });
+
+  it("replaces only invalid form fields and keeps unresolved validation issues", async () => {
+    let current = draft();
+    const supplementRecognition = current.supplementRecognition;
+    if (!supplementRecognition)
+      throw new Error("supplement fixture is missing");
+    current.supplementRecognition = {
+      ...supplementRecognition,
+      kind: "form_repair",
+      replaceOwnerFieldKeys: ["activityStartAt", "businessMode"],
+    };
+    current.selections.ownerFieldValues = {
+      activityStartAt: "2026年9月30日",
+      businessMode: "无法判断",
+      activityName: "业务员活动名称",
+    };
+    current.validationIssues = [
+      "输入校验[activityStartAt]：日期格式错误",
+      "输入校验[businessMode]：业务模式无法确认",
+    ];
+    const correctedRun = run();
+    correctedRun.result = {
+      fields: { activityStartAt: "2026-09-30" },
+      warnings: [],
+    };
+    const projector = createCouponAiTextProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: vi.fn(async (_draft, updates) => {
+        current = { ...current, ...updates };
+        return current;
+      }) as never,
+      deliverMappingCard: vi.fn(async ({ draft: delivered }) => delivered),
+    });
+
+    await projector.project({
+      run: correctedRun,
+      idempotencyKey: "effect-repair",
+    });
+
+    expect(current.selections.ownerFieldValues).toMatchObject({
+      activityStartAt: "2026-09-30",
+      businessMode: "无法判断",
+      activityName: "业务员活动名称",
+    });
+    expect(current.validationIssues).toEqual([
+      "输入校验[businessMode]：业务模式无法确认",
+    ]);
   });
 });

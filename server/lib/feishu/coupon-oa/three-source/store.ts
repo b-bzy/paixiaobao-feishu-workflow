@@ -30,7 +30,7 @@ import {
 } from "./pilot-config";
 
 export const couponThreeSourcePilotSchemaVersion =
-  "coupon-three-source-pilot-v1";
+  "coupon-three-source-pilot-v2";
 
 export interface CouponThreeSourceSourceReference {
   messageId: string;
@@ -80,6 +80,7 @@ export interface CouponThreeSourcePilotDraft {
   >;
   pendingRecognition?: StoredWorkbookRecognition;
   supplementRecognition?: {
+    kind?: "owner_supplement" | "form_repair";
     text: string;
     textSha256: string;
     runId: string;
@@ -88,6 +89,7 @@ export interface CouponThreeSourcePilotDraft {
     result?: ValidatedCouponSupplementText;
     audit?: AiAuditSummary;
     fallbackCode?: string;
+    replaceOwnerFieldKeys?: CouponFieldKey[];
   };
   mappingCardDelivery?: {
     messageId: string;
@@ -220,17 +222,38 @@ function parseRecord(record: BaseRecord): CouponThreeSourcePilotDraft {
   if (!stored?.task) {
     throw new Error("Three-source pilot record is missing state");
   }
-  if (stored.task.schemaVersion !== couponThreeSourceTaskSchemaVersion) {
+  const legacyTask = stored.task as CouponThreeSourceTask & {
+    schemaVersion: string;
+    confirmedCalcImages?: CouponThreeSourceTask["confirmedCalcImages"];
+    pendingCalcImages?: CouponThreeSourceTask["pendingCalcImages"];
+    processedCalcImageOperationIds?: string[];
+  };
+  if (
+    legacyTask.schemaVersion !== couponThreeSourceTaskSchemaVersion &&
+    legacyTask.schemaVersion !== "coupon-three-source-r2-v1"
+  ) {
     throw new Error("Three-source pilot record has an unsupported task schema");
   }
+  const task: CouponThreeSourceTask = {
+    ...legacyTask,
+    schemaVersion: couponThreeSourceTaskSchemaVersion,
+    confirmedCalcImages: legacyTask.confirmedCalcImages ?? [],
+    pendingCalcImages: legacyTask.pendingCalcImages ?? [],
+    processedCalcImageOperationIds:
+      legacyTask.processedCalcImageOperationIds ?? [],
+    artifacts: legacyTask.artifacts.map((artifact, index) => ({
+      ...artifact,
+      artifactId: artifact.artifactId ?? `${artifact.role}-${artifact.sha256}`,
+      order: artifact.order ?? index,
+    })),
+  };
   return {
     recordId: record.record_id,
     pilotId: scalar(record.fields["Pilot ID"]),
     ownerOpenId: scalar(record.fields["Owner Open ID"]),
-    schemaVersion: scalar(
-      record.fields["Schema Version"],
-    ) as typeof couponThreeSourcePilotSchemaVersion,
+    schemaVersion: couponThreeSourcePilotSchemaVersion,
     ...stored,
+    task,
     createdAt: iso(record.created_time),
     updatedAt: iso(record.last_modified_time),
   };

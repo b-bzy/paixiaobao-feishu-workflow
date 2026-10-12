@@ -66,7 +66,7 @@ export interface OfflineThreeSourceRunResult {
   confirmation: SourceConfirmation;
   package: CanonicalPackage;
   artifacts: OfflineArtifact[];
-  screenshot?: RenderedCouponScreenshot;
+  screenshots: RenderedCouponScreenshot[];
   oaPrefill: OaPrefillSnapshot;
   secondConfirmation: { localConfirmationHash: string; oaCreated: false };
 }
@@ -142,16 +142,16 @@ export async function runOfflineThreeSourceWorkflow(
   if (requiresScreenshot && !input.screenshotRenderer) {
     throw new Error("当前业务模式必须提供标准配券表截图渲染器");
   }
-  const screenshot = input.screenshotRenderer
+  const screenshots = input.screenshotRenderer
     ? await input.screenshotRenderer.render({
         couponArtifact,
         revision: packageValue.revision,
       })
-    : undefined;
+    : [];
   const oaPrefill = buildOaPrefillSnapshot({
     package: packageValue,
     artifacts,
-    screenshot,
+    screenshots,
     activityPointPercent: input.activityPointPercent,
   });
   const secondConfirmation = simulateSecondConfirmation({
@@ -168,7 +168,7 @@ export async function runOfflineThreeSourceWorkflow(
     confirmation,
     package: packageValue,
     artifacts,
-    screenshot,
+    screenshots,
     oaPrefill,
     secondConfirmation,
   };

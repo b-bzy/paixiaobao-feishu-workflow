@@ -40,14 +40,20 @@ export function createCouponAiTextProjector(
       }
       const mergedOwnerValues =
         run.status === "succeeded" && run.result
-          ? {
-              ...run.result.fields,
-              ...Object.fromEntries(
+          ? (() => {
+              const replaceKeys = new Set<string>(
+                draft.supplementRecognition?.replaceOwnerFieldKeys ?? [],
+              );
+              const returnedKeys = new Set(Object.keys(run.result.fields));
+              const preserved = Object.fromEntries(
                 Object.entries(draft.selections.ownerFieldValues ?? {}).filter(
-                  ([, value]) => hasOwnerValue(value),
+                  ([key, value]) =>
+                    hasOwnerValue(value) &&
+                    (!replaceKeys.has(key) || !returnedKeys.has(key)),
                 ),
-              ),
-            }
+              );
+              return { ...run.result.fields, ...preserved };
+            })()
           : draft.selections.ownerFieldValues;
       const updated = await dependencies.updateDraft(
         draft,
@@ -66,9 +72,13 @@ export function createCouponAiTextProjector(
           validationIssues:
             run.status === "succeeded"
               ? [
-                  ...draft.validationIssues.filter(
-                    (issue) => !issue.startsWith("补充说明识别"),
-                  ),
+                  ...draft.validationIssues.filter((issue) => {
+                    if (issue.startsWith("补充说明识别")) return false;
+                    const key = issue.match(/^输入校验\[([^\]]+)\]：/)?.[1];
+                    return (
+                      !key || !Object.hasOwn(run.result?.fields ?? {}, key)
+                    );
+                  }),
                   ...(run.result?.warnings.map(
                     (warning) => `补充说明识别提示：${warning}`,
                   ) ?? []),

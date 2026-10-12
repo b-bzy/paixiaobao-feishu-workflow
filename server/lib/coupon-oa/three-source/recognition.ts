@@ -4,6 +4,7 @@ import {
   normalizeRegularRatio,
   regularFullReductionInputSchema,
 } from "../calculation";
+import { canonicalCouponBusinessDate } from "./business-date";
 import type {
   AiPrimaryRecognitionProjection,
   ConfirmedCouponSetSource,
@@ -561,6 +562,12 @@ export function resolveCouponType(input: {
 }
 
 function normalizedOwnerValue(key: CouponFieldKey, value: unknown): unknown {
+  if (key === "activityStartAt" || key === "activityEndAt") {
+    return (
+      canonicalCouponBusinessDate(value) ??
+      (typeof value === "string" ? value.trim() : value)
+    );
+  }
   if (key === "channels") {
     return Array.isArray(value)
       ? value

@@ -163,6 +163,48 @@ describe("coupon three-source AI recognition", () => {
     expect(result.issues).toContain("AI 优惠券候选引用不存在的坐标：配券!A9");
   });
 
+  it("canonicalizes AI date-time candidates before persisting them", async () => {
+    const workbook = await serializeWorkbookForAi(await source());
+    const result = validateCouponThreeSourceAiProposal({
+      workbook,
+      proposal: {
+        fieldCandidates: [
+          {
+            key: "activityStartAt",
+            sheetName: "配券",
+            headerCell: "A1",
+            valueCell: "A2",
+            confidence: 0.9,
+            reason: "根据来源日期推断",
+            origin: "ai_inferred",
+            value: "2026-09-30 00:00",
+          },
+          {
+            key: "activityEndAt",
+            sheetName: "配券",
+            headerCell: "A1",
+            valueCell: "A2",
+            confidence: 0.9,
+            reason: "根据来源日期推断",
+            origin: "ai_inferred",
+            value: "2026-10-10 23:59",
+          },
+        ],
+      },
+    });
+
+    expect(result.fieldCandidates).toEqual([
+      expect.objectContaining({
+        key: "activityStartAt",
+        value: "2026-09-30",
+      }),
+      expect.objectContaining({
+        key: "activityEndAt",
+        value: "2026-10-10",
+      }),
+    ]);
+  });
+
   it("rejects unsupported proposal dimensions and keeps prompt injection as data", async () => {
     const workbook = await serializeWorkbookForAi(await source());
     const result = validateCouponThreeSourceAiProposal({

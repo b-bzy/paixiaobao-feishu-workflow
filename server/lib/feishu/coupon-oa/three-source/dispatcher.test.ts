@@ -16,7 +16,7 @@ function draft(): CouponThreeSourcePilotDraft {
       taskId: "CTS-task",
       ownerOpenId: "ou_owner",
     }),
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: "coupon-three-source-pilot-v2",
     recognitions: {},
     selections: {},
     artifacts: [],
@@ -280,6 +280,41 @@ describe("three-source Bot dispatcher", () => {
       expect.objectContaining({
         fileKey: "file-from-message",
         fileName: "业务白名单.xlsx",
+      }),
+    );
+  });
+
+  it("accepts a direct Feishu image resource for an active task", async () => {
+    const current = draft();
+    const receiveCalcImage: CouponThreeSourcePilotService["receiveCalcImage"] =
+      vi.fn(async () => current);
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: { receiveCalcImage },
+    });
+    values.downloadResource = vi.fn(
+      async () => new Uint8Array([137, 80, 78, 71]),
+    );
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchResource({
+        openId: "ou_owner",
+        messageId: "om-image",
+        resourceType: "image",
+        fileKey: "img-key",
+      }),
+    ).resolves.toMatchObject({ handled: true });
+    expect(values.downloadResource).toHaveBeenCalledWith({
+      messageId: "om-image",
+      resourceKey: "img-key",
+      type: "image",
+    });
+    expect(receiveCalcImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om-image",
+        resourceKey: "img-key",
+        resourceType: "image",
       }),
     );
   });
@@ -616,6 +651,71 @@ describe("three-source Bot dispatcher", () => {
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
       "标准附件已生成",
     );
+  });
+
+  it("queues AI repair instead of generating when owner input remains invalid", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    current.task.blacklistStatus = "absent_confirmed";
+    const updated = {
+      ...current,
+      task: { ...current.task, revision: 6 },
+      selections: {
+        ownerFieldValues: { activityStartAt: "9月30日" },
+        activityPointPercent: 6,
+      },
+    };
+    const repairing = {
+      ...updated,
+      supplementRecognition: {
+        kind: "form_repair" as const,
+        text: "日期纠错",
+        textSha256: "a".repeat(64),
+        runId: "run-repair",
+        revision: 6,
+        status: "pending" as const,
+        replaceOwnerFieldKeys: ["activityStartAt" as const],
+      },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async () => updated);
+    const startSupplementRecognition: CouponThreeSourcePilotService["startSupplementRecognition"] =
+      vi.fn(async () => repairing);
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn();
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: {
+        updateSelections,
+        startSupplementRecognition,
+        confirmSourcesAndGenerate,
+      },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_mapping_confirm:rec-three-source:5",
+        form: {
+          activityPointPercent: "6%",
+          owner_activityStartAt: "9月30日",
+        },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(startSupplementRecognition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: updated,
+        kind: "form_repair",
+        replaceOwnerFieldKeys: ["activityStartAt"],
+        validationIssues: [
+          expect.stringContaining("请输入完整日期，例如 2026-09-30"),
+        ],
+      }),
+    );
+    expect(confirmSourcesAndGenerate).not.toHaveBeenCalled();
   });
 
   it("persists the over-deduction choice and redraws the conditional reason field", async () => {

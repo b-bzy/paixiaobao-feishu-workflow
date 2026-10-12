@@ -1,4 +1,5 @@
 import { isPlaceholderActivityName } from "../../../coupon-oa/three-source/activity-copy";
+import { canonicalCouponBusinessDate } from "../../../coupon-oa/three-source/business-date";
 import type {
   CouponCandidate,
   CouponFieldKey,
@@ -81,6 +82,8 @@ function cancelButton(
 
 function sourcesSummary(draft: CouponThreeSourcePilotDraft): string[] {
   const sources = draft.task.sources;
+  const confirmedImages = draft.task.confirmedCalcImages;
+  const pendingImages = draft.task.pendingCalcImages;
   return [
     `- 配券表：${sources.couponTable?.fileName ?? "待上传"}`,
     `- 商品白名单：${sources.whitelist?.fileName ?? "待上传"}`,
@@ -90,6 +93,8 @@ function sourcesSummary(draft: CouponThreeSourcePilotDraft): string[] {
         ? "已确认无黑名单"
         : "待上传或确认无黑名单")
     }`,
+    `- 已确认测算图片：${confirmedImages.length} 张${confirmedImages.length ? `（${confirmedImages.map((image) => image.fileName).join("、")}）` : ""}`,
+    `- 待确认测算图片：${pendingImages.length} 张${pendingImages.length ? `（${pendingImages.map((image) => image.fileName).join("、")}）` : ""}`,
   ];
 }
 
@@ -321,15 +326,20 @@ const fieldLabels: Partial<Record<CouponFieldKey, string>> = {
   overDeductionReason: "超扣原因",
 };
 
+function ownerFieldDisplayValue(key: CouponFieldKey, value: unknown): string {
+  if (key === "activityStartAt" || key === "activityEndAt") {
+    return canonicalCouponBusinessDate(value) ?? String(value);
+  }
+  return Array.isArray(value) ? value.join("、") : String(value);
+}
+
 function ownerDefaultValue(
   draft: CouponThreeSourcePilotDraft,
   key: CouponFieldKey,
 ): string | undefined {
   const ownerValue = draft.selections.ownerFieldValues?.[key];
   if (ownerValue !== undefined) {
-    return Array.isArray(ownerValue)
-      ? ownerValue.join("、")
-      : String(ownerValue);
+    return ownerFieldDisplayValue(key, ownerValue);
   }
   const couponAi = draft.recognitions.couponTable?.ai;
   const copy =
@@ -350,9 +360,7 @@ function ownerDefaultValue(
       )
     : undefined;
   if (aiField?.value !== undefined) {
-    const value = Array.isArray(aiField.value)
-      ? aiField.value.join("、")
-      : String(aiField.value);
+    const value = ownerFieldDisplayValue(key, aiField.value);
     if (key !== "activityName" || !isPlaceholderActivityName(value)) {
       return value;
     }
@@ -407,10 +415,16 @@ function aiStatusContent(draft: CouponThreeSourcePilotDraft): string[] {
   }
   const supplement = draft.supplementRecognition;
   if (supplement?.status === "pending") {
-    lines.push("**补充说明识别：** 正在处理，完成后会更新本卡片。");
+    lines.push(
+      supplement.kind === "form_repair"
+        ? "**输入纠错：** DeepSeek 正在识别格式问题，完成后会更新本卡片。"
+        : "**补充说明识别：** 正在处理，完成后会更新本卡片。",
+    );
   } else if (supplement?.status === "succeeded") {
     lines.push(
-      "**补充说明识别已完成：** 已回填空白字段，原有人工内容未被覆盖。",
+      supplement.kind === "form_repair"
+        ? "**输入纠错已完成：** 已回填通过强校验的候选，请再次检查并提交。"
+        : "**补充说明识别已完成：** 已回填空白字段，原有人工内容未被覆盖。",
     );
   } else if (supplement) {
     lines.push("**补充说明识别失败，请直接检查并填写字段。**");
@@ -457,11 +471,75 @@ export function buildCouponThreeSourceMappingCard(
           : []),
       ].join("\n"),
     },
+    ...(draft.task.confirmedCalcImages.length &&
+    draft.task.pendingCalcImages.length
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              `已确认测算图片：${draft.task.confirmedCalcImages.length} 张`,
+              `待确认测算图片：${draft.task.pendingCalcImages.length} 张`,
+              "检测到新上传的测算图片。请选择追加到已有图片末尾，或使用本批图片整组替换。",
+            ].join("\n"),
+          },
+          button(draft, {
+            action: "coupon_three_source_calc_images_append",
+            text: "追加新测算图片",
+            extra: { mode: "append" },
+          }),
+          button(draft, {
+            action: "coupon_three_source_calc_images_replace_all",
+            text: "使用本批图片替换全部",
+            type: "danger",
+            extra: { mode: "replace_all" },
+          }),
+        ]
+      : []),
+    ...(draft.task.confirmedCalcImages.length ||
+    draft.task.pendingCalcImages.length
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              `已确认测算图片：${draft.task.confirmedCalcImages.length} 张`,
+              `待确认测算图片：${draft.task.pendingCalcImages.length} 张`,
+              ...[
+                ...draft.task.confirmedCalcImages,
+                ...draft.task.pendingCalcImages,
+              ].map((image, index) => `${index + 1}. ${image.fileName}`),
+              "寄卖/POP 将优先使用确认后的图片；若业务模式选择严选，这些图片不会进入 OA。",
+            ].join("\n"),
+          },
+        ]
+      : []),
     ...(aiStatusContent(draft).length
       ? [
           {
             tag: "markdown",
             content: aiStatusContent(draft).join("\n"),
+          },
+        ]
+      : []),
+    ...(draft.validationIssues.some(
+      (item) => item.startsWith("输入校验[") || item.startsWith("输入校验："),
+    )
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              "**以下输入尚未通过校验：**",
+              ...draft.validationIssues
+                .filter(
+                  (item) =>
+                    item.startsWith("输入校验[") ||
+                    item.startsWith("输入校验："),
+                )
+                .map(
+                  (item) =>
+                    `- ${item.replace(/^输入校验(?:\[[^\]]+\])?：/, "")}`,
+                ),
+              "系统会先尝试识别并回填；仍无法确定时，请按示例修改后再次提交。",
+            ].join("\n"),
           },
         ]
       : []),
@@ -473,7 +551,7 @@ export function buildCouponThreeSourceMappingCard(
               "**以下内容为系统推测或识别不确定，请务必检查：**",
               ...reviewAiFields.map(
                 (candidate) =>
-                  `- ${fieldLabels[candidate.key] ?? "业务信息"}：${Array.isArray(candidate.value) ? candidate.value.join("、") : String(candidate.value ?? "待确认")}`,
+                  `- ${fieldLabels[candidate.key] ?? "业务信息"}：${ownerFieldDisplayValue(candidate.key, candidate.value ?? "待确认")}`,
               ),
             ].join("\n"),
           },
@@ -492,7 +570,8 @@ export function buildCouponThreeSourceMappingCard(
           rows: 4,
           required: true,
           width: "fill",
-          ...(draft.supplementRecognition?.text
+          ...(draft.supplementRecognition?.text &&
+          draft.supplementRecognition.kind !== "form_repair"
             ? { default_value: draft.supplementRecognition.text }
             : {}),
         },
@@ -784,7 +863,10 @@ export function buildCouponThreeSourcePreviewCard(
               `- ${artifact.fileName}（${artifact.sha256.slice(0, 12)}…）`,
           ),
           "",
-          "严选首期不生成配券表截图。确认后只会创建既有 OA 测试稿；不会自动提交正式 OA。",
+          prefill?.values.businessMode === "严选"
+            ? "严选不写入测算图片。"
+            : `测算图片共 ${prefill?.attachments.filter((item) => item.role === "calcImage").length ?? 0} 张，顺序与上方附件一致。`,
+          "确认后只会创建既有 OA 测试稿；不会自动提交正式 OA。",
         ].join("\n"),
       },
       button(draft, {

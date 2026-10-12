@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { z } from "zod";
 import { isPlaceholderActivityName } from "./activity-copy";
+import { canonicalCouponBusinessDate } from "./business-date";
 import type {
   AiActivityCopyCandidate,
   AiCampaignThemeCandidate,
@@ -662,9 +663,23 @@ export function validateCouponThreeSourceAiProposal(input: {
       issues.push(`AI 字段候选 ${candidate.key} 引用不存在的来源坐标`);
       continue;
     }
+    let value = candidate.value;
+    if (
+      (normalizedKey === "activityStartAt" ||
+        normalizedKey === "activityEndAt") &&
+      value !== undefined
+    ) {
+      const date = canonicalCouponBusinessDate(value);
+      if (!date) {
+        issues.push(`AI 字段候选 ${candidate.key} 的日期格式无效，已忽略`);
+        continue;
+      }
+      value = date;
+    }
     fieldCandidates.push({
       ...candidate,
       key: normalizedKey as CouponFieldKey,
+      value,
       evidence: {
         sourceHash: input.workbook.sourceHash,
         sheetName: candidate.sheetName,

@@ -40,7 +40,7 @@ function draft(): CouponThreeSourcePilotDraft {
     pilotId: "CTS-card",
     ownerOpenId: "ou_owner",
     task,
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: "coupon-three-source-pilot-v2",
     recognitions: {
       couponTable: {
         source: {
@@ -166,6 +166,54 @@ describe("three-source Bot cards", () => {
     );
   });
 
+  it("shows persisted AI date-time candidates as business dates", () => {
+    const current = draft();
+    const coupon = current.recognitions.couponTable;
+    if (!coupon) throw new Error("coupon recognition fixture is missing");
+    coupon.ai = {
+      runId: "run-date",
+      revision: current.task.revision,
+      sourceSha256: coupon.sourceHash,
+      status: "succeeded",
+      primary: true,
+      result: {
+        sourceHash: coupon.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [
+          {
+            key: "activityStartAt",
+            sheetName: "Sheet1",
+            headerCell: "A1",
+            valueCell: "A2",
+            confidence: 0.9,
+            reason: "日期候选",
+            origin: "ai_inferred",
+            value: "2026-09-30 00:00",
+          },
+          {
+            key: "activityEndAt",
+            sheetName: "Sheet1",
+            headerCell: "A1",
+            valueCell: "A2",
+            confidence: 0.9,
+            reason: "日期候选",
+            origin: "ai_inferred",
+            value: "2026-10-10 23:59",
+          },
+        ],
+        listCandidates: [],
+        issues: [],
+      },
+    };
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain('"default_value":"2026-09-30"');
+    expect(rendered).toContain('"default_value":"2026-10-10"');
+    expect(rendered).not.toContain("2026-09-30 00:00");
+    expect(rendered).not.toContain("2026-10-10 23:59");
+  });
+
   it("shows the over-deduction reason only after the owner chooses yes", () => {
     const current = draft();
 
@@ -190,6 +238,43 @@ describe("three-source Bot cards", () => {
     expect(withDeduction).toContain(
       '"name":"owner_overDeductionReason","label":{"tag":"plain_text","content":"超扣原因"},"input_type":"multiline_text","rows":3,"required":true',
     );
+  });
+
+  it("shows ordered image counts and append/replace controls", () => {
+    const current = draft();
+    const baseImage = {
+      artifactId: "image-1",
+      messageId: "om-1",
+      resourceKey: "img-1",
+      resourceType: "image" as const,
+      sourceType: "feishu_image" as const,
+      fileName: "第一张.png",
+      contentType: "image/png" as const,
+      bytes: 100,
+      width: 20,
+      height: 10,
+      sha256: "a".repeat(64),
+      receivedOrder: 0,
+      receivedAt: "2030-01-01T00:00:00.000Z",
+      revision: current.task.revision,
+      actorOpenId: "ou_owner",
+    };
+    current.task.confirmedCalcImages = [baseImage];
+    current.task.pendingCalcImages = [
+      {
+        ...baseImage,
+        artifactId: "image-2",
+        messageId: "om-2",
+        fileName: "第二张.png",
+        sha256: "b".repeat(64),
+      },
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("已确认测算图片：1 张");
+    expect(rendered).toContain("待确认测算图片：1 张");
+    expect(rendered).toContain("coupon_three_source_calc_images_append");
+    expect(rendered).toContain("coupon_three_source_calc_images_replace_all");
+    expect(rendered).toContain("严选");
   });
 
   it("keeps no-blacklist and final draft creation as explicit revision-bound actions", () => {

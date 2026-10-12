@@ -33,7 +33,7 @@ function draft(): CouponThreeSourcePilotDraft {
     pilotId: "pilot-1",
     ownerOpenId: "ou_owner",
     task,
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: "coupon-three-source-pilot-v2",
     recognitions: {
       couponTable: {
         source: {

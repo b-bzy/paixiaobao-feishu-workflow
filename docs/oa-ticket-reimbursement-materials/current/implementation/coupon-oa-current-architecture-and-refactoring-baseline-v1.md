@@ -39,7 +39,7 @@
 - Excel 试点生成、普通 Drive 冻结文件写入、Excel 试点 Base 附件写入已实际验证。
 - 已知运行阻塞是：确认生成结果后，应用下载 Drive 冻结文件时返回 HTTP 403，导致“Excel 试点 → 系统 OA 草稿”的真实联调尚未完成。详见[Drive 下载 403 诊断](../../records/diagnostics/coupon-excel-pilot-drive-download-403-resolution-2026-09-30.md)。
 - 当前已启用/既有路径存在三个入口和两张草稿表；另有默认关闭的三源 adapter 与专用 Base 任务投影。试点期可接受这种并行，但任何一轮确认或耐久化方案获批后，必须先做结构收敛，不能继续向现有总路由叠加分支。
-- **三源流程**已有默认关闭的严选适配器：它收集任意布局的配券表、必传 SKU 白名单和可选 SKU 黑名单，要求第一次来源决策，生成冻结产物并交接现有 OA 测试稿。它与 P1-1/旧草稿路径互斥，使用专用 Base/Drive 配置；当前仅可按[本机长连接 draft-only POC](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)验证其受限子集。完整三源 Skill 合同、耐久运行时和原生 OA 仍待后续 Gate；不得因代码存在或 POC 成功而启用 native-submit。
+- **三源流程**已有默认关闭的三业务模式适配器：它收集任意布局的配券表、必传 SKU 白名单、可选 SKU 黑名单，以及寄卖/POP 所需的有序测算图片，生成冻结产物并交接现有 OA 测试稿。它与 P1-1/旧草稿路径互斥，使用专用 Base/Drive 配置；当前仅可按[本机长连接 draft-only POC](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)验证其受限子集。完整耐久运行时和原生 OA 仍待后续 Gate；不得因代码存在或 POC 成功而启用 native-submit。
 
 ### 2.1 三源直接 HTTP POC 的代码边界
 
@@ -47,7 +47,7 @@
 
 作为临时 `local-long-connection-draft-poc`，飞书事件经唯一的本机 `lark-cli` runner 以 HMAC 到达 `server/api/feishu/poc-bridge.post.ts`，再以 `threeSourceOnly` 进入 `handleFeishuPocEvent()`。这仍是同步 legacy POC：文件下载、Excel 解析、标准产物上传与草稿创建都可能发生在同一请求中；本机 runner 甚至可能在 Vercel 成功前 ACK。它没有 durable receipt/outbox、对象存储 canonical bytes、worker、DLQ 或可靠 submission lock，不能替代 [ADR-0007](../../../adr/0007-adopt-durable-control-plane-for-coupon-pilot.md)。
 
-功能范围亦是刻意受限：仅常规满减券、`严选`、SKU 名单；`严选` 首期不生成 `calcImage`，当前卡片只处理活动点位和歧义列，未实现缺字段补充、显式覆盖或完整 provenance 最终预览。完整边界与运行步骤见[本机长连接 draft-only POC 运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
+功能范围仍刻意受限于常规满减券和 SKU 名单，但本地代码现支持 `严选`、`寄卖`、`pop`。严选不冻结 `calcImage`；寄卖/POP 优先冻结 owner 确认的有序用户图片，没有用户图片时从最终标准配券工作簿显示值生成分页 PNG。图片和 Excel 都需在交接前从 Drive 回读并校验 bytes/hash。完整边界与运行步骤见[本机长连接 draft-only POC 运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
 
 ---
 
@@ -116,7 +116,7 @@ flowchart TB
 | `OA优惠券审批` | 手工兜底入口，仅打开配置的原生 OA 发起链接 | 否 | 用户在飞书页面手工提交 | 保留为兜底，不作为自动化主线 |
 | `OA优惠券填报` / `优惠券提单草稿` | 较早的 Bot 表单 + 系统 OA 草稿流程 | 是 | 草稿确认后可提交 | 逐步吸收为统一任务的“手工材料路径” |
 | `优惠券Excel试点` | 当前 P1-1 主线：生成标准 Excel 后交接到 OA 草稿 | 是，先经 Excel 试点草稿 | 通过系统 OA 草稿链路提交 | 保持当前基线，作为后续统一任务的“Excel 生成路径” |
-| `/OA优惠券提报` | 默认关闭的严选 strict-only 三源适配器 | 是，专用三源 Base 投影后交接 OA 测试稿 | `local-long-connection-draft-poc` 中禁止原生 OA | 仅限单用户测试；完整 Skill/R2/R3 另行实现与验收 |
+| `/OA优惠券提报` | 默认关闭的三业务模式三源适配器 | 是，专用三源 Base 投影后交接 OA 测试稿 | `local-long-connection-draft-poc` 中禁止原生 OA | 仅限单用户测试；三业务模式和测算图需另行部署与真实环境验收 |
 | `/clear` | P0 三源失败恢复口令 | 不创建新草稿；把 owner 的活动三源任务标记为 `Canceled` | 否 | 保留 Base/Drive 审计记录，清空后必须重新上传材料 |
 
 每位业务员同一时刻不允许同时存在活动的 Excel 试点、系统 OA 草稿和三源任务；三源试点只查询已启用且存储配置完整的既有路线来执行冲突检查，避免未启用路线因缺少 Base 配置而阻断 P0。已配置路线仍保持互斥，以避免文件被错误归属到另一条流程。
@@ -255,7 +255,7 @@ Confirmed 系统草稿
 | `coupon-oa/approval-client.ts` | 审批定义、附件、实例的飞书 API 封装 | 保留为 Feishu Approval Gateway |
 | `coupon-oa/submit-service.ts` | 确认、提交、回读止损 | 保留为原生审批提交应用服务 |
 | `excel-template-engine/` | 模板读取、生成与二次校验 | 保持独立，禁止被卡片层直接调用 |
-| `coupon-oa/three-source/` | 三源识别、SKU 名单校验、canonical revision、标准产物与 OA 预填 | 严选 strict-only 领域能力；截图、补充/覆盖、非 SKU 仍待实现 |
+| `coupon-oa/three-source/` | 三源识别、SKU 名单校验、canonical revision、标准产物、测算图校验/渲染与 OA 预填 | 本地支持严选/寄卖/POP；非 SKU 与原生 OA 仍未开放 |
 | `coupon-oa/three-source/dispatcher.ts` | 精确命令、材料、卡片回调、跨流程互斥与 OA 测试稿路由 | 默认关闭；只可在本机长连接 draft-only POC 中测试，不能承担 R2/R3 ingress |
 | `coupon-oa/three-source/store.ts` | 三源 pilot Base 状态和 revision 投影 | 临时 POC 存储；不是事务事实源或提交锁 |
 | `coupon-oa/three-source/handoff.ts` | 冻结产物复验、审批附件提升和既有 OA 草稿创建 | 复用既有草稿安全边界；不直接创建原生 OA |

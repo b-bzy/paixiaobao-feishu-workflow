@@ -166,16 +166,28 @@ const screenshotRenderer = {
     revision: number;
   }) {
     const bytes = new Uint8Array([137, 80, 78, 71, input.revision]);
-    return {
-      role: "calcImage" as const,
-      fileName: `${input.couponArtifact.fileName}.png`,
-      bytes,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      sourceArtifactSha256: input.couponArtifact.sha256,
-      templateId: input.couponArtifact.template.id,
-      templateVersion: input.couponArtifact.template.version,
-      renderRange: "A1:Z200",
-    };
+    return [
+      {
+        artifactId: `calc-image-${input.revision}-1`,
+        order: 0,
+        role: "calcImage" as const,
+        provenance: "generated" as const,
+        fileName: `${input.couponArtifact.fileName}.png`,
+        bytes,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceArtifactSha256: input.couponArtifact.sha256,
+        templateId: input.couponArtifact.template.id,
+        templateVersion: input.couponArtifact.template.version,
+        renderRange: "A1:Z200",
+        contentType: "image/png" as const,
+        rendererVersion: "test-renderer-v1",
+        page: 1,
+        pageCount: 1,
+        displayedValuesSha256: createHash("sha256")
+          .update("values")
+          .digest("hex"),
+      },
+    ];
   },
 };
 
@@ -302,10 +314,11 @@ describe("three-source coupon OA offline workflow", () => {
       (artifact) => artifact.role === "couponTable",
     );
     expect(couponArtifact).toBeDefined();
-    expect(result.screenshot).toBeDefined();
-    if (!result.screenshot) throw new Error("Expected non-strict screenshot");
-    expect(result.screenshot.sourceArtifactSha256).toBe(couponArtifact?.sha256);
-    expect(result.screenshot.renderRange).toBe("A1:Z200");
+    expect(result.screenshots).toHaveLength(1);
+    expect(result.screenshots[0].sourceArtifactSha256).toBe(
+      couponArtifact?.sha256,
+    );
+    expect(result.screenshots[0].renderRange).toBe("A1:Z200");
     expect(
       result.oaPrefill.attachments.find(
         (attachment) => attachment.role === "calcImage",
@@ -393,7 +406,7 @@ describe("three-source coupon OA offline workflow", () => {
     const strictInput = await happyPathInput("whitelist_wins", "严选");
     const { screenshotRenderer: _renderer, ...withoutRenderer } = strictInput;
     const strictResult = await runOfflineThreeSourceWorkflow(withoutRenderer);
-    expect(strictResult.screenshot).toBeUndefined();
+    expect(strictResult.screenshots).toEqual([]);
     expect(
       strictResult.oaPrefill.attachments.some(
         (attachment) => attachment.role === "calcImage",

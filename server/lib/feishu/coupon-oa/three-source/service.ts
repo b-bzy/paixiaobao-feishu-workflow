@@ -4,6 +4,10 @@ import { PostgresCouponAiTextRepository } from "../../../control-plane/postgres-
 import { getControlPlaneDatabase } from "../../../control-plane/postgres-sql-database";
 import { couponThreeSourceAiPromptVersion } from "../../../coupon-oa/three-source/ai-recognition";
 import { couponSupplementTextPromptVersion } from "../../../coupon-oa/three-source/ai-text";
+import {
+  inspectUserCalcImage,
+  renderCouponArtifactScreenshots,
+} from "../../../coupon-oa/three-source/calc-image";
 import { parseMultiSheetTieredIdentifierList } from "../../../coupon-oa/three-source/lists";
 import {
   confirmRegularFullReductionCouponSet,
@@ -12,8 +16,10 @@ import {
   selectUniqueRole,
 } from "../../../coupon-oa/three-source/recognition";
 import {
+  type CalcImageMergeMode,
   type CouponThreeSourceSourceFile,
   cancelCouponThreeSourceTask,
+  commitCouponThreeSourceCalcImageBatch,
   confirmCouponThreeSourceDraftOnly,
   confirmCouponThreeSourceNoBlacklist,
   confirmCouponThreeSourceSources,
@@ -21,8 +27,13 @@ import {
   replaceCouponThreeSourceSource,
   saveCouponThreeSourceArtifacts,
   setCouponThreeSourceOverlap,
+  stageCouponThreeSourceCalcImage,
 } from "../../../coupon-oa/three-source/task";
-import type { SourceRole } from "../../../coupon-oa/three-source/types";
+import type {
+  CouponFieldKey,
+  RenderedCouponScreenshot,
+  SourceRole,
+} from "../../../coupon-oa/three-source/types";
 import {
   buildOaPrefillSnapshot,
   createCouponSetCanonicalPackage,
@@ -57,6 +68,12 @@ const maximumSourceBytes = 10 * 1024 * 1024;
 
 export interface CouponThreeSourcePilotDependencies {
   downloadSource(input: CouponThreeSourceSourceReference): Promise<Uint8Array>;
+  downloadResource?(input: {
+    messageId: string;
+    resourceKey: string;
+    type: "file" | "image";
+  }): Promise<Uint8Array>;
+  renderScreenshots?: typeof renderCouponArtifactScreenshots;
   uploadArtifact(input: {
     name: string;
     folderToken: string;
@@ -121,6 +138,14 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
         type: "file",
       });
     },
+    async downloadResource(input) {
+      return downloadFeishuMessageResource({
+        messageId: input.messageId,
+        fileKey: input.resourceKey,
+        type: input.type,
+      });
+    },
+    renderScreenshots: renderCouponArtifactScreenshots,
     uploadArtifact: uploadFeishuDriveFile,
     folderToken: getCouponThreeSourcePilotFolderToken,
     loadTemplates: loadCouponThreeSourceTemplates,
@@ -322,6 +347,86 @@ export class CouponThreeSourcePilotService {
     }
   }
 
+  async receiveCalcImage(input: {
+    draft: CouponThreeSourcePilotDraft;
+    ownerOpenId: string;
+    expectedRevision: number;
+    messageId: string;
+    resourceKey: string;
+    resourceType: "file" | "image";
+    fileName: string;
+    bytes: Uint8Array;
+    receivedAt?: string;
+  }): Promise<CouponThreeSourcePilotDraft> {
+    assertOwnerAndRevision(input);
+    if (input.draft.processedMessageIds.includes(input.messageId)) {
+      return input.draft;
+    }
+    if (!input.messageId || !input.resourceKey) {
+      throw new Error("测算图片缺少飞书消息资源引用");
+    }
+    const inspected = await inspectUserCalcImage(input.bytes);
+    const task = stageCouponThreeSourceCalcImage({
+      task: input.draft.task,
+      ownerOpenId: input.ownerOpenId,
+      expectedRevision: input.expectedRevision,
+      image: {
+        artifactId: `calc-image-user-${inspected.sha256}`,
+        messageId: input.messageId,
+        resourceKey: input.resourceKey,
+        resourceType: input.resourceType,
+        sourceType:
+          input.resourceType === "image" ? "feishu_image" : "feishu_file",
+        fileName: input.fileName,
+        contentType: inspected.contentType,
+        bytes: inspected.bytes,
+        width: inspected.width,
+        height: inspected.height,
+        sha256: inspected.sha256,
+        receivedAt: input.receivedAt ?? new Date().toISOString(),
+      },
+    });
+    if (task === input.draft.task) return input.draft;
+    return this.dependencies.updateDraft(
+      input.draft,
+      {
+        task,
+        artifacts: [],
+        oaPrefill: undefined,
+        oaDraftRecordId: undefined,
+        processedMessageIds: [
+          ...new Set([...input.draft.processedMessageIds, input.messageId]),
+        ],
+        validationIssues: [],
+        failureReason: undefined,
+      },
+      input.expectedRevision,
+    );
+  }
+
+  async commitCalcImageBatch(input: {
+    draft: CouponThreeSourcePilotDraft;
+    ownerOpenId: string;
+    expectedRevision: number;
+    mode: CalcImageMergeMode;
+    operationId: string;
+  }): Promise<CouponThreeSourcePilotDraft> {
+    assertOwnerAndRevision(input);
+    const task = commitCouponThreeSourceCalcImageBatch({
+      task: input.draft.task,
+      ownerOpenId: input.ownerOpenId,
+      expectedRevision: input.expectedRevision,
+      mode: input.mode,
+      operationId: input.operationId,
+    });
+    if (task === input.draft.task) return input.draft;
+    return this.dependencies.updateDraft(
+      input.draft,
+      { task, artifacts: [], oaPrefill: undefined, oaDraftRecordId: undefined },
+      input.expectedRevision,
+    );
+  }
+
   async selectPendingRole(input: {
     draft: CouponThreeSourcePilotDraft;
     ownerOpenId: string;
@@ -453,6 +558,9 @@ export class CouponThreeSourcePilotService {
     expectedRevision: number;
     operationId: string;
     text: string;
+    kind?: "owner_supplement" | "form_repair";
+    replaceOwnerFieldKeys?: CouponFieldKey[];
+    validationIssues?: string[];
   }): Promise<CouponThreeSourcePilotDraft> {
     assertOwnerAndRevision(input);
     if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
@@ -463,18 +571,31 @@ export class CouponThreeSourcePilotService {
       throw new Error("当前环境未配置补充说明识别");
     }
     const textSha256 = sha256(new TextEncoder().encode(text));
-    const supplementRecognition = await this.dependencies.prepareAiText({
+    const prepared = await this.dependencies.prepareAiText({
       draft: input.draft,
       text,
       textSha256,
     });
+    const supplementRecognition = {
+      ...prepared,
+      kind: input.kind ?? "owner_supplement",
+      ...(input.replaceOwnerFieldKeys?.length
+        ? { replaceOwnerFieldKeys: input.replaceOwnerFieldKeys }
+        : {}),
+    };
     const updated = await this.dependencies.updateDraft(
       input.draft,
       {
         supplementRecognition,
-        validationIssues: input.draft.validationIssues.filter(
-          (issue) => !issue.startsWith("补充说明识别"),
-        ),
+        validationIssues: [
+          ...input.draft.validationIssues.filter(
+            (issue) =>
+              !issue.startsWith("补充说明识别") &&
+              !issue.startsWith("输入校验[") &&
+              !issue.startsWith("输入校验："),
+          ),
+          ...(input.validationIssues ?? []),
+        ],
         failureReason: undefined,
       },
       input.expectedRevision,
@@ -543,10 +664,23 @@ export class CouponThreeSourcePilotService {
     const storedBlacklist = input.draft.task.sources.blacklist
       ? storedRecognitionForRole(input.draft, "blacklist")
       : undefined;
+    let draftForGeneration = input.draft;
+    if (input.draft.task.pendingCalcImages.length) {
+      if (input.draft.task.confirmedCalcImages.length) {
+        throw new Error("请先选择追加或替换待确认的测算图片");
+      }
+      draftForGeneration = await this.commitCalcImageBatch({
+        draft: input.draft,
+        ownerOpenId: input.ownerOpenId,
+        expectedRevision: input.expectedRevision,
+        mode: "append",
+        operationId: `${input.operationId}:initial-images`,
+      });
+    }
     const couponSet = await confirmRegularFullReductionCouponSet({
       recognition: couponRecognition,
       ownerId: input.ownerOpenId,
-      revision: input.draft.task.revision,
+      revision: draftForGeneration.task.revision,
       ownerConfirmedCouponType: input.draft.selections.couponType,
       fieldCandidateIds: input.draft.selections.couponFieldCandidateIds,
       ownerFieldValues: {
@@ -559,9 +693,6 @@ export class CouponThreeSourcePilotService {
         : undefined,
     });
     const coupon = couponSet.tiers[0];
-    if (coupon.input.businessMode !== "严选") {
-      throw new Error("三源 Bot 首期仅支持严选业务模式");
-    }
     const whitelist = await parseMultiSheetTieredIdentifierList({
       recognition: whitelistRecognition,
       role: "whitelist",
@@ -586,7 +717,7 @@ export class CouponThreeSourcePilotService {
     const overlapDecision = input.draft.selections.overlapDecision;
     if (overlapIds.length && !overlapDecision) {
       return this.dependencies.updateDraft(
-        input.draft,
+        draftForGeneration,
         {
           coupon,
           whitelist,
@@ -595,7 +726,7 @@ export class CouponThreeSourcePilotService {
             "白黑名单存在重叠，请选择白名单优先、黑名单优先或替换源文件",
           ],
         },
-        input.expectedRevision,
+        draftForGeneration.task.revision,
       );
     }
     if (overlapDecision === "source_replacement_required") {
@@ -603,9 +734,9 @@ export class CouponThreeSourcePilotService {
     }
 
     let task = setCouponThreeSourceOverlap({
-      task: input.draft.task,
+      task: draftForGeneration.task,
       ownerOpenId: input.ownerOpenId,
-      expectedRevision: input.expectedRevision,
+      expectedRevision: draftForGeneration.task.revision,
       overlap: {
         sha256: sha256(
           new TextEncoder().encode(JSON.stringify([...overlapIds].sort())),
@@ -633,22 +764,96 @@ export class CouponThreeSourcePilotService {
       package: packageValue,
       templates: await this.dependencies.loadTemplates(),
     });
+    const couponArtifact = artifacts.find(
+      (artifact) => artifact.role === "couponTable",
+    );
+    if (!couponArtifact) throw new Error("标准配券表生成后缺失");
+    let screenshots: RenderedCouponScreenshot[] = [];
+    if (coupon.input.businessMode !== "严选") {
+      if (task.confirmedCalcImages.length) {
+        screenshots = await Promise.all(
+          task.confirmedCalcImages.map(async (image, order) => {
+            const bytes = this.dependencies.downloadResource
+              ? await this.dependencies.downloadResource({
+                  messageId: image.messageId,
+                  resourceKey: image.resourceKey,
+                  type: image.resourceType,
+                })
+              : await downloadFeishuMessageResource({
+                  messageId: image.messageId,
+                  fileKey: image.resourceKey,
+                  type: image.resourceType,
+                });
+            const inspected = await inspectUserCalcImage(bytes);
+            if (
+              inspected.sha256 !== image.sha256 ||
+              inspected.bytes !== image.bytes ||
+              inspected.contentType !== image.contentType
+            ) {
+              throw new Error(`已确认的测算图片 ${image.fileName} 已变更`);
+            }
+            return {
+              artifactId: image.artifactId,
+              order,
+              role: "calcImage",
+              provenance: "user",
+              fileName: image.fileName,
+              bytes,
+              sha256: image.sha256,
+              contentType: image.contentType,
+              page: order + 1,
+              pageCount: task.confirmedCalcImages.length,
+            } satisfies RenderedCouponScreenshot;
+          }),
+        );
+      } else {
+        screenshots = await (
+          this.dependencies.renderScreenshots ?? renderCouponArtifactScreenshots
+        )({
+          couponArtifact,
+          revision: task.revision,
+          businessMode: coupon.input.businessMode,
+        });
+      }
+    }
     const frozenArtifacts = await Promise.all(
-      artifacts.map(async (artifact) => {
+      [...artifacts, ...screenshots].map(async (artifact, order) => {
         const uploaded = await this.dependencies.uploadArtifact({
           name: artifact.fileName,
           folderToken: this.dependencies.folderToken(),
-          contentType: xlsxContentType,
+          contentType:
+            artifact.role === "calcImage"
+              ? artifact.contentType
+              : xlsxContentType,
           bytes: artifact.bytes,
         });
         return {
+          artifactId:
+            artifact.role === "calcImage"
+              ? artifact.artifactId
+              : `${artifact.role}-${artifact.sha256}`,
+          order: artifact.role === "calcImage" ? artifact.order : order,
           role: artifact.role,
           fileName: artifact.fileName,
           fileToken: uploaded.fileToken,
           bytes: artifact.bytes.byteLength,
           sha256: artifact.sha256,
-          templateId: artifact.template.id,
-          templateVersion: artifact.template.version,
+          templateId:
+            artifact.role === "calcImage"
+              ? (artifact.templateId ?? "user-upload")
+              : artifact.template.id,
+          templateVersion:
+            artifact.role === "calcImage"
+              ? (artifact.templateVersion ?? "1")
+              : artifact.template.version,
+          ...(artifact.role === "calcImage"
+            ? {
+                contentType: artifact.contentType,
+                sourceArtifactSha256: artifact.sourceArtifactSha256,
+                rendererVersion: artifact.rendererVersion,
+                renderRange: artifact.renderRange,
+              }
+            : {}),
         };
       }),
     );
@@ -656,16 +861,17 @@ export class CouponThreeSourcePilotService {
       task,
       ownerOpenId: input.ownerOpenId,
       expectedRevision: task.revision,
-      requiresCalcImage: false,
+      requiresCalcImage: coupon.input.businessMode !== "严选",
       artifacts: frozenArtifacts,
     });
     const oaPrefill = buildOaPrefillSnapshot({
       package: packageValue,
       artifacts,
+      screenshots,
       activityPointPercent,
     });
     return this.dependencies.updateDraft(
-      input.draft,
+      draftForGeneration,
       {
         task,
         coupon,
@@ -678,7 +884,7 @@ export class CouponThreeSourcePilotService {
         validationIssues: [],
         failureReason: undefined,
       },
-      input.expectedRevision,
+      draftForGeneration.task.revision,
     );
   }
 

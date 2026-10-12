@@ -247,7 +247,7 @@ describe("single coupon confirmation", () => {
       revision: 2,
       couponCandidateId: candidate.id,
       ownerFieldValues: {
-        activityStartAt: "2030-09-30",
+        activityStartAt: "2030-09-30 00:00",
         activityPointPercent: 6,
       },
       aiRecognition: {
@@ -262,7 +262,7 @@ describe("single coupon confirmation", () => {
             valueCell: "E2",
             confidence: 0.8,
             reason: "缺少年份，按当前时间推测",
-            value: "2030-09-30",
+            value: "2030-09-30 00:00",
             origin: "ai_inferred",
           },
         ],

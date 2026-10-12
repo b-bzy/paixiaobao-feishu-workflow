@@ -125,6 +125,42 @@ describe("three-source OA draft handoff", () => {
     });
   });
 
+  it("maps ordered calculation images for POP", () => {
+    const imageHash = sha256("image");
+    const result = mapThreeSourcePrefillToOaValues({
+      prefill: {
+        ...prefill,
+        values: { ...prefill.values, businessMode: "pop" },
+        attachments: [
+          {
+            artifactId: "image-1",
+            order: 0,
+            role: "calcImage",
+            fileName: "测算图.png",
+            sha256: imageHash,
+            bytes: 30,
+            offlineReference: "offline://image-1",
+            contentType: "image/png",
+          },
+        ],
+      },
+      attachments: [
+        ...approvalAttachments,
+        {
+          artifactId: "image-1",
+          order: 0,
+          role: "calcImage",
+          fileName: "测算图.png",
+          fileCode: "image-code",
+          bytes: 30,
+          sha256: imageHash,
+          contentType: "image/png",
+        },
+      ],
+    });
+    expect(result.calcImageFileCodes).toEqual(["image-code"]);
+  });
+
   it("creates one system draft but never submits native OA", async () => {
     await expect(
       handoffThreeSourcePilotToOaDraft({
@@ -144,7 +180,7 @@ describe("three-source OA draft handoff", () => {
     );
   });
 
-  it("rejects unsupported modes and existing unrelated drafts before a handoff", async () => {
+  it("rejects non-strict modes without images and existing unrelated drafts before a handoff", async () => {
     expect(() =>
       mapThreeSourcePrefillToOaValues({
         prefill: {
@@ -153,7 +189,7 @@ describe("three-source OA draft handoff", () => {
         },
         attachments: approvalAttachments,
       }),
-    ).toThrow("仅支持严选");
+    ).toThrow("必须包含测算图片");
 
     vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([
       { recordId: "other" } as never,

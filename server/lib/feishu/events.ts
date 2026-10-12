@@ -91,7 +91,7 @@ import {
 import { buildCouponThreeSourceErrorCard } from "./coupon-oa/three-source/cards";
 import {
   dispatchCouponThreeSourceCallback,
-  dispatchCouponThreeSourceFile,
+  dispatchCouponThreeSourceResource,
   dispatchCouponThreeSourceText,
 } from "./coupon-oa/three-source/dispatcher";
 import { isCouponThreeSourcePilotEnabled } from "./coupon-oa/three-source/pilot-config";
@@ -397,13 +397,19 @@ export async function handleFeishuPocEvent(
     const idempotencyKey = eventId(payload);
 
     if (["image", "file"].includes(message.message_type)) {
-      if (message.message_type === "file" && message.message_id) {
+      if (message.message_id) {
         const content = objectValue(message.content);
-        const fileKey = String(content?.file_key ?? "") || undefined;
+        const fileKey =
+          String(
+            message.message_type === "image"
+              ? (content?.image_key ?? "")
+              : (content?.file_key ?? ""),
+          ) || undefined;
         const fileName = String(content?.file_name ?? "") || undefined;
-        const threeSourceResult = await dispatchCouponThreeSourceFile({
+        const threeSourceResult = await dispatchCouponThreeSourceResource({
           openId,
           messageId: message.message_id,
+          resourceType: message.message_type as "file" | "image",
           fileKey,
           fileName,
           idempotencyKey,

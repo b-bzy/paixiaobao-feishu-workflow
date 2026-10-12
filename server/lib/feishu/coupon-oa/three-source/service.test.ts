@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
+import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CouponThreeSourcePilotDependencies,
@@ -122,6 +123,14 @@ describe("CouponThreeSourcePilotService", () => {
   it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
     const coupon = await strictCouponBytes({ overDeduction: "" });
     const whitelist = await whitelistBytes();
+    const userImage = new Uint8Array(
+      await sharp({
+        create: { width: 120, height: 80, channels: 3, background: "white" },
+      })
+        .png()
+        .toBuffer(),
+    );
+    const renderScreenshots = vi.fn();
     const sources = new Map([
       ["om-coupon:file-coupon", coupon],
       ["om-whitelist:file-whitelist", whitelist],
@@ -139,6 +148,11 @@ describe("CouponThreeSourcePilotService", () => {
         if (!bytes) throw new Error("unexpected source download");
         return bytes;
       },
+      downloadResource: async ({ resourceKey }) => {
+        if (resourceKey !== "img-user") throw new Error("unexpected image");
+        return userImage;
+      },
+      renderScreenshots,
       uploadArtifact,
       folderToken: () => "fld-three-source",
       loadTemplates,
@@ -148,7 +162,7 @@ describe("CouponThreeSourcePilotService", () => {
           pilotId: "CTS-pilot",
           ownerOpenId: input.ownerOpenId,
           task: input.task,
-          schemaVersion: "coupon-three-source-pilot-v1",
+          schemaVersion: "coupon-three-source-pilot-v2",
           recognitions: {},
           selections: {},
           artifacts: [],
@@ -283,15 +297,28 @@ describe("CouponThreeSourcePilotService", () => {
       selections: { activityPointPercent: 6 },
       operationId: "set-point-pop",
     });
-    await expect(
-      service.confirmSourcesAndGenerate({
-        draft: current,
-        ownerOpenId: "ou_owner",
-        expectedRevision: current.task.revision,
-        operationId: "generate-pop",
-      }),
-    ).rejects.toThrow("仅支持严选");
-    expect(uploadArtifact).toHaveBeenCalledTimes(2);
+    current = await service.receiveCalcImage({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-user-image",
+      resourceKey: "img-user",
+      resourceType: "image",
+      fileName: "业务员测算图.png",
+      bytes: userImage,
+    });
+    const generated = await service.confirmSourcesAndGenerate({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "generate-pop",
+    });
+    expect(generated.task.status).toBe("AwaitingFinalConfirmation");
+    expect(
+      generated.artifacts.filter((artifact) => artifact.role === "calcImage"),
+    ).toHaveLength(1);
+    expect(renderScreenshots).not.toHaveBeenCalled();
+    expect(uploadArtifact.mock.calls.length).toBeGreaterThan(2);
   });
 
   it("generates one artifact set for multiple amount tiers", async () => {
@@ -320,7 +347,7 @@ describe("CouponThreeSourcePilotService", () => {
           pilotId: "CTS-multiple-coupons",
           ownerOpenId: input.ownerOpenId,
           task: input.task,
-          schemaVersion: "coupon-three-source-pilot-v1",
+          schemaVersion: "coupon-three-source-pilot-v2",
           recognitions: {},
           selections: {},
           artifacts: [],
@@ -427,7 +454,7 @@ describe("CouponThreeSourcePilotService", () => {
           pilotId: "pilot-ai",
           ownerOpenId: input.ownerOpenId,
           task: input.task,
-          schemaVersion: "coupon-three-source-pilot-v1",
+          schemaVersion: "coupon-three-source-pilot-v2",
           recognitions: {},
           selections: {},
           artifacts: [],

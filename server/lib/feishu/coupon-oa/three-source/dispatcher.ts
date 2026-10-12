@@ -1,3 +1,7 @@
+import {
+  couponOwnerRepairText,
+  normalizeCouponOwnerInputs,
+} from "../../../coupon-oa/three-source/owner-input";
 import type { CouponFieldKey } from "../../../coupon-oa/three-source/types";
 import { sendFeishuCard } from "../../client";
 import {
@@ -66,6 +70,11 @@ export interface CouponThreeSourceDispatcherDependencies {
     fileKey: string;
     type: "file";
   }): Promise<Uint8Array>;
+  downloadResource?(input: {
+    messageId: string;
+    resourceKey: string;
+    type: "file" | "image";
+  }): Promise<Uint8Array>;
   sendCard(
     openId: string,
     card: Parameters<typeof sendFeishuCard>[1],
@@ -88,6 +97,13 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   listActiveOa: listActiveCouponOaDrafts,
   listActiveExcel: listActiveCouponExcelPilotDrafts,
   getMessageBody: getFeishuMessageBody,
+  async downloadResource(input) {
+    return downloadFeishuMessageResource({
+      messageId: input.messageId,
+      fileKey: input.resourceKey,
+      type: input.type,
+    });
+  },
   downloadFile: downloadFeishuMessageResource,
   sendCard: sendFeishuCard,
   deliverMappingCard: deliverCouponThreeSourceMappingCard,
@@ -118,6 +134,15 @@ function fileMetadata(content: string): {
       fileKey: stringValue(value.file_key),
       fileName: stringValue(value.file_name),
     };
+  } catch {
+    return {};
+  }
+}
+
+function imageMetadata(content: string): { imageKey?: string } {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    return { imageKey: stringValue(value.image_key) };
   } catch {
     return {};
   }
@@ -263,7 +288,9 @@ async function activeWorkflowConflict(input: {
 }
 
 function mappingSelections(form: Record<string, unknown>) {
-  const activityPointPercent = Number(stringValue(form.activityPointPercent));
+  const activityPointPercent = Number(
+    stringValue(form.activityPointPercent)?.replace(/%$/, ""),
+  );
   if (!Number.isFinite(activityPointPercent) || activityPointPercent <= 0) {
     throw new Error("请填写大于 0 的 OA 活动点位（%）");
   }
@@ -275,7 +302,7 @@ function mappingSelections(form: Record<string, unknown>) {
         : [];
     }),
   );
-  const ownerFieldValues = Object.fromEntries(
+  const submittedOwnerFieldValues = Object.fromEntries(
     Object.entries(form).flatMap(([name, value]) => {
       const fieldValue = stringValue(value);
       return name.startsWith("owner_") && fieldValue
@@ -283,6 +310,7 @@ function mappingSelections(form: Record<string, unknown>) {
         : [];
     }),
   ) as Partial<Record<CouponFieldKey, unknown>>;
+  const ownerInput = normalizeCouponOwnerInputs(submittedOwnerFieldValues);
   const couponType = stringValue(form.couponType);
   if (couponType && couponType !== "regular_full_reduction") {
     throw new Error("当前 P0 只支持常规满减券");
@@ -304,7 +332,10 @@ function mappingSelections(form: Record<string, unknown>) {
     ...(Object.keys(couponFieldCandidateIds).length
       ? { couponFieldCandidateIds }
       : {}),
-    ...(Object.keys(ownerFieldValues).length ? { ownerFieldValues } : {}),
+    ...(Object.keys(ownerInput.values).length
+      ? { ownerFieldValues: ownerInput.values }
+      : {}),
+    repairIssues: ownerInput.issues,
     whitelist: listSelection("whitelist"),
     blacklist: listSelection("blacklist"),
   };
@@ -389,9 +420,10 @@ export function createCouponThreeSourceDispatcher(
     }
   }
 
-  async function dispatchFile(input: {
+  async function dispatchResource(input: {
     openId: string;
     messageId: string;
+    resourceType: "file" | "image";
     fileKey?: string;
     fileName?: string;
     idempotencyKey?: string;
@@ -440,33 +472,73 @@ export function createCouponThreeSourceDispatcher(
         const original = await dependencies.getMessageBody({
           messageId: input.messageId,
         });
-        if (original.messageType !== "file") {
-          throw new Error("来源消息不是文件类型");
+        if (original.messageType !== input.resourceType) {
+          throw new Error("来源消息类型与资源类型不一致");
         }
-        const metadata = fileMetadata(original.content);
-        fileKey = metadata.fileKey;
-        fileName = fileName ?? metadata.fileName;
+        if (input.resourceType === "image") {
+          fileKey = imageMetadata(original.content).imageKey;
+        } else {
+          const metadata = fileMetadata(original.content);
+          fileKey = metadata.fileKey;
+          fileName = fileName ?? metadata.fileName;
+        }
       }
       if (!fileKey) {
-        throw new Error("来源文件未包含 file_key");
+        throw new Error(
+          input.resourceType === "image"
+            ? "图片消息未包含 image_key"
+            : "来源文件未包含 file_key",
+        );
       }
-      const bytes = await dependencies.downloadFile({
-        messageId: input.messageId,
-        fileKey,
-        type: "file",
-      });
-      const next = await dependencies.createService().receiveSource({
-        draft: active[0],
-        ownerOpenId: input.openId,
-        expectedRevision: active[0].task.revision,
-        messageId: input.messageId,
-        fileKey,
-        fileName: fileName ?? "未命名来源文件.xlsx",
-        bytes,
-      });
+      const bytes = dependencies.downloadResource
+        ? await dependencies.downloadResource({
+            messageId: input.messageId,
+            resourceKey: fileKey,
+            type: input.resourceType,
+          })
+        : input.resourceType === "file"
+          ? await dependencies.downloadFile({
+              messageId: input.messageId,
+              fileKey,
+              type: "file",
+            })
+          : await downloadFeishuMessageResource({
+              messageId: input.messageId,
+              fileKey,
+              type: "image",
+            });
+      const service = dependencies.createService();
+      const isWorkbook =
+        input.resourceType === "file" &&
+        (fileName ?? "").toLowerCase().endsWith(".xlsx");
+      const next = isWorkbook
+        ? await service.receiveSource({
+            draft: active[0],
+            ownerOpenId: input.openId,
+            expectedRevision: active[0].task.revision,
+            messageId: input.messageId,
+            fileKey,
+            fileName: fileName ?? "未命名来源文件.xlsx",
+            bytes,
+          })
+        : await service.receiveCalcImage({
+            draft: active[0],
+            ownerOpenId: input.openId,
+            expectedRevision: active[0].task.revision,
+            messageId: input.messageId,
+            resourceKey: fileKey,
+            resourceType: input.resourceType,
+            fileName:
+              fileName ??
+              (input.resourceType === "image" ? "飞书图片.png" : "测算图片"),
+            bytes,
+          });
       // Unambiguous uploads are collected silently. The owner starts one
       // recognition batch from the intake card after all files are present.
-      if (next.pendingRecognition) {
+      if (
+        next.pendingRecognition ||
+        (!isWorkbook && next.mappingCardDelivery)
+      ) {
         await sendDraftState({
           openId: input.openId,
           draft: next,
@@ -604,6 +676,19 @@ export function createCouponThreeSourceDispatcher(
             operationId: id,
           });
           break;
+        case "coupon_three_source_calc_images_append":
+        case "coupon_three_source_calc_images_replace_all":
+          next = await service.commitCalcImageBatch({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision,
+            mode:
+              action === "coupon_three_source_calc_images_append"
+                ? "append"
+                : "replace_all",
+            operationId: id,
+          });
+          break;
         case "coupon_three_source_over_deduction_select": {
           const decision = stringValue(value.decision);
           if (decision !== "是" && decision !== "否") {
@@ -624,7 +709,9 @@ export function createCouponThreeSourceDispatcher(
           break;
         }
         case "coupon_three_source_mapping_confirm": {
-          const selections = mappingSelections(input.form ?? {});
+          const { repairIssues, ...selections } = mappingSelections(
+            input.form ?? {},
+          );
           let ready = draft;
           if (draft.task.blacklistStatus === "absent_pending_confirmation") {
             if (
@@ -646,12 +733,26 @@ export function createCouponThreeSourceDispatcher(
             selections,
             operationId: id,
           });
-          next = await service.confirmSourcesAndGenerate({
-            draft: updated,
-            ownerOpenId: input.openId,
-            expectedRevision: updated.task.revision,
-            operationId: `${id}:generate`,
-          });
+          next = repairIssues.length
+            ? await service.startSupplementRecognition({
+                draft: updated,
+                ownerOpenId: input.openId,
+                expectedRevision: updated.task.revision,
+                operationId: `${id}:repair`,
+                text: couponOwnerRepairText(repairIssues),
+                kind: "form_repair",
+                replaceOwnerFieldKeys: repairIssues.map((item) => item.key),
+                validationIssues: repairIssues.map(
+                  (item) =>
+                    `输入校验[${item.key}]：${item.message}。当前输入：${item.input}`,
+                ),
+              })
+            : await service.confirmSourcesAndGenerate({
+                draft: updated,
+                ownerOpenId: input.openId,
+                expectedRevision: updated.task.revision,
+                operationId: `${id}:generate`,
+              });
           break;
         }
         case "coupon_three_source_overlap_decide": {
@@ -739,12 +840,17 @@ export function createCouponThreeSourceDispatcher(
     }
   }
 
-  return { dispatchText, dispatchFile, dispatchCallback };
+  const dispatchFile = (
+    input: Omit<Parameters<typeof dispatchResource>[0], "resourceType">,
+  ) => dispatchResource({ ...input, resourceType: "file" });
+  return { dispatchText, dispatchFile, dispatchResource, dispatchCallback };
 }
 
 const defaultDispatcher = createCouponThreeSourceDispatcher();
 
 export const dispatchCouponThreeSourceText = defaultDispatcher.dispatchText;
 export const dispatchCouponThreeSourceFile = defaultDispatcher.dispatchFile;
+export const dispatchCouponThreeSourceResource =
+  defaultDispatcher.dispatchResource;
 export const dispatchCouponThreeSourceCallback =
   defaultDispatcher.dispatchCallback;

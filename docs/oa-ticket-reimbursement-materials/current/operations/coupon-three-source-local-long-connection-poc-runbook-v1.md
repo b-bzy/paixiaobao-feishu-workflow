@@ -103,7 +103,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
    ```bash
    pnpm dev:coupon-three-source:p0-worker
    ```
-   不再用手写 `curl` 循环触发 tick，也不得从未校验 revision 的临时 URL 文件恢复 worker。
+   worker 启动时会扫描本机进程；发现第二个 guarded worker 或任何包含 `/api/internal/control-plane/tick` 的旧 `curl` 循环时立即退出。不再用手写 `curl` 循环触发 tick，也不得从未校验 revision 的临时 URL 文件恢复 worker。
    日志只能显示目标 host、event type 和脱敏 ID；若看到 secret、完整 payload、完整 open ID 或附件内容，立刻停止。
 5. runner 的启动/HTTP 成功不代表可恢复，也不代表业务成功。启动后保持 pilot flag 关闭，直到明确记录测试窗口。
 

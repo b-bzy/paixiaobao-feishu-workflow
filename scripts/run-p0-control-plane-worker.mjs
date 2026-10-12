@@ -1,7 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { execFileSync } from "node:child_process";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 import { verifyP0DeploymentIdentity } from "./lib/p0-deployment-identity.mjs";
+import { assertExclusiveP0Worker } from "./lib/p0-worker-process-guard.mjs";
 
 if (
   process.env.HTTP_PROXY ||
@@ -10,6 +12,12 @@ if (
 ) {
   setGlobalDispatcher(new EnvHttpProxyAgent());
 }
+
+assertExclusiveP0Worker({
+  processList: execFileSync("ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+  }),
+});
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();

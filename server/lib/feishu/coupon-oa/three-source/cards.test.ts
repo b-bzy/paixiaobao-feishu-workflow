@@ -164,6 +164,32 @@ describe("three-source Bot cards", () => {
     );
   });
 
+  it("shows the over-deduction reason only after the owner chooses yes", () => {
+    const current = draft();
+
+    const undecided = JSON.stringify(
+      buildCouponThreeSourceMappingCard(current),
+    );
+    expect(undecided).toContain("coupon_three_source_over_deduction_select");
+    expect(undecided).not.toContain('"name":"owner_overDeduction"');
+    expect(undecided).not.toContain('"name":"owner_overDeductionReason"');
+
+    current.selections.ownerFieldValues = { overDeduction: "否" };
+    const noDeduction = JSON.stringify(
+      buildCouponThreeSourceMappingCard(current),
+    );
+    expect(noDeduction).not.toContain('"name":"owner_overDeductionReason"');
+
+    current.selections.ownerFieldValues = { overDeduction: "是" };
+    const withDeduction = JSON.stringify(
+      buildCouponThreeSourceMappingCard(current),
+    );
+    expect(withDeduction).toContain('"name":"owner_overDeductionReason"');
+    expect(withDeduction).toContain(
+      '"name":"owner_overDeductionReason","label":{"tag":"plain_text","content":"超扣原因"},"input_type":"multiline_text","rows":3,"required":true',
+    );
+  });
+
   it("keeps no-blacklist and final draft creation as explicit revision-bound actions", () => {
     const current = draft();
     const noBlacklist = JSON.stringify(

@@ -358,7 +358,14 @@ export class CouponThreeSourcePilotService {
     return this.dependencies.updateDraft(
       input.draft,
       {
-        selections: { ...input.draft.selections, ...input.selections },
+        selections: {
+          ...input.draft.selections,
+          ...input.selections,
+          ownerFieldValues: {
+            ...input.draft.selections.ownerFieldValues,
+            ...input.selections.ownerFieldValues,
+          },
+        },
         coupon: undefined,
         whitelist: undefined,
         blacklist: undefined,

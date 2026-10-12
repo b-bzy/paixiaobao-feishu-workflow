@@ -13,7 +13,7 @@ async function workbookBytes(workbook: ExcelJS.Workbook): Promise<Uint8Array> {
 }
 
 async function strictCouponBytes(
-  input: { businessMode?: string } = {},
+  input: { businessMode?: string; overDeduction?: string } = {},
 ): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("配券材料");
@@ -66,7 +66,7 @@ async function strictCouponBytes(
     "不允许",
     "公开自动推广",
     "领券中心",
-    "否",
+    input.overDeduction ?? "否",
     "",
   ];
   return workbookBytes(workbook);
@@ -120,7 +120,7 @@ async function loadTemplates() {
 
 describe("CouponThreeSourcePilotService", () => {
   it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
-    const coupon = await strictCouponBytes();
+    const coupon = await strictCouponBytes({ overDeduction: "" });
     const whitelist = await whitelistBytes();
     const sources = new Map([
       ["om-coupon:file-coupon", coupon],
@@ -205,8 +205,22 @@ describe("CouponThreeSourcePilotService", () => {
       draft: current,
       ownerOpenId: "ou_owner",
       expectedRevision: current.task.revision,
-      selections: { activityPointPercent: 6 },
+      selections: { ownerFieldValues: { overDeduction: "否" } },
+      operationId: "set-over-deduction",
+    });
+    current = await service.updateSelections({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      selections: {
+        activityPointPercent: 6,
+        ownerFieldValues: { overDeductionReason: "" },
+      },
       operationId: "set-point",
+    });
+    expect(current.selections.ownerFieldValues).toMatchObject({
+      overDeduction: "否",
+      overDeductionReason: "",
     });
     current = await service.confirmSourcesAndGenerate({
       draft: current,

@@ -616,6 +616,66 @@ describe("three-source Bot dispatcher", () => {
     );
   });
 
+  it("persists the over-deduction choice and redraws the conditional reason field", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async (input) => ({
+        ...current,
+        selections: {
+          ...current.selections,
+          ...input.selections,
+          ownerFieldValues: {
+            ...current.selections.ownerFieldValues,
+            ...input.selections.ownerFieldValues,
+          },
+        },
+      }));
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_over_deduction_select",
+        value: {
+          pilotRecordId: current.recordId,
+          revision: 5,
+          decision: "是",
+        },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message:
+        "Coupon three-source action coupon_three_source_over_deduction_select completed",
+    });
+
+    expect(updateSelections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRevision: 5,
+        selections: { ownerFieldValues: { overDeduction: "是" } },
+      }),
+    );
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      '"name":"owner_overDeductionReason"',
+    );
+  });
+
   it("rejects a three-source start when another coupon workflow remains active", async () => {
     const { values, sendCard } = dependencies({
       activeOa: [{ recordId: "rec-oa" }],

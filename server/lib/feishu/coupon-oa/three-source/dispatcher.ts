@@ -584,6 +584,25 @@ export function createCouponThreeSourceDispatcher(
             operationId: id,
           });
           break;
+        case "coupon_three_source_over_deduction_select": {
+          const decision = stringValue(value.decision);
+          if (decision !== "是" && decision !== "否") {
+            throw new Error("请选择是否超扣");
+          }
+          next = await service.updateSelections({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision,
+            selections: {
+              ownerFieldValues: {
+                overDeduction: decision,
+                ...(decision === "否" ? { overDeductionReason: "" } : {}),
+              },
+            },
+            operationId: id,
+          });
+          break;
+        }
         case "coupon_three_source_mapping_confirm": {
           const selections = mappingSelections(input.form ?? {});
           let ready = draft;

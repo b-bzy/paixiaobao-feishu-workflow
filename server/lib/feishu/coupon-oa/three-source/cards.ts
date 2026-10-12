@@ -311,12 +311,10 @@ const ownerSupplementKeys = [
   "claimRule",
   "allowGift",
   "promotionMode",
-  "overDeduction",
 ] as const satisfies readonly CouponFieldKey[];
 
 const optionalOwnerSupplementKeys = [
   "publicPromotionChannels",
-  "overDeductionReason",
 ] as const satisfies readonly CouponFieldKey[];
 
 const fieldLabels: Partial<Record<CouponFieldKey, string>> = {
@@ -381,6 +379,13 @@ function missingOwnerFields(
   );
 }
 
+function overDeductionChoice(
+  draft: CouponThreeSourcePilotDraft,
+): "是" | "否" | undefined {
+  const value = ownerDefaultValue(draft, "overDeduction")?.trim();
+  return value === "是" || value === "否" ? value : undefined;
+}
+
 export function buildCouponThreeSourceMappingCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
@@ -394,6 +399,7 @@ export function buildCouponThreeSourceMappingCard(
   const onlyUnsupported =
     coupons.length > 0 &&
     coupons.every((candidate) => candidate.couponType === "unsupported");
+  const selectedOverDeduction = overDeductionChoice(draft);
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
@@ -434,6 +440,22 @@ export function buildCouponThreeSourceMappingCard(
         },
       ],
     },
+    {
+      tag: "markdown",
+      content: `**是否超扣：** ${selectedOverDeduction ?? "待确认"}\n选择“是”后才会显示并要求填写超扣原因。`,
+    },
+    button(draft, {
+      action: "coupon_three_source_over_deduction_select",
+      text: "否，不超扣",
+      type: selectedOverDeduction === "否" ? "primary_filled" : "default",
+      extra: { decision: "否" },
+    }),
+    button(draft, {
+      action: "coupon_three_source_over_deduction_select",
+      text: "是，需要填写超扣原因",
+      type: selectedOverDeduction === "是" ? "primary_filled" : "default",
+      extra: { decision: "是" },
+    }),
     {
       tag: "form",
       name: "coupon_three_source_mapping_submit",
@@ -531,9 +553,12 @@ export function buildCouponThreeSourceMappingCard(
         ...missingOwnerFields(coupon)
           .filter(
             (key) =>
-              !["businessMode", "activityName", "activityBackground"].includes(
-                key,
-              ),
+              ![
+                "businessMode",
+                "activityName",
+                "activityBackground",
+                "overDeduction",
+              ].includes(key),
           )
           .map((key) => ({
             ...(key === "businessMode"
@@ -563,6 +588,27 @@ export function buildCouponThreeSourceMappingCard(
                   width: "fill",
                 }),
           })),
+        ...(selectedOverDeduction === "是"
+          ? [
+              {
+                tag: "input",
+                name: "owner_overDeductionReason",
+                label: plainText("超扣原因"),
+                input_type: "multiline_text",
+                rows: 3,
+                required: true,
+                width: "fill",
+                ...(ownerDefaultValue(draft, "overDeductionReason")
+                  ? {
+                      default_value: ownerDefaultValue(
+                        draft,
+                        "overDeductionReason",
+                      ),
+                    }
+                  : {}),
+              },
+            ]
+          : []),
         ...optionalOwnerSupplementKeys
           .filter(
             (key) =>

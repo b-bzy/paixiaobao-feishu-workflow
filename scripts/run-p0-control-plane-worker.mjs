@@ -1,6 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 import { verifyP0DeploymentIdentity } from "./lib/p0-deployment-identity.mjs";
+
+if (
+  process.env.HTTP_PROXY ||
+  process.env.HTTPS_PROXY ||
+  process.env.ALL_PROXY
+) {
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+}
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();

@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it, vi } from "vitest";
 import type { AiAuditSummary } from "../coupon-oa/three-source/types";
+import type { CouponActivityCopyGateway } from "../feishu/deepseek-activity-copy-gateway";
 import type { CouponThreeSourceAiGateway } from "../feishu/deepseek-chat-gateway";
 import { createCouponAiRecognitionEffectHandler } from "./coupon-ai-recognition-effect";
 import type {
@@ -78,6 +79,155 @@ function repository(initial: CouponAiRecognitionRun) {
 }
 
 describe("coupon AI recognition effect", () => {
+  it("uses the dedicated activity-copy prompt and persists both card fields", async () => {
+    const bytes = await sourceBytes();
+    const { createHash } = await import("node:crypto");
+    const pending = {
+      ...run("pending"),
+      sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const repo = repository(pending);
+    const gateway: CouponThreeSourceAiGateway = {
+      recognize: vi.fn(async () => ({
+        ok: true as const,
+        proposal: {
+          couponCandidates: [
+            {
+              couponType: "regular_full_reduction",
+              displayName: "满100减20",
+              sheetName: "配券",
+              row: 2,
+              evidenceCells: ["A2"],
+            },
+          ],
+        },
+        requestSha256: "r".repeat(64),
+        responseSha256: "s".repeat(64),
+        startedAt: "2030-01-01T00:00:00.000Z",
+        completedAt: "2030-01-01T00:00:01.000Z",
+        durationMs: 1000,
+      })),
+    };
+    const activityCopyGateway: CouponActivityCopyGateway = {
+      generate: vi.fn(),
+    };
+    // Use the fact id supplied to the dedicated gateway instead of coupling
+    // this test to the internal stable-id implementation.
+    vi.mocked(activityCopyGateway.generate).mockImplementationOnce(
+      async (facts) => ({
+        ok: true as const,
+        proposal: {
+          activityName: "满100减20优惠券申请",
+          activityBackground:
+            "本期申请满100减20优惠券，本期配置一档优惠券：满100减20。",
+          coveredTierIds: facts.tiers.map((tier) => tier.id),
+          usedFactIds: facts.tiers.map((tier) => tier.id),
+        },
+        requestSha256: "c".repeat(64),
+        responseSha256: "d".repeat(64),
+        startedAt: "2030-01-01T00:00:01.000Z",
+        completedAt: "2030-01-01T00:00:02.000Z",
+        durationMs: 1000,
+      }),
+    );
+    const handler = createCouponAiRecognitionEffectHandler({
+      repository: repo,
+      gateway,
+      activityCopyGateway,
+      sourceLoader: {
+        load: vi.fn(async () => ({ fileName: "coupon.xlsx", bytes })),
+      },
+      projector: { project: vi.fn(async () => undefined) },
+    });
+
+    await expect(handler(effect())).resolves.toMatchObject({
+      kind: "succeeded",
+    });
+    expect(activityCopyGateway.generate).toHaveBeenCalledTimes(1);
+    expect(repo.saveTerminalResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "succeeded",
+        result: expect.objectContaining({
+          activityCopyCandidates: [
+            expect.objectContaining({ key: "activityName" }),
+            expect.objectContaining({ key: "activityBackground" }),
+          ],
+        }),
+        audit: expect.objectContaining({
+          activityCopy: expect.objectContaining({ status: "succeeded" }),
+        }),
+      }),
+    );
+  });
+
+  it("records a visible failure instead of treating missing activity copy as generated", async () => {
+    const bytes = await sourceBytes();
+    const { createHash } = await import("node:crypto");
+    const pending = {
+      ...run("pending"),
+      sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const repo = repository(pending);
+    const gateway: CouponThreeSourceAiGateway = {
+      recognize: vi.fn(async () => ({
+        ok: true as const,
+        proposal: {
+          couponCandidates: [
+            {
+              couponType: "regular_full_reduction",
+              displayName: "100减20 / A (SKUID)",
+              sheetName: "配券",
+              row: 2,
+              evidenceCells: ["A2"],
+            },
+          ],
+        },
+        requestSha256: "r".repeat(64),
+        responseSha256: "s".repeat(64),
+        startedAt: "2030-01-01T00:00:00.000Z",
+        completedAt: "2030-01-01T00:00:01.000Z",
+        durationMs: 1000,
+      })),
+    };
+    const activityCopyGateway: CouponActivityCopyGateway = {
+      generate: vi.fn(async () => ({
+        ok: false as const,
+        code: "timeout" as const,
+        requestSha256: "c".repeat(64),
+        startedAt: "2030-01-01T00:00:01.000Z",
+        completedAt: "2030-01-01T00:00:46.000Z",
+        durationMs: 45_000,
+      })),
+    };
+    const handler = createCouponAiRecognitionEffectHandler({
+      repository: repo,
+      gateway,
+      activityCopyGateway,
+      sourceLoader: {
+        load: vi.fn(async () => ({ fileName: "coupon.xlsx", bytes })),
+      },
+      projector: { project: vi.fn(async () => undefined) },
+    });
+
+    await expect(handler(effect())).resolves.toMatchObject({
+      kind: "succeeded",
+    });
+    expect(repo.saveTerminalResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: expect.objectContaining({
+          activityCopyCandidates: [],
+          activityCopyAudit: expect.objectContaining({
+            status: "failed",
+            failureCode: "timeout",
+          }),
+          issues: expect.arrayContaining([
+            expect.stringContaining("AI 活动文案生成失败"),
+          ]),
+        }),
+      }),
+    );
+  });
+
   it("calls the provider once, saves terminal result, then projects", async () => {
     const bytes = await sourceBytes();
     const pending = { ...run("pending"), sourceSha256: "" };

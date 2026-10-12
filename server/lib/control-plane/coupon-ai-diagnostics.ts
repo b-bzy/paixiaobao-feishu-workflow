@@ -17,6 +17,13 @@ interface AiRunDiagnosticRow extends Record<string, unknown> {
   duration_ms?: number;
   validated_result?: {
     issues?: string[];
+    activityCopyAudit?: {
+      status?: string;
+      promptVersion?: string;
+      requestSha256?: string;
+      responseSha256?: string;
+      failureCode?: string;
+    };
     activityCopyCandidates?: Array<{
       key?: string;
       value?: unknown;
@@ -39,6 +46,13 @@ export interface CouponAiRunDiagnostic {
   validationIssues: string[];
   activityCopyCandidateKeys: string[];
   activityFieldCandidateKeys: string[];
+  activityCopyCall: {
+    status: string;
+    promptVersion?: string;
+    requestRecorded: boolean;
+    responseRecorded: boolean;
+    failureCode?: string;
+  };
   draftProjection: {
     available: boolean;
     sameRun: boolean;
@@ -158,6 +172,15 @@ export async function getRecentCouponAiDiagnostics(
           validated?.activityCopyCandidates,
         ),
         activityFieldCandidateKeys: activityKeys(validated?.fieldCandidates),
+        activityCopyCall: {
+          status: validated?.activityCopyAudit?.status ?? "not_recorded",
+          promptVersion: validated?.activityCopyAudit?.promptVersion,
+          requestRecorded: Boolean(validated?.activityCopyAudit?.requestSha256),
+          responseRecorded: Boolean(
+            validated?.activityCopyAudit?.responseSha256,
+          ),
+          failureCode: validated?.activityCopyAudit?.failureCode,
+        },
         draftProjection,
       };
     }),

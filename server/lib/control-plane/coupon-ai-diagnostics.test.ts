@@ -19,6 +19,12 @@ describe("coupon AI diagnostics", () => {
             duration_ms: 1200,
             validated_result: {
               issues: [],
+              activityCopyAudit: {
+                status: "succeeded",
+                promptVersion: "coupon-activity-copy-ai-v1",
+                requestSha256: "copy-request-hash",
+                responseSha256: "copy-response-hash",
+              },
               activityCopyCandidates: [
                 { key: "activityName", value: "AI 活动名称" },
                 { key: "activityBackground", value: "AI 活动背景" },
@@ -92,6 +98,13 @@ describe("coupon AI diagnostics", () => {
         requestRecorded: true,
         responseRecorded: true,
         activityCopyCandidateKeys: ["activityName", "activityBackground"],
+        activityCopyCall: {
+          status: "succeeded",
+          promptVersion: "coupon-activity-copy-ai-v1",
+          requestRecorded: true,
+          responseRecorded: true,
+          failureCode: undefined,
+        },
         draftProjection: expect.objectContaining({
           sameRun: true,
           primary: true,

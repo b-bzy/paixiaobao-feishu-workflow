@@ -1,6 +1,7 @@
 import {
   getCouponPublicCalendarConfig,
   getCouponThreeSourceAiConfig,
+  isCouponActivityCopyEnabled,
   isCouponThreeSourceAiRecognitionEnabled,
 } from "../feishu/coupon-oa/three-source/ai-config";
 import {
@@ -8,6 +9,8 @@ import {
   feishuCouponAiSourceLoader,
 } from "../feishu/coupon-oa/three-source/ai-projection";
 import { createCouponAiTextProjector } from "../feishu/coupon-oa/three-source/ai-text-projection";
+import type { CouponActivityCopyGateway } from "../feishu/deepseek-activity-copy-gateway";
+import { createDeepSeekActivityCopyGateway } from "../feishu/deepseek-activity-copy-gateway";
 import type { CouponThreeSourceAiGateway } from "../feishu/deepseek-chat-gateway";
 import { createDeepSeekChatGateway } from "../feishu/deepseek-chat-gateway";
 import type { CouponSupplementTextGateway } from "../feishu/deepseek-text-gateway";
@@ -144,6 +147,7 @@ export function createDurableCouponControlPlaneWorker(input: {
     sourceLoader: CouponAiSourceLoader;
     projector: CouponAiRecognitionProjector;
     calendarGateway?: PublicCampaignCalendarGateway;
+    activityCopyGateway?: CouponActivityCopyGateway;
   };
   aiText?: {
     gateway: CouponSupplementTextGateway;
@@ -216,6 +220,9 @@ export function createConfiguredDurableCouponControlPlaneWorker(): DurableCoupon
         calendarGateway: createPublicCampaignCalendarGateway(
           getCouponPublicCalendarConfig(),
         ),
+        activityCopyGateway: isCouponActivityCopyEnabled()
+          ? createDeepSeekActivityCopyGateway(getCouponThreeSourceAiConfig())
+          : undefined,
       }
     : undefined;
   const aiText = isCouponThreeSourceAiRecognitionEnabled()

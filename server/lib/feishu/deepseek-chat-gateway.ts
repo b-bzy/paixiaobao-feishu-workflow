@@ -43,6 +43,11 @@ export interface CouponThreeSourceAiGateway {
   recognize(input: AiRecognitionRequest): Promise<AiGatewayResponse>;
 }
 
+export interface DeepSeekJsonPrompt {
+  system: string;
+  user: string;
+}
+
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -83,6 +88,145 @@ async function readBoundedResponse(
   return bytes;
 }
 
+export async function callDeepSeekJson(
+  config: CouponThreeSourceAiConfig,
+  prompt: DeepSeekJsonPrompt,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AiGatewayResponse> {
+  if (!config.enabled || !config.apiKey) {
+    throw new Error("P0 AI recognition is disabled or not configured");
+  }
+  const startedAt = timestamp();
+  const start = Date.now();
+  const body = JSON.stringify({
+    model: config.model,
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ],
+  });
+  const requestSha256 = sha256(body);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const finish = () => ({
+    startedAt,
+    completedAt: timestamp(),
+    durationMs: Date.now() - start,
+  });
+  try {
+    const response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body,
+      signal: controller.signal,
+    });
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (
+      Number.isFinite(declaredLength) &&
+      declaredLength > config.maxResponseBytes
+    ) {
+      return {
+        ok: false,
+        code: "response_too_large",
+        requestSha256,
+        ...finish(),
+      };
+    }
+    const bytes = await readBoundedResponse(
+      response,
+      config.maxResponseBytes,
+      controller,
+    );
+    if (!bytes) {
+      return {
+        ok: false,
+        code: "response_too_large",
+        requestSha256,
+        ...finish(),
+      };
+    }
+    const responseSha256 = sha256(bytes);
+    if (!response.ok) {
+      const code: AiGatewayFailureCode =
+        response.status === 429
+          ? "rate_limited"
+          : response.status === 400
+            ? "context_rejected"
+            : "provider_error";
+      return {
+        ok: false,
+        code,
+        requestSha256,
+        responseSha256,
+        ...finish(),
+      };
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      return {
+        ok: false,
+        code: "invalid_json",
+        requestSha256,
+        responseSha256,
+        ...finish(),
+      };
+    }
+    const content = (
+      payload as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+      }
+    ).choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      return {
+        ok: false,
+        code: "missing_content",
+        requestSha256,
+        responseSha256,
+        ...finish(),
+      };
+    }
+    let proposal: unknown;
+    try {
+      proposal = JSON.parse(content);
+    } catch {
+      return {
+        ok: false,
+        code: "invalid_json",
+        requestSha256,
+        responseSha256,
+        ...finish(),
+      };
+    }
+    return {
+      ok: true,
+      proposal,
+      requestSha256,
+      responseSha256,
+      ...finish(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      code:
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+          ? "timeout"
+          : "network_error",
+      requestSha256,
+      ...finish(),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function createDeepSeekChatGateway(
   config: CouponThreeSourceAiConfig,
   fetchImpl: typeof fetch = fetch,
@@ -91,139 +235,11 @@ export function createDeepSeekChatGateway(
     throw new Error("P0 AI recognition is disabled or not configured");
   }
   return {
-    async recognize(input) {
-      const startedAt = timestamp();
-      const start = Date.now();
+    recognize(input) {
       const prompt = buildCouponThreeSourceAiRequest(input.workbook, {
         publicCampaignCandidates: input.publicCampaignCandidates,
       });
-      const body = JSON.stringify({
-        model: config.model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: prompt.system },
-          { role: "user", content: prompt.user },
-        ],
-      });
-      const requestSha256 = sha256(body);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-      const finish = () => ({
-        startedAt,
-        completedAt: timestamp(),
-        durationMs: Date.now() - start,
-      });
-      try {
-        const response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${config.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body,
-          signal: controller.signal,
-        });
-        const declaredLength = Number(response.headers.get("content-length"));
-        if (
-          Number.isFinite(declaredLength) &&
-          declaredLength > config.maxResponseBytes
-        ) {
-          return {
-            ok: false,
-            code: "response_too_large",
-            requestSha256,
-            ...finish(),
-          };
-        }
-        const bytes = await readBoundedResponse(
-          response,
-          config.maxResponseBytes,
-          controller,
-        );
-        if (!bytes) {
-          return {
-            ok: false,
-            code: "response_too_large",
-            requestSha256,
-            ...finish(),
-          };
-        }
-        const responseSha256 = sha256(bytes);
-        if (!response.ok) {
-          const code: AiGatewayFailureCode =
-            response.status === 429
-              ? "rate_limited"
-              : response.status === 400
-                ? "context_rejected"
-                : "provider_error";
-          return {
-            ok: false,
-            code,
-            requestSha256,
-            responseSha256,
-            ...finish(),
-          };
-        }
-        let payload: unknown;
-        try {
-          payload = JSON.parse(new TextDecoder().decode(bytes));
-        } catch {
-          return {
-            ok: false,
-            code: "invalid_json",
-            requestSha256,
-            responseSha256,
-            ...finish(),
-          };
-        }
-        const content = (
-          payload as {
-            choices?: Array<{ message?: { content?: unknown } }>;
-          }
-        ).choices?.[0]?.message?.content;
-        if (typeof content !== "string" || !content.trim()) {
-          return {
-            ok: false,
-            code: "missing_content",
-            requestSha256,
-            responseSha256,
-            ...finish(),
-          };
-        }
-        let proposal: unknown;
-        try {
-          proposal = JSON.parse(content);
-        } catch {
-          return {
-            ok: false,
-            code: "invalid_json",
-            requestSha256,
-            responseSha256,
-            ...finish(),
-          };
-        }
-        return {
-          ok: true,
-          proposal,
-          requestSha256,
-          responseSha256,
-          ...finish(),
-        };
-      } catch (error) {
-        return {
-          ok: false,
-          code:
-            controller.signal.aborted ||
-            (error instanceof Error && error.name === "AbortError")
-              ? "timeout"
-              : "network_error",
-          requestSha256,
-          ...finish(),
-        };
-      } finally {
-        clearTimeout(timeout);
-      }
+      return callDeepSeekJson(config, prompt, fetchImpl);
     },
   };
 }

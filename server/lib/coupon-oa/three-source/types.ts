@@ -220,6 +220,14 @@ export interface AiAuditSummary {
   completedAt: string;
   durationMs: number;
   fallbackReason?: string;
+  activityCopy?: {
+    status: "succeeded" | "failed" | "skipped";
+    promptVersion: string;
+    requestSha256?: string;
+    responseSha256?: string;
+    durationMs?: number;
+    failureCode?: string;
+  };
 }
 
 export interface AiSourceRoleCandidate {
@@ -291,6 +299,7 @@ export interface ValidatedAiRecognition {
   fieldCandidates: AiCouponFieldCandidate[];
   listCandidates: AiListCandidate[];
   activityCopyCandidates?: AiActivityCopyCandidate[];
+  activityCopyAudit?: NonNullable<AiAuditSummary["activityCopy"]>;
   templateCandidates?: AiTemplateCandidate[];
   tierCandidates?: AiTierCandidate[];
   skuRegionCandidates?: AiSkuRegionCandidate[];

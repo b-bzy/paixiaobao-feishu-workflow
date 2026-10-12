@@ -1,4 +1,9 @@
 import {
+  activityCopyPromptVersion,
+  buildActivityCopyFacts,
+  validateActivityCopyProposal,
+} from "../coupon-oa/three-source/activity-copy";
+import {
   couponThreeSourceAiPromptVersion,
   serializeWorkbookForAi,
   validateCouponThreeSourceAiProposal,
@@ -8,6 +13,7 @@ import type {
   AiAuditSummary,
   OfflineSourceFile,
 } from "../coupon-oa/three-source/types";
+import type { CouponActivityCopyGateway } from "../feishu/deepseek-activity-copy-gateway";
 import type { CouponThreeSourceAiGateway } from "../feishu/deepseek-chat-gateway";
 import type { PublicCampaignCalendarGateway } from "../feishu/public-campaign-calendar-gateway";
 import type { DurableEffectResult } from "./durable-effect-worker";
@@ -27,6 +33,77 @@ export interface CouponAiRecognitionProjector {
 
 export interface CouponAiSourceLoader {
   load(run: CouponAiRecognitionRun): Promise<OfflineSourceFile>;
+}
+
+function stringField(
+  result: ReturnType<typeof validateCouponThreeSourceAiProposal>,
+  key: "activityName" | "activityStartAt" | "activityEndAt" | "businessMode",
+): string | undefined {
+  const value = result.fieldCandidates.find(
+    (candidate) => candidate.key === key && candidate.value !== undefined,
+  )?.value;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseTier(display: string):
+  | {
+      thresholdYuan: number;
+      discountAmountYuan: number;
+    }
+  | undefined {
+  const normalized = display.replace(/[,，\s]/g, "");
+  const match = normalized.match(/(?:满)?(\d+(?:\.\d+)?)减(\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const thresholdYuan = Number(match[1]);
+  const discountAmountYuan = Number(match[2]);
+  if (
+    !Number.isFinite(thresholdYuan) ||
+    !Number.isFinite(discountAmountYuan) ||
+    thresholdYuan <= discountAmountYuan
+  ) {
+    return undefined;
+  }
+  return { thresholdYuan, discountAmountYuan };
+}
+
+function activityCopyFacts(input: {
+  result: ReturnType<typeof validateCouponThreeSourceAiProposal>;
+  campaignTheme?: string;
+}) {
+  const seenTiers = new Set<string>();
+  const tiers = input.result.couponCandidates.flatMap((candidate) => {
+    const amounts = parseTier(candidate.displayName);
+    if (!amounts) return [];
+    const canonicalDisplay = `满${amounts.thresholdYuan}减${amounts.discountAmountYuan}`;
+    if (seenTiers.has(canonicalDisplay)) return [];
+    seenTiers.add(canonicalDisplay);
+    return [
+      {
+        id: candidate.id,
+        display: canonicalDisplay,
+        ...amounts,
+        evidenceCells: candidate.evidenceCells,
+      },
+    ];
+  });
+  if (!tiers.length) return undefined;
+  const businessModeValue = stringField(input.result, "businessMode");
+  const businessMode =
+    businessModeValue === "严选" || businessModeValue === "寄卖"
+      ? businessModeValue
+      : businessModeValue?.toLowerCase() === "pop"
+        ? "pop"
+        : undefined;
+  const start = stringField(input.result, "activityStartAt");
+  const end = stringField(input.result, "activityEndAt");
+  return buildActivityCopyFacts({
+    sourceHashes: { coupon: input.result.sourceHash },
+    period: start && end ? `${start}至${end}` : (start ?? end),
+    businessMode,
+    campaignTheme: input.campaignTheme,
+    tiers,
+    sourceActivityNames: [stringField(input.result, "activityName") ?? ""],
+  });
 }
 
 function payload(effect: DurableEffect): {
@@ -80,6 +157,7 @@ export function createCouponAiRecognitionEffectHandler(input: {
   sourceLoader: CouponAiSourceLoader;
   projector: CouponAiRecognitionProjector;
   calendarGateway?: PublicCampaignCalendarGateway;
+  activityCopyGateway?: CouponActivityCopyGateway;
 }): (effect: DurableEffect) => Promise<DurableEffectResult> {
   return async (effect) => {
     let reference: { runId: string; businessTaskId: string };
@@ -151,6 +229,85 @@ export function createCouponAiRecognitionEffectHandler(input: {
           proposal: gateway.proposal,
           workbook,
         });
+        let activityCopyAudit: AiAuditSummary["activityCopy"] = {
+          status: "skipped",
+          promptVersion: activityCopyPromptVersion,
+          failureCode: "activity_copy_disabled",
+        };
+        if (input.activityCopyGateway && run.sourceSlot === "couponTable") {
+          const facts = activityCopyFacts({
+            result,
+            campaignTheme: calendar?.ok
+              ? calendar.candidates[0]?.name
+              : undefined,
+          });
+          if (!facts) {
+            result.issues.push("AI 未识别出可校验的券档，未生成活动文案");
+            activityCopyAudit = {
+              status: "skipped",
+              promptVersion: activityCopyPromptVersion,
+              failureCode: "missing_validated_tiers",
+            };
+          } else {
+            const copyResponse =
+              await input.activityCopyGateway.generate(facts);
+            if (copyResponse.ok) {
+              const copy = validateActivityCopyProposal({
+                facts,
+                proposal: copyResponse.proposal,
+              });
+              if (
+                copy.status === "valid" &&
+                copy.activityName &&
+                copy.activityBackground
+              ) {
+                const evidenceCells = facts.tiers.flatMap(
+                  (tier) => tier.evidenceCells,
+                );
+                result.activityCopyCandidates = [
+                  {
+                    key: "activityName",
+                    value: copy.activityName,
+                    evidenceCells,
+                  },
+                  {
+                    key: "activityBackground",
+                    value: copy.activityBackground,
+                    evidenceCells,
+                  },
+                ];
+                activityCopyAudit = {
+                  status: "succeeded",
+                  promptVersion: activityCopyPromptVersion,
+                  requestSha256: copyResponse.requestSha256,
+                  responseSha256: copyResponse.responseSha256,
+                  durationMs: copyResponse.durationMs,
+                };
+              } else {
+                result.issues.push(...copy.issues);
+                activityCopyAudit = {
+                  status: "failed",
+                  promptVersion: activityCopyPromptVersion,
+                  requestSha256: copyResponse.requestSha256,
+                  responseSha256: copyResponse.responseSha256,
+                  durationMs: copyResponse.durationMs,
+                  failureCode: "invalid_activity_copy",
+                };
+              }
+            } else {
+              result.issues.push(`AI 活动文案生成失败：${copyResponse.code}`);
+              activityCopyAudit = {
+                status: "failed",
+                promptVersion: activityCopyPromptVersion,
+                requestSha256: copyResponse.requestSha256,
+                responseSha256: copyResponse.responseSha256,
+                durationMs: copyResponse.durationMs,
+                failureCode: copyResponse.code,
+              };
+            }
+          }
+        }
+        result.activityCopyAudit = activityCopyAudit;
         const invalid = result.issues.some((issue) => issue.includes("schema"));
         const audit: AiAuditSummary = {
           provider: "deepseek",
@@ -163,6 +320,7 @@ export function createCouponAiRecognitionEffectHandler(input: {
           completedAt: gateway.completedAt,
           durationMs: gateway.durationMs,
           fallbackReason: invalid ? "invalid_proposal" : undefined,
+          activityCopy: activityCopyAudit,
         };
         run = await input.repository.saveTerminalResult({
           runId: run.id,

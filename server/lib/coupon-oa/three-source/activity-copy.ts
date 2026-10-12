@@ -54,7 +54,7 @@ export interface ActivityCopyTierFact {
 export interface ActivityCopyFacts {
   schemaVersion: typeof activityCopyFactsVersion;
   factsHash: string;
-  sourceHashes: { coupon: string; whitelist: string };
+  sourceHashes: { coupon: string; whitelist?: string };
   period?: string;
   businessMode?: "严选" | "寄卖" | "pop";
   productLabel?: string;
@@ -64,7 +64,7 @@ export interface ActivityCopyFacts {
 }
 
 export function buildActivityCopyFacts(input: {
-  sourceHashes: { coupon: string; whitelist: string };
+  sourceHashes: { coupon: string; whitelist?: string };
   period?: string;
   businessMode?: "严选" | "寄卖" | "pop";
   productLabel?: string;
@@ -72,8 +72,8 @@ export function buildActivityCopyFacts(input: {
   tiers: Array<Omit<ActivityCopyTierFact, "id"> & { id?: string }>;
   sourceActivityNames?: string[];
 }): ActivityCopyFacts {
-  if (!input.sourceHashes.coupon || !input.sourceHashes.whitelist) {
-    throw new Error("活动文案事实必须绑定配券表和白名单 hash");
+  if (!input.sourceHashes.coupon) {
+    throw new Error("活动文案事实必须绑定配券表 hash");
   }
   if (!input.tiers.length) throw new Error("活动文案事实至少需要一个券档");
   const tiers = input.tiers.map((tier, index) => {

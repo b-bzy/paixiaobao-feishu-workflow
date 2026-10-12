@@ -15,10 +15,27 @@ describe("coupon supplement text AI contract", () => {
       warnings: [],
     });
     expect(result.fields).toEqual({
-      businessMode: "POP",
+      businessMode: "pop",
       activityStartAt: "2030-01-01",
     });
     expect(result.warnings).toContain("AI 返回的结束日期无效");
+  });
+
+  it("normalizes colloquial POP and no-over-deduction candidates", () => {
+    const result = validateCouponSupplementTextProposal({
+      fields: {
+        businessMode: "泡泡",
+        activityPointPercent: "5%",
+        overDeduction: false,
+      },
+      warnings: [],
+    });
+
+    expect(result.fields).toMatchObject({
+      businessMode: "pop",
+      activityPointPercent: 5,
+      overDeduction: "否",
+    });
   });
 
   it("rejects unsupported keys and malformed structures", () => {
@@ -35,6 +52,8 @@ describe("coupon supplement text AI contract", () => {
     );
     expect(request.user).toContain("业务模式是严选");
     expect(request.system).toContain("不补猜");
+    expect(request.system).toContain("泡泡");
+    expect(request.system).toContain("未提供年份");
     expect(request.system).not.toContain("创建审批");
   });
 });

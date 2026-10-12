@@ -69,12 +69,51 @@ export function validateCouponSupplementTextProposal(
   } as ValidatedCouponSupplementText["fields"];
   const warnings = [...parsed.data.warnings];
   const businessMode = fields.businessMode;
-  if (
-    businessMode !== undefined &&
-    !["严选", "寄卖", "POP", "pop"].includes(String(businessMode))
-  ) {
-    delete fields.businessMode;
-    warnings.push("AI 返回的业务模式不在允许范围内");
+  if (businessMode !== undefined) {
+    const normalizedBusinessMode = String(businessMode).trim();
+    if (["POP", "pop", "泡泡"].includes(normalizedBusinessMode)) {
+      fields.businessMode = "pop";
+    } else if (["严选", "寄卖"].includes(normalizedBusinessMode)) {
+      fields.businessMode = normalizedBusinessMode;
+    } else {
+      delete fields.businessMode;
+      warnings.push("AI 返回的业务模式不在允许范围内");
+    }
+  }
+  if (fields.overDeduction !== undefined) {
+    const normalizedOverDeduction = String(fields.overDeduction)
+      .trim()
+      .toLowerCase();
+    if (
+      fields.overDeduction === false ||
+      ["否", "不超扣", "无超扣", "false", "no"].includes(
+        normalizedOverDeduction,
+      )
+    ) {
+      fields.overDeduction = "否";
+    } else if (
+      fields.overDeduction === true ||
+      ["是", "超扣", "true", "yes"].includes(normalizedOverDeduction)
+    ) {
+      fields.overDeduction = "是";
+    } else {
+      delete fields.overDeduction;
+      warnings.push("AI 返回的超扣选项无效");
+    }
+  }
+  if (fields.activityPointPercent !== undefined) {
+    const normalizedActivityPoint = Number(
+      String(fields.activityPointPercent).trim().replace(/%$/, ""),
+    );
+    if (
+      Number.isFinite(normalizedActivityPoint) &&
+      normalizedActivityPoint > 0
+    ) {
+      fields.activityPointPercent = normalizedActivityPoint;
+    } else {
+      delete fields.activityPointPercent;
+      warnings.push("AI 返回的活动点位无效");
+    }
   }
   for (const key of ["activityStartAt", "activityEndAt"] as const) {
     if (fields[key] !== undefined && !validDate(fields[key])) {
@@ -99,7 +138,9 @@ export function buildCouponSupplementTextAiRequest(text: string): {
       "只提取业务员文字中明确提供的信息，不补猜、不生成审批结论。",
       '返回严格 JSON：{"fields":{...},"warnings":[]}。',
       `允许字段：${allowedKeys.join(", ")}。`,
-      "businessMode 只能输出严选、寄卖或 POP；日期使用 YYYY-MM-DD。",
+      "businessMode 只能输出严选、寄卖或 POP；语音转写为“泡泡”时按 POP 候选处理。",
+      "overDeduction 只能输出是或否；“不超扣”输出否。",
+      "日期使用 YYYY-MM-DD；用户未提供年份时不得猜测年份，应省略该日期并在 warnings 说明。",
     ].join("\n"),
     user: JSON.stringify({
       task: "从业务员已检查的补充文字中提取字段候选",

@@ -434,6 +434,51 @@ describe("three-source Bot dispatcher", () => {
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain("AI 识别中");
   });
 
+  it("queues supplement recognition from the revisioned form button", async () => {
+    const current = draft();
+    current.task.revision = 4;
+    const recognized = {
+      ...current,
+      supplementRecognition: {
+        text: "活动点位 5%，业务模式 POP",
+        textSha256: "a".repeat(64),
+        runId: "run-supplement",
+        revision: 4,
+        status: "pending" as const,
+      },
+    };
+    const startSupplementRecognition: CouponThreeSourcePilotService["startSupplementRecognition"] =
+      vi.fn(async () => recognized);
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: { startSupplementRecognition },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action:
+          "coupon_three_source_supplement_recognition_start:rec-three-source:4",
+        form: {
+          supplementText: "活动点位 5%，业务模式 POP",
+        },
+        idempotencyKey: "event-supplement",
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon supplement recognition queued run-supplement",
+    });
+
+    expect(startSupplementRecognition).toHaveBeenCalledWith({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: 4,
+      operationId: "event-supplement",
+      text: "活动点位 5%，业务模式 POP",
+    });
+  });
+
   it("confirms no blacklist inside the single mapping submission", async () => {
     const current = draft();
     current.task.revision = 5;

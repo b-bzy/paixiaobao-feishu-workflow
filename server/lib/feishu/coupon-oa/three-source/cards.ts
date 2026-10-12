@@ -409,6 +409,33 @@ export function buildCouponThreeSourceMappingCard(
     },
     {
       tag: "form",
+      name: "coupon_three_source_supplement_submit",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "input",
+          name: "supplementText",
+          label: plainText("语音或文字补充说明"),
+          input_type: "multiline_text",
+          rows: 4,
+          required: true,
+          width: "fill",
+          ...(draft.supplementRecognition?.text
+            ? { default_value: draft.supplementRecognition.text }
+            : {}),
+        },
+        {
+          tag: "button",
+          name: `coupon_three_source_supplement_recognition_start:${draft.recordId}:${draft.task.revision}`,
+          text: plainText("识别补充说明并回填字段"),
+          type: "default",
+          width: "fill",
+          form_action_type: "submit",
+        },
+      ],
+    },
+    {
+      tag: "form",
       name: "coupon_three_source_mapping_submit",
       vertical_spacing: "12px",
       elements: [
@@ -559,26 +586,6 @@ export function buildCouponThreeSourceMappingCard(
           })),
         ...listCandidateElements("whitelist", whitelist),
         ...listCandidateElements("blacklist", blacklist),
-        {
-          tag: "input",
-          name: "supplementText",
-          label: plainText("语音或文字补充说明"),
-          input_type: "multiline_text",
-          rows: 4,
-          required: false,
-          width: "fill",
-          ...(draft.supplementRecognition?.text
-            ? { default_value: draft.supplementRecognition.text }
-            : {}),
-        },
-        {
-          tag: "button",
-          name: `coupon_three_source_supplement_recognition_start:${draft.recordId}:${draft.task.revision}`,
-          text: plainText("识别补充说明并填入上方字段"),
-          type: "default",
-          width: "fill",
-          form_action_type: "submit",
-        },
         ...(!onlyUnsupported
           ? [
               {

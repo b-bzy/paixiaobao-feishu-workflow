@@ -476,16 +476,14 @@ export function createCouponThreeSourceDispatcher(
     form?: Record<string, unknown>;
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
-    const mapping = input.action.match(
-      /^coupon_three_source_mapping_confirm:([^:]+):(\d+)$/,
+    const revisionedAction = input.action.match(
+      /^(coupon_three_source_(?:mapping_confirm|supplement_recognition_start)):([^:]+):(\d+)$/,
     );
-    const action = mapping
-      ? "coupon_three_source_mapping_confirm"
-      : input.action;
+    const action = revisionedAction?.[1] ?? input.action;
     const value = input.value ?? {};
-    const recordId = mapping?.[1] ?? stringValue(value.pilotRecordId);
-    const revision = mapping
-      ? Number(mapping[2])
+    const recordId = revisionedAction?.[2] ?? stringValue(value.pilotRecordId);
+    const revision = revisionedAction
+      ? Number(revisionedAction[3])
       : parseRevision(value.revision);
     if (!action.startsWith("coupon_three_source_")) return { handled: false };
     if (!recordId || !revision) {

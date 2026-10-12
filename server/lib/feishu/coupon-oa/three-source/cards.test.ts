@@ -147,6 +147,21 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("寄卖");
     expect(rendered).toContain("POP");
     expect(rendered).not.toContain("补充字段 activityBackground");
+
+    const forms = card.body.elements.filter(
+      (element) => element.tag === "form",
+    );
+    const supplementForm = forms.find(
+      (element) => element.name === "coupon_three_source_supplement_submit",
+    );
+    expect(supplementForm).toBeDefined();
+    expect(JSON.stringify(supplementForm)).toContain("supplementText");
+    expect(JSON.stringify(supplementForm)).not.toContain(
+      "owner_activityBackground",
+    );
+    expect(JSON.stringify(supplementForm)).not.toContain(
+      "activityPointPercent",
+    );
   });
 
   it("keeps no-blacklist and final draft creation as explicit revision-bound actions", () => {

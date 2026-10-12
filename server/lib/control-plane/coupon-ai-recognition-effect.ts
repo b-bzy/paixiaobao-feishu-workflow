@@ -37,12 +37,41 @@ export interface CouponAiSourceLoader {
 
 function stringField(
   result: ReturnType<typeof validateCouponThreeSourceAiProposal>,
-  key: "activityName" | "activityStartAt" | "activityEndAt" | "businessMode",
+  key:
+    | "activityName"
+    | "activityStartAt"
+    | "activityEndAt"
+    | "businessMode"
+    | "channels",
 ): string | undefined {
   const value = result.fieldCandidates.find(
     (candidate) => candidate.key === key && candidate.value !== undefined,
   )?.value;
+  if (Array.isArray(value)) {
+    const joined = value.map(String).filter(Boolean).join("、");
+    return joined || undefined;
+  }
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringFields(
+  result: ReturnType<typeof validateCouponThreeSourceAiProposal>,
+  key: "channels",
+): string[] {
+  const values = result.fieldCandidates.flatMap((candidate) => {
+    if (candidate.key !== key || candidate.value === undefined) return [];
+    return Array.isArray(candidate.value)
+      ? candidate.value.map(String)
+      : typeof candidate.value === "string"
+        ? [candidate.value]
+        : [];
+  });
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function businessDate(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? value;
 }
 
 function parseTier(display: string):
@@ -94,16 +123,23 @@ function activityCopyFacts(input: {
       : businessModeValue?.toLowerCase() === "pop"
         ? "pop"
         : undefined;
-  const start = stringField(input.result, "activityStartAt");
-  const end = stringField(input.result, "activityEndAt");
+  const start = businessDate(stringField(input.result, "activityStartAt"));
+  const end = businessDate(stringField(input.result, "activityEndAt"));
+  const channels = stringFields(input.result, "channels");
   return buildActivityCopyFacts({
     sourceHashes: { coupon: input.result.sourceHash },
     period: start && end ? `${start}至${end}` : (start ?? end),
     businessMode,
+    productLabel: channels.length ? channels.join("、") : undefined,
     campaignTheme:
       input.result.campaignThemeCandidates?.[0]?.value ?? input.campaignTheme,
     tiers,
-    sourceActivityNames: [stringField(input.result, "activityName") ?? ""],
+    sourceActivityNames: [
+      stringField(input.result, "activityName") ?? "",
+      ...(input.result.sourceActivityNameCandidates ?? []).map(
+        (candidate) => candidate.value,
+      ),
+    ],
   });
 }
 

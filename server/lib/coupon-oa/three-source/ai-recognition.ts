@@ -8,6 +8,7 @@ import type {
   AiCouponFieldCandidate,
   AiListCandidate,
   AiSkuRegionCandidate,
+  AiSourceActivityNameCandidate,
   AiSourceRoleCandidate,
   AiTemplateCandidate,
   AiTierCandidate,
@@ -20,7 +21,7 @@ import type {
 } from "./types";
 
 export const couponThreeSourceAiPromptVersion =
-  "coupon-three-source-p0-ai-primary-v3";
+  "coupon-three-source-p0-ai-primary-v5";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -211,6 +212,19 @@ const proposedFieldValueSchema = z.union([
   z.array(z.string().max(200)).max(100),
 ]);
 
+const fieldKeyAliases: Readonly<Record<string, CouponFieldKey>> = {
+  singleIssueQuantity: "grantQuantityPerClaim",
+  dailyLimit: "dailyClaimLimit",
+  discountAmount: "discountAmountYuan",
+  faceValue: "discountAmountYuan",
+  thresholdAmount: "thresholdYuan",
+  threshold: "thresholdYuan",
+  userClaimRule: "claimRule",
+  couponGift: "allowGift",
+  promotionChannel: "promotionMode",
+  publicChannel: "publicPromotionChannels",
+};
+
 export const couponThreeSourceAiProposalSchema = z.object({
   templateCandidates: z
     .array(
@@ -290,7 +304,8 @@ export const couponThreeSourceAiProposalSchema = z.object({
       }),
     )
     .max(100)
-    .default([]),
+    .default([])
+    .catch([]),
   skuRegionCandidates: z
     .array(
       z.object({
@@ -306,7 +321,8 @@ export const couponThreeSourceAiProposalSchema = z.object({
       }),
     )
     .max(100)
-    .default([]),
+    .default([])
+    .catch([]),
   activityCopyCandidates: z
     .array(
       z.object({
@@ -330,6 +346,35 @@ function workbookCoordinates(workbook: SerializedWorkbookForAi): Set<string> {
   );
 }
 
+function cellColumn(address: string): string | undefined {
+  return address.match(/^([A-Z]+)[1-9]\d*$/)?.[1];
+}
+
+function cellRow(address: string): number | undefined {
+  const value = Number(address.match(/^[A-Z]+([1-9]\d*)$/)?.[1]);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function lastNonEmptyCellInColumn(input: {
+  workbook: SerializedWorkbookForAi;
+  sheetName: string;
+  column: string;
+  startRow: number;
+}): string | undefined {
+  const sheet = input.workbook.sheets.find(
+    (candidate) => candidate.name === input.sheetName,
+  );
+  if (!sheet) return undefined;
+  let lastRow: number | undefined;
+  for (const row of sheet.rows) {
+    if (row.row < input.startRow) continue;
+    if (row.cells.some((cell) => cellColumn(cell.address) === input.column)) {
+      lastRow = Math.max(lastRow ?? row.row, row.row);
+    }
+  }
+  return lastRow ? `${input.column}${lastRow}` : undefined;
+}
+
 function candidateId(parts: string[]): string {
   return sha256(parts.join(":")).slice(0, 20);
 }
@@ -338,6 +383,37 @@ function chineseCount(value: number): string {
   return (
     ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"][value] ??
     String(value)
+  );
+}
+
+const EXPLICIT_UNSUPPORTED_COUPON_LABELS = new Set([
+  "折扣券",
+  "兑换券",
+  "直减券",
+  "立减券",
+  "plus折扣券",
+  "plus满减券",
+]);
+
+function explicitUnsupportedCouponMarkers(
+  workbook: SerializedWorkbookForAi,
+): Array<{ sheetName: string; row: number; address: string; label: string }> {
+  return workbook.sheets.flatMap((sheet) =>
+    sheet.rows.flatMap((row) =>
+      row.cells.flatMap((cell) => {
+        if (typeof cell.value !== "string") return [];
+        const normalized = cell.value.trim().toLowerCase().replace(/\s/g, "");
+        if (!EXPLICIT_UNSUPPORTED_COUPON_LABELS.has(normalized)) return [];
+        return [
+          {
+            sheetName: sheet.name,
+            row: row.row,
+            address: cell.address,
+            label: cell.value.trim(),
+          },
+        ];
+      }),
+    ),
   );
 }
 
@@ -489,9 +565,41 @@ export function validateCouponThreeSourceAiProposal(input: {
       source: "ai",
     });
   }
+  for (const marker of explicitUnsupportedCouponMarkers(input.workbook)) {
+    if (
+      couponCandidates.some(
+        (candidate) =>
+          candidate.sheetName === marker.sheetName &&
+          candidate.row === marker.row,
+      )
+    ) {
+      continue;
+    }
+    couponCandidates.push({
+      id: candidateId([
+        couponThreeSourceAiPromptVersion,
+        input.workbook.sourceHash,
+        marker.sheetName,
+        String(marker.row),
+        "unsupported",
+      ]),
+      couponType: "unsupported",
+      displayName: marker.label,
+      sourceHash: input.workbook.sourceHash,
+      sheetName: marker.sheetName,
+      row: marker.row,
+      evidenceCells: [marker.address],
+      fieldCandidateIds: {},
+      source: "deterministic",
+    });
+    issues.push(
+      `来源明确标注当前未开放券型 ${marker.label}，已作为结构化阻断候选保留`,
+    );
+  }
 
   const fieldCandidates: AiCouponFieldCandidate[] = [];
   const campaignThemeCandidates: AiCampaignThemeCandidate[] = [];
+  const sourceActivityNameCandidates: AiSourceActivityNameCandidate[] = [];
   for (const candidate of parsed.data.fieldCandidates) {
     if (
       candidate.key === "activityTheme" ||
@@ -519,7 +627,31 @@ export function validateCouponThreeSourceAiProposal(input: {
       });
       continue;
     }
-    if (!(couponFieldKeys as readonly string[]).includes(candidate.key)) {
+    if (candidate.key === "couponName") {
+      if (
+        !has(candidate.sheetName, candidate.headerCell) ||
+        !has(candidate.sheetName, candidate.valueCell) ||
+        typeof candidate.value !== "string" ||
+        !candidate.value.trim()
+      ) {
+        issues.push("AI 优惠券名称候选缺少有效来源证据，已忽略");
+        continue;
+      }
+      sourceActivityNameCandidates.push({
+        value: candidate.value.trim(),
+        confidence: candidate.confidence,
+        reason: candidate.reason,
+        origin: candidate.origin,
+        evidence: {
+          sourceHash: input.workbook.sourceHash,
+          sheetName: candidate.sheetName,
+          cells: [candidate.headerCell, candidate.valueCell],
+        },
+      });
+      continue;
+    }
+    const normalizedKey = fieldKeyAliases[candidate.key] ?? candidate.key;
+    if (!(couponFieldKeys as readonly string[]).includes(normalizedKey)) {
       issues.push(`AI 返回未登记的字段 ${candidate.key}，已忽略`);
       continue;
     }
@@ -532,7 +664,7 @@ export function validateCouponThreeSourceAiProposal(input: {
     }
     fieldCandidates.push({
       ...candidate,
-      key: candidate.key as CouponFieldKey,
+      key: normalizedKey as CouponFieldKey,
       evidence: {
         sourceHash: input.workbook.sourceHash,
         sheetName: candidate.sheetName,
@@ -543,13 +675,38 @@ export function validateCouponThreeSourceAiProposal(input: {
 
   const skuRegionCandidates: AiSkuRegionCandidate[] = [];
   for (const candidate of parsed.data.skuRegionCandidates) {
+    const startColumn = cellColumn(candidate.startCell);
+    const endColumn = cellColumn(candidate.endCell);
+    const startRow = cellRow(candidate.startCell);
+    const endRow = cellRow(candidate.endCell);
     if (
       !has(candidate.sheetName, candidate.headerCell) ||
       !has(candidate.sheetName, candidate.startCell) ||
-      !has(candidate.sheetName, candidate.endCell)
+      !startColumn ||
+      !startRow ||
+      !endRow ||
+      startColumn !== endColumn ||
+      endRow < startRow
     ) {
       issues.push("AI SKU 区域候选引用不存在的来源坐标");
       continue;
+    }
+    const verifiedEndCell = has(candidate.sheetName, candidate.endCell)
+      ? candidate.endCell
+      : lastNonEmptyCellInColumn({
+          workbook: input.workbook,
+          sheetName: candidate.sheetName,
+          column: startColumn,
+          startRow,
+        });
+    if (!verifiedEndCell) {
+      issues.push("AI SKU 区域候选没有可验证的非空标识范围");
+      continue;
+    }
+    if (verifiedEndCell !== candidate.endCell) {
+      issues.push(
+        `AI SKU 区域末行已按标识列真实非空范围校正：${candidate.sheetName}!${candidate.endCell}→${verifiedEndCell}`,
+      );
     }
     skuRegionCandidates.push({
       id: candidateId([
@@ -558,7 +715,7 @@ export function validateCouponThreeSourceAiProposal(input: {
         candidate.role,
         candidate.sheetName,
         candidate.startCell,
-        candidate.endCell,
+        verifiedEndCell,
       ]),
       role: candidate.role,
       dimension: candidate.dimension,
@@ -569,10 +726,10 @@ export function validateCouponThreeSourceAiProposal(input: {
       evidence: {
         sourceHash: input.workbook.sourceHash,
         sheetName: candidate.sheetName,
-        cells: [candidate.headerCell, candidate.startCell, candidate.endCell],
+        cells: [candidate.headerCell, candidate.startCell, verifiedEndCell],
         region: {
           startCell: candidate.startCell,
-          endCell: candidate.endCell,
+          endCell: verifiedEndCell,
         },
       },
     });
@@ -656,6 +813,7 @@ export function validateCouponThreeSourceAiProposal(input: {
     couponCandidates,
     fieldCandidates,
     campaignThemeCandidates,
+    sourceActivityNameCandidates,
     listCandidates,
     activityCopyCandidates,
     templateCandidates,
@@ -724,8 +882,29 @@ export function buildCouponThreeSourceAiRequest(
         value: "2026-11-01",
       },
     ],
-    listCandidates: [],
-    skuRegionCandidates: [],
+    listCandidates: [
+      {
+        role: "whitelist",
+        dimension: "SKU",
+        sheetName: "string",
+        headerCell: "A1",
+        confidence: 0.99,
+        reason: "string",
+      },
+    ],
+    skuRegionCandidates: [
+      {
+        role: "whitelist",
+        dimension: "SKU",
+        tierDisplayName: "满1999减120",
+        sheetName: "string",
+        headerCell: "A1",
+        startCell: "A2",
+        endCell: "A100",
+        confidence: 0.99,
+        reason: "string",
+      },
+    ],
     activityCopyCandidates: [],
     warnings: [],
   };
@@ -738,7 +917,13 @@ export function buildCouponThreeSourceAiRequest(
       "所有候选必须引用输入中真实存在的 Sheet 和单元格坐标。",
       "先识别模板类型，再识别该模板中的全部券档；多个满X减Y行或名单Sheet是多券档，不是多券型。",
       "字段候选必须标记 source_explicit、ai_derived 或 ai_inferred；推测不得伪装成源表明示值。",
+      "fieldCandidates.key 只能使用 user.allowedFieldKeys 中的英文 key；优惠券名称可以额外使用 couponName，活动主题可以额外使用 activityTheme。禁止自造 threshold、faceValue、dailyLimit 等别名。",
+      "同一字段在多行存在不同真实值时不得只返回第一行；尤其 channels 必须用字符串数组返回全部去重渠道，或为每个不同渠道分别返回有证据的候选。",
+      "每个疑似优惠券数据行都必须返回 couponCandidates；当前未开放的折扣券、兑换券、直减券、立减券或 PLUS 券也必须返回 couponType=unsupported，禁止只写入 warnings 后省略结构化候选。",
       "名单必须返回 SKU 数据区域和所属券档，而不只返回表头。",
+      "文件名含‘白名单’时，材料角色和名单区域 role 应优先识别为 whitelist；文件名含‘黑名单’时应识别为 blacklist，除非工作簿证据明确冲突。",
+      "listCandidates 的每项必须逐项使用 outputContract.listCandidates 中示例的结构；skuRegionCandidates 必须使用独立的 headerCell、startCell、endCell，禁止返回 region、columns、headerRow 或 dataStartRow 等替代结构。",
+      "skuRegionCandidates.endCell 必须是该标识列最后一个真实非空单元格，不能直接使用工作表 rowCount；其他列更长时也不得扩大标识区域。",
       "当前生成只开放 regular_full_reduction；其他模板可以识别，但必须标记 supported=false。",
       "必须严格使用 user.outputContract 的键、嵌套结构和枚举值；每个顶层数组都必须返回，不能用别名、中文键或额外包装。",
       "只识别当前工作簿中实际存在的内容；此阶段 activityCopyCandidates 必须返回空数组，活动文案由后续专用步骤生成。",
@@ -749,6 +934,7 @@ export function buildCouponThreeSourceAiRequest(
       promptVersion: couponThreeSourceAiPromptVersion,
       currentDate: new Date().toISOString().slice(0, 10),
       publicCampaignCandidates: context.publicCampaignCandidates ?? [],
+      allowedFieldKeys: [...couponFieldKeys, "couponName", "activityTheme"],
       outputContract,
       workbook,
     }),

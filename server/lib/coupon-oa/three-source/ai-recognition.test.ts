@@ -228,6 +228,26 @@ describe("coupon three-source AI recognition", () => {
             origin: "source_explicit",
             value: "双十一大促",
           },
+          {
+            key: "couponName",
+            sheetName: "配券",
+            headerCell: "A1",
+            valueCell: "A2",
+            confidence: 1,
+            reason: "优惠券名称",
+            origin: "source_explicit",
+            value: "满100减20",
+          },
+          {
+            key: "threshold",
+            sheetName: "配券",
+            headerCell: "B1",
+            valueCell: "B2",
+            confidence: 1,
+            reason: "模型使用了常见别名",
+            origin: "source_explicit",
+            value: 100,
+          },
         ],
       },
     });
@@ -236,6 +256,12 @@ describe("coupon three-source AI recognition", () => {
     expect(result.couponCandidates).toHaveLength(1);
     expect(result.campaignThemeCandidates).toEqual([
       expect.objectContaining({ value: "双十一大促" }),
+    ]);
+    expect(result.sourceActivityNameCandidates).toEqual([
+      expect.objectContaining({ value: "满100减20" }),
+    ]);
+    expect(result.fieldCandidates).toEqual([
+      expect.objectContaining({ key: "thresholdYuan", value: 100 }),
     ]);
     expect(result.issues).toContain(
       "AI 返回未登记的材料角色 activityInfo，已忽略",
@@ -292,5 +318,148 @@ describe("coupon three-source AI recognition", () => {
 
     expect(result.activityCopyCandidates).toHaveLength(2);
     expect(result.issues).not.toContain("AI 活动背景没有覆盖全部券档来源行");
+  });
+
+  it("clamps an AI SKU end row to the last non-empty identifier cell", async () => {
+    const sourceWorkbook = new ExcelJS.Workbook();
+    const sheet = sourceWorkbook.addWorksheet("3000减30");
+    sheet.getCell("A1").value = "sku";
+    sheet.getCell("A2").value = "sku-1";
+    sheet.getCell("A3").value = "sku-2";
+    sheet.getCell("B10").value = "其他列使工作表总行数变长";
+    const bytes = await sourceWorkbook.xlsx.writeBuffer();
+    const workbook = await serializeWorkbookForAi({
+      fileName: "whitelist.xlsx",
+      bytes: new Uint8Array(bytes),
+    });
+
+    const result = validateCouponThreeSourceAiProposal({
+      workbook,
+      proposal: {
+        skuRegionCandidates: [
+          {
+            role: "whitelist",
+            dimension: "SKU",
+            tierDisplayName: "满3000减30",
+            sheetName: "3000减30",
+            headerCell: "A1",
+            startCell: "A2",
+            endCell: "A10",
+            confidence: 0.99,
+            reason: "SKU 位于 A 列",
+          },
+        ],
+      },
+    });
+
+    expect(result.skuRegionCandidates).toHaveLength(1);
+    expect(result.skuRegionCandidates?.[0]?.evidence.region).toEqual({
+      startCell: "A2",
+      endCell: "A3",
+    });
+    expect(result.issues).toContain(
+      "AI SKU 区域末行已按标识列真实非空范围校正：3000减30!A10→A3",
+    );
+  });
+
+  it("preserves valid segmented SKU regions in the same identifier column", async () => {
+    const sourceWorkbook = new ExcelJS.Workbook();
+    const sheet = sourceWorkbook.addWorksheet("全部商品名单");
+    sheet.getCell("A1").value = "SKUID";
+    sheet.getCell("B1").value = "适用券档";
+    for (let row = 2; row <= 7; row += 1) {
+      sheet.getCell(`A${row}`).value = `sku-${row}`;
+      sheet.getCell(`B${row}`).value = row <= 4 ? "满100减10" : "满200减20";
+    }
+    const bytes = await sourceWorkbook.xlsx.writeBuffer();
+    const workbook = await serializeWorkbookForAi({
+      fileName: "segmented-whitelist.xlsx",
+      bytes: new Uint8Array(bytes),
+    });
+
+    const result = validateCouponThreeSourceAiProposal({
+      workbook,
+      proposal: {
+        skuRegionCandidates: [
+          {
+            role: "whitelist",
+            dimension: "SKU",
+            tierDisplayName: "满100减10",
+            sheetName: "全部商品名单",
+            headerCell: "A1",
+            startCell: "A2",
+            endCell: "A4",
+            confidence: 0.99,
+            reason: "第一段",
+          },
+          {
+            role: "whitelist",
+            dimension: "SKU",
+            tierDisplayName: "满200减20",
+            sheetName: "全部商品名单",
+            headerCell: "A1",
+            startCell: "A5",
+            endCell: "A7",
+            confidence: 0.99,
+            reason: "第二段",
+          },
+        ],
+      },
+    });
+
+    expect(
+      result.skuRegionCandidates?.map((candidate) => candidate.evidence.region),
+    ).toEqual([
+      { startCell: "A2", endCell: "A4" },
+      { startCell: "A5", endCell: "A7" },
+    ]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("keeps an explicit unsupported coupon row as a structured blocker", async () => {
+    const sourceWorkbook = new ExcelJS.Workbook();
+    const sheet = sourceWorkbook.addWorksheet("冲突券规则");
+    sheet.getCell("A1").value = "类型";
+    sheet.getCell("B1").value = "规则";
+    sheet.getCell("A2").value = "满减券";
+    sheet.getCell("B2").value = "满1000减100";
+    sheet.getCell("A3").value = "折扣券";
+    sheet.getCell("B3").value = "8.5折，最高减200";
+    const bytes = await sourceWorkbook.xlsx.writeBuffer();
+    const workbook = await serializeWorkbookForAi({
+      fileName: "mixed-template.xlsx",
+      bytes: new Uint8Array(bytes),
+    });
+
+    const result = validateCouponThreeSourceAiProposal({
+      workbook,
+      proposal: {
+        couponCandidates: [
+          {
+            couponType: "regular_full_reduction",
+            displayName: "满1000减100",
+            sheetName: "冲突券规则",
+            row: 2,
+            evidenceCells: ["A2", "B2"],
+          },
+        ],
+      },
+    });
+
+    expect(result.couponCandidates).toEqual([
+      expect.objectContaining({
+        couponType: "regular_full_reduction",
+        row: 2,
+      }),
+      expect.objectContaining({
+        couponType: "unsupported",
+        displayName: "折扣券",
+        row: 3,
+        evidenceCells: ["A3"],
+      }),
+    ]);
+    expect(result.issues).toContain(
+      "来源明确标注当前未开放券型 折扣券，已作为结构化阻断候选保留",
+    );
   });
 });

@@ -97,6 +97,14 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 
 ## 3. 启动顺序
 
+### 3.0 飞书测试前本地 Gate
+
+开始 bridge 或邀请 owner 在飞书测试前，必须同时满足：相关单元/集成测试通过；
+脱敏 Excel 的显式 DeepSeek 预检通过；`pnpm typecheck` 与 `pnpm build` 通过；
+变更文件的 Biome 检查和 `git diff --check` 通过；Preview 身份端点回读的 Git SHA
+与预期 revision 完全一致。任何一项失败都不得启动新测试窗口。原生 OA、native submit
+与未授权生成副作用必须继续关闭。
+
 1. 使用只含 P0 long-connection scope 的 Git revision 部署 Vercel；不得发布当前脏工作区或 P1 control-plane 文件。
 2. 复核 Vercel 中 native kill switch 为 `false`、三源 pilot 为 `false`，并确认 `/api/feishu/poc-bridge` 对无效 HMAC fail closed。
 3. 若本次不测 AI，确认 AI 开关仍为 `false`，跳过 migration/tick。若本次明确测试 AI，先执行 `pnpm db:migrate:control-plane`，确认 `0005_coupon_ai_recognition_runs.sql` 已应用，再对受保护的 control-plane tick 做无业务副作用健康检查；`local` 阶段仅在 AI Gate 明确开启时允许该 tick，且仍必须通过独立 Bearer token、数据库与 worker 配置检查。任一失败都关闭 AI 开关。

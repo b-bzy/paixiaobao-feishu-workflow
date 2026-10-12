@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-export const activityCopyPromptVersion = "coupon-activity-copy-ai-v2";
+export const activityCopyPromptVersion = "coupon-activity-copy-ai-v3";
 export const activityCopyFactsVersion = "coupon-activity-copy-facts-v1";
 
 const PLACEHOLDER_ACTIVITY_NAMES = new Set([
@@ -139,9 +139,16 @@ export function buildActivityCopyAiRequest(facts: ActivityCopyFacts): {
     "productLabel",
     "campaignTheme",
   ];
+  const exampleNameParts = [
+    facts.period,
+    facts.businessMode,
+    facts.productLabel,
+    facts.campaignTheme,
+  ].filter((value): value is string => Boolean(value));
+  const exampleActivityName = `${exampleNameParts.join(" ")}优惠券申请`;
   const formatExample = {
-    activityName: "<活动周期><业务模式><商品或活动主题>优惠券申请",
-    activityBackground: `本期申请<活动名称去掉“申请”>，本期配置${chineseCount(facts.tiers.length)}档优惠券：${facts.tiers.map((tier) => tier.display).join("、")}。`,
+    activityName: exampleActivityName,
+    activityBackground: `本期申请${exampleActivityName.replace(/申请$/, "")}，本期配置${chineseCount(facts.tiers.length)}档优惠券：${facts.tiers.map((tier) => tier.display).join("、")}。`,
     coveredTierIds: facts.tiers.map((tier) => tier.id),
     usedFactIds: [
       "period",
@@ -156,6 +163,7 @@ export function buildActivityCopyAiRequest(facts: ActivityCopyFacts): {
       "你是内部优惠券活动文案候选生成器。",
       "只使用输入 facts，不得编造预算、GMV、ROI、渠道、商品范围、审批理由、超扣或内部政策。",
       "活动名称使用活动周期、业务模式、商品或活动主题和‘优惠券申请’组成可辨识名称。",
+      "输入事实缺少业务模式、商品或活动主题时应省略该部分，绝不能输出‘业务模式’‘商品主题’等占位词。",
       `活动背景必须严格使用‘本期申请<活动名称去掉申请>，本期配置${chineseCount(facts.tiers.length)}档优惠券：<全部券档>。’结构，不得改写开头。`,
       "活动背景必须覆盖全部券档；每个金额、日期和商品事实必须来自 facts。",
       "不得输出正常活动、测试活动、促销活动、优惠券活动、默认活动、活动名称、未命名活动或待补充。",

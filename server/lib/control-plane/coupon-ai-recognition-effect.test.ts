@@ -16,6 +16,13 @@ async function sourceBytes(dateWindow?: string) {
   sheet.getCell("A1").value = "活动名称";
   sheet.getCell("A2").value = "活动A";
   if (dateWindow) sheet.getCell("A3").value = dateWindow;
+  sheet.getCell("B1").value = "开始日期";
+  sheet.getCell("B2").value = "2026-09-30T00:00:00.000Z";
+  sheet.getCell("C1").value = "结束日期";
+  sheet.getCell("C2").value = "2026-10-10T23:59:00.000Z";
+  sheet.getCell("D1").value = "渠道";
+  sheet.getCell("D2").value = "京东商城";
+  sheet.getCell("D3").value = "拍拍二手";
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }
 
@@ -100,6 +107,48 @@ describe("coupon AI recognition effect", () => {
               evidenceCells: ["A2"],
             },
           ],
+          fieldCandidates: [
+            {
+              key: "activityStartAt",
+              sheetName: "配券",
+              headerCell: "B1",
+              valueCell: "B2",
+              confidence: 1,
+              reason: "开始日期",
+              origin: "source_explicit",
+              value: "2026-09-30T00:00:00.000Z",
+            },
+            {
+              key: "activityEndAt",
+              sheetName: "配券",
+              headerCell: "C1",
+              valueCell: "C2",
+              confidence: 1,
+              reason: "结束日期",
+              origin: "source_explicit",
+              value: "2026-10-10T23:59:00.000Z",
+            },
+            {
+              key: "channels",
+              sheetName: "配券",
+              headerCell: "D1",
+              valueCell: "D2",
+              confidence: 1,
+              reason: "渠道一",
+              origin: "source_explicit",
+              value: "京东商城",
+            },
+            {
+              key: "channels",
+              sheetName: "配券",
+              headerCell: "D1",
+              valueCell: "D3",
+              confidence: 1,
+              reason: "渠道二",
+              origin: "source_explicit",
+              value: "拍拍二手",
+            },
+          ],
         },
         requestSha256: "r".repeat(64),
         responseSha256: "s".repeat(64),
@@ -144,6 +193,12 @@ describe("coupon AI recognition effect", () => {
       kind: "succeeded",
     });
     expect(activityCopyGateway.generate).toHaveBeenCalledTimes(1);
+    expect(activityCopyGateway.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        period: "2026-09-30至2026-10-10",
+        productLabel: "京东商城、拍拍二手",
+      }),
+    );
     expect(repo.saveTerminalResult).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "succeeded",

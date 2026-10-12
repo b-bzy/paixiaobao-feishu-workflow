@@ -1,6 +1,5 @@
 import type { CouponAiTextProjector } from "../../../control-plane/coupon-ai-text-effect";
-import { sendFeishuCard } from "../../client";
-import { buildCouponThreeSourceMappingCard } from "./cards";
+import { deliverCouponThreeSourceMappingCard } from "./mapping-card-delivery";
 import {
   getCouponThreeSourcePilotDraft,
   updateCouponThreeSourcePilotDraft,
@@ -9,14 +8,20 @@ import {
 export interface CouponAiTextProjectionDependencies {
   getDraft: typeof getCouponThreeSourcePilotDraft;
   updateDraft: typeof updateCouponThreeSourcePilotDraft;
-  sendCard: typeof sendFeishuCard;
+  deliverMappingCard: typeof deliverCouponThreeSourceMappingCard;
 }
 
 const defaults: CouponAiTextProjectionDependencies = {
   getDraft: getCouponThreeSourcePilotDraft,
   updateDraft: updateCouponThreeSourcePilotDraft,
-  sendCard: sendFeishuCard,
+  deliverMappingCard: deliverCouponThreeSourceMappingCard,
 };
+
+function hasOwnerValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((item) => String(item).trim());
+  if (typeof value === "string") return Boolean(value.trim());
+  return value !== undefined && value !== null;
+}
 
 export function createCouponAiTextProjector(
   dependencies: CouponAiTextProjectionDependencies = defaults,
@@ -37,7 +42,11 @@ export function createCouponAiTextProjector(
         run.status === "succeeded" && run.result
           ? {
               ...run.result.fields,
-              ...draft.selections.ownerFieldValues,
+              ...Object.fromEntries(
+                Object.entries(draft.selections.ownerFieldValues ?? {}).filter(
+                  ([, value]) => hasOwnerValue(value),
+                ),
+              ),
             }
           : draft.selections.ownerFieldValues;
       const updated = await dependencies.updateDraft(
@@ -73,11 +82,10 @@ export function createCouponAiTextProjector(
         },
         run.revision,
       );
-      await dependencies.sendCard(
-        run.ownerOpenId,
-        buildCouponThreeSourceMappingCard(updated),
+      await dependencies.deliverMappingCard({
+        draft: updated,
         idempotencyKey,
-      );
+      });
     },
   };
 }

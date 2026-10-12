@@ -9,6 +9,7 @@ interface TenantTokenResponse {
 interface FeishuApiResponse {
   code: number;
   msg: string;
+  data?: { message_id?: string };
 }
 
 function getCredentials(): { appId: string; appSecret: string } {
@@ -42,6 +43,14 @@ export async function sendFeishuCard(
   card: FeishuCard,
   idempotencyKey?: string,
 ): Promise<void> {
+  await sendFeishuCardWithReceipt(openId, card, idempotencyKey);
+}
+
+export async function sendFeishuCardWithReceipt(
+  openId: string,
+  card: FeishuCard,
+  idempotencyKey?: string,
+): Promise<{ messageId: string }> {
   const token = await getTenantAccessToken();
   const endpoint = new URL("https://open.feishu.cn/open-apis/im/v1/messages");
   endpoint.searchParams.set("receive_id_type", "open_id");
@@ -61,5 +70,36 @@ export async function sendFeishuCard(
   const result = (await response.json()) as FeishuApiResponse;
   if (!response.ok || result.code !== 0) {
     throw new Error(`Failed to send Feishu card: ${result.msg}`);
+  }
+  const messageId = result.data?.message_id?.trim();
+  if (!messageId) {
+    throw new Error("Failed to send Feishu card: missing message_id");
+  }
+  return { messageId };
+}
+
+export async function updateFeishuCard(
+  messageId: string,
+  card: FeishuCard,
+): Promise<void> {
+  if (!messageId.trim()) throw new Error("Feishu card message ID is required");
+  if (card.config.update_multi !== true) {
+    throw new Error("Feishu updateable card must enable update_multi");
+  }
+  const token = await getTenantAccessToken();
+  const response = await fetch(
+    `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ content: JSON.stringify(card) }),
+    },
+  );
+  const result = (await response.json()) as FeishuApiResponse;
+  if (!response.ok || result.code !== 0) {
+    throw new Error(`Failed to update Feishu card: ${result.msg}`);
   }
 }

@@ -346,4 +346,47 @@ describe("three-source Bot cards", () => {
     expect(enabled).toContain('"name":"owner_activityStartAt"');
     expect(enabled).toContain('"default_value":"2030-09-30"');
   });
+
+  it("shows a Chinese DeepSeek outcome in the second-round card", () => {
+    const current = draft();
+    const recognition = current.recognitions.couponTable;
+    if (!recognition) throw new Error("missing fixture recognition");
+    recognition.ai = {
+      runId: "run-ai",
+      revision: current.task.revision,
+      sourceSha256: recognition.sourceHash,
+      status: "succeeded",
+      primary: true,
+      result: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [],
+        listCandidates: [],
+        issues: [],
+      },
+      audit: {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        promptVersion: "coupon-three-source-p0-ai-primary-v2",
+        status: "succeeded",
+        startedAt: "2026-10-12T00:00:00.000Z",
+        completedAt: "2026-10-12T00:00:01.000Z",
+        durationMs: 1000,
+      },
+    };
+    current.supplementRecognition = {
+      text: "活动点位 5%",
+      textSha256: "a".repeat(64),
+      runId: "run-text",
+      revision: current.task.revision,
+      status: "failed",
+      fallbackCode: "timeout",
+    };
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("DeepSeek 表格识别已完成");
+    expect(rendered).toContain("补充说明识别失败，请直接检查并填写字段");
+    expect(rendered).not.toContain("coupon-three-source-p0-ai-primary-v2");
+  });
 });

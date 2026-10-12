@@ -3,13 +3,8 @@ import type {
   CouponAiSourceLoader,
 } from "../../../control-plane/coupon-ai-recognition-effect";
 import type { CouponAiRecognitionRun } from "../../../control-plane/postgres-coupon-ai-recognition-repository";
-import { sendFeishuCard } from "../../client";
 import { downloadFeishuMessageResource } from "../../message-client";
-import {
-  buildCouponThreeSourceIntakeCard,
-  buildCouponThreeSourceMappingCard,
-  buildCouponThreeSourceRecognizingCard,
-} from "./cards";
+import { deliverCouponThreeSourceMappingCard } from "./mapping-card-delivery";
 import {
   getCouponThreeSourcePilotDraft,
   updateCouponThreeSourcePilotDraft,
@@ -18,30 +13,14 @@ import {
 export interface CouponThreeSourceAiProjectionDependencies {
   getDraft: typeof getCouponThreeSourcePilotDraft;
   updateDraft: typeof updateCouponThreeSourcePilotDraft;
-  sendCard: typeof sendFeishuCard;
+  deliverMappingCard: typeof deliverCouponThreeSourceMappingCard;
 }
 
 const defaultDependencies: CouponThreeSourceAiProjectionDependencies = {
   getDraft: getCouponThreeSourcePilotDraft,
   updateDraft: updateCouponThreeSourcePilotDraft,
-  sendCard: sendFeishuCard,
+  deliverMappingCard: deliverCouponThreeSourceMappingCard,
 };
-
-function cardForDraft(
-  draft: Awaited<ReturnType<typeof getCouponThreeSourcePilotDraft>>,
-) {
-  if (
-    Object.values(draft.recognitions).some(
-      (recognition) => recognition?.ai?.status === "pending",
-    )
-  ) {
-    return buildCouponThreeSourceRecognizingCard(draft);
-  }
-  if (!draft.task.sources.couponTable || !draft.task.sources.whitelist) {
-    return buildCouponThreeSourceIntakeCard(draft);
-  }
-  return buildCouponThreeSourceMappingCard(draft);
-}
 
 function hasPendingAiRecognition(
   draft: Awaited<ReturnType<typeof getCouponThreeSourcePilotDraft>>,
@@ -108,11 +87,15 @@ export function createCouponThreeSourceAiProjector(
       // append another progress card for each terminal run; the last run sends
       // the single latest card after the whole recognition batch has settled.
       if (!hasPendingAiRecognition(updated)) {
-        await dependencies.sendCard(
-          run.ownerOpenId,
-          cardForDraft(updated),
-          idempotencyKey,
-        );
+        if (
+          updated.task.sources.couponTable &&
+          updated.task.sources.whitelist
+        ) {
+          await dependencies.deliverMappingCard({
+            draft: updated,
+            idempotencyKey,
+          });
+        }
       }
     },
   };

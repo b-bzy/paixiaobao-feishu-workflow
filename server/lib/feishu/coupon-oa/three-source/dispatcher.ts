@@ -32,6 +32,7 @@ import {
   isCouponThreeSourceClearInvocation,
   isCouponThreeSourceInvocation,
 } from "./config";
+import { deliverCouponThreeSourceMappingCard } from "./mapping-card-delivery";
 import { isCouponThreeSourcePilotEnabled } from "./pilot-config";
 import {
   type CouponThreeSourcePilotService,
@@ -70,6 +71,7 @@ export interface CouponThreeSourceDispatcherDependencies {
     card: Parameters<typeof sendFeishuCard>[1],
     idempotencyKey?: string,
   ): Promise<void>;
+  deliverMappingCard: typeof deliverCouponThreeSourceMappingCard;
   getOaDraft: typeof getCouponOaDraft;
 }
 
@@ -88,6 +90,7 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   getMessageBody: getFeishuMessageBody,
   downloadFile: downloadFeishuMessageResource,
   sendCard: sendFeishuCard,
+  deliverMappingCard: deliverCouponThreeSourceMappingCard,
   getOaDraft: getCouponOaDraft,
 };
 
@@ -140,6 +143,23 @@ async function sendDraftState(input: {
   idempotencyKey?: string;
 }): Promise<void> {
   const { draft } = input;
+  const isMappingState =
+    !draft.pendingRecognition &&
+    !hasPendingAiRecognition(draft) &&
+    Boolean(draft.task.sources.couponTable && draft.task.sources.whitelist) &&
+    !draft.validationIssues.some((issue) =>
+      issue.includes("白黑名单存在重叠"),
+    ) &&
+    draft.task.status !== "AwaitingFinalConfirmation" &&
+    draft.task.status !== "DraftOnlyConfirmed" &&
+    draft.task.status !== "Canceled";
+  if (isMappingState) {
+    await input.dependencies.deliverMappingCard({
+      draft,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return;
+  }
   const card = (() => {
     if (draft.task.status === "DraftOnlyConfirmed") {
       return buildCouponThreeSourceCompletedCard(draft);

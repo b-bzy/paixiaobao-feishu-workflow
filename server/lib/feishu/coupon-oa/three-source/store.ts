@@ -89,6 +89,10 @@ export interface CouponThreeSourcePilotDraft {
     audit?: AiAuditSummary;
     fallbackCode?: string;
   };
+  mappingCardDelivery?: {
+    messageId: string;
+    revision: number;
+  };
   selections: CouponThreeSourcePilotSelections;
   coupon?: ConfirmedCouponSource;
   couponSet?: ConfirmedCouponSetSource;
@@ -170,6 +174,7 @@ function state(
     recognitions: input.recognitions,
     pendingRecognition: input.pendingRecognition,
     supplementRecognition: input.supplementRecognition,
+    mappingCardDelivery: input.mappingCardDelivery,
     selections: input.selections,
     coupon: input.coupon,
     couponSet: input.couponSet,

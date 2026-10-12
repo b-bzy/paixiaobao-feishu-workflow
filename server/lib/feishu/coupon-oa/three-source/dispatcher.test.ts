@@ -38,6 +38,7 @@ function dependencies(input: {
     async (_openId: string, _card: unknown, _idempotencyKey?: string) =>
       undefined,
   );
+  const deliverMappingCard = vi.fn(async ({ draft }) => draft);
   const createService = vi.fn(
     () =>
       ({
@@ -61,9 +62,10 @@ function dependencies(input: {
     getMessageBody: vi.fn(),
     downloadFile: vi.fn(),
     sendCard,
+    deliverMappingCard,
     getOaDraft: vi.fn(),
   };
-  return { values, sendCard };
+  return { values, sendCard, deliverMappingCard };
 }
 
 describe("three-source Bot dispatcher", () => {
@@ -643,7 +645,7 @@ describe("three-source Bot dispatcher", () => {
           },
         },
       }));
-    const { values, sendCard } = dependencies({
+    const { values, deliverMappingCard } = dependencies({
       activeThreeSource: [current],
       service: { updateSelections },
     });
@@ -671,9 +673,14 @@ describe("three-source Bot dispatcher", () => {
         selections: { ownerFieldValues: { overDeduction: "是" } },
       }),
     );
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
-      '"name":"owner_overDeductionReason"',
-    );
+    expect(deliverMappingCard).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        selections: expect.objectContaining({
+          ownerFieldValues: { overDeduction: "是" },
+        }),
+      }),
+      idempotencyKey: undefined,
+    });
   });
 
   it("rejects a three-source start when another coupon workflow remains active", async () => {

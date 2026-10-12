@@ -10,6 +10,24 @@ function draft(): CouponThreeSourcePilotDraft {
     ownerOpenId: "ou_owner",
   });
   task.revision = 2;
+  task.sources = {
+    couponTable: {
+      role: "couponTable",
+      messageId: "message-1",
+      fileKey: "file-1",
+      fileName: "coupon.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    },
+    whitelist: {
+      role: "whitelist",
+      messageId: "message-2",
+      fileKey: "file-2",
+      fileName: "whitelist.xlsx",
+      bytes: 10,
+      sha256: "b".repeat(64),
+    },
+  };
   return {
     recordId: "record-1",
     pilotId: "pilot-1",
@@ -100,7 +118,7 @@ function run(): CouponAiRecognitionRun {
 describe("coupon three-source AI projection", () => {
   it("updates only the matching current source and sends one idempotent card", async () => {
     let current = draft();
-    const sendCard = vi.fn(async () => undefined);
+    const deliverMappingCard = vi.fn(async ({ draft }) => draft);
     const updateDraft = vi.fn(async (_draft, updates) => {
       current = { ...current, ...updates };
       return current;
@@ -108,36 +126,35 @@ describe("coupon three-source AI projection", () => {
     const projector = createCouponThreeSourceAiProjector({
       getDraft: vi.fn(async () => current),
       updateDraft: updateDraft as never,
-      sendCard,
+      deliverMappingCard,
     });
     await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
     expect(current.recognitions.couponTable?.ai?.status).toBe("succeeded");
-    expect(sendCard).toHaveBeenCalledWith(
-      "ou_owner",
-      expect.any(Object),
-      "effect-uuid",
-    );
+    expect(deliverMappingCard).toHaveBeenCalledWith({
+      draft: current,
+      idempotencyKey: "effect-uuid",
+    });
   });
 
   it("silently discards stale revision results", async () => {
     const current = draft();
     current.task.revision = 3;
-    const sendCard = vi.fn();
+    const deliverMappingCard = vi.fn();
     const updateDraft = vi.fn();
     const projector = createCouponThreeSourceAiProjector({
       getDraft: vi.fn(async () => current),
       updateDraft: updateDraft as never,
-      sendCard,
+      deliverMappingCard,
     });
     await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
     expect(updateDraft).not.toHaveBeenCalled();
-    expect(sendCard).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
   });
 
   it("does not append an intermediate card while another source is pending", async () => {
     let current = draft();
     current.recognitions.whitelist = pendingWhitelist();
-    const sendCard = vi.fn(async () => undefined);
+    const deliverMappingCard = vi.fn(async ({ draft }) => draft);
     const updateDraft = vi.fn(async (_draft, updates) => {
       current = { ...current, ...updates };
       return current;
@@ -145,13 +162,13 @@ describe("coupon three-source AI projection", () => {
     const projector = createCouponThreeSourceAiProjector({
       getDraft: vi.fn(async () => current),
       updateDraft: updateDraft as never,
-      sendCard,
+      deliverMappingCard,
     });
 
     await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
 
     expect(current.recognitions.couponTable?.ai?.status).toBe("succeeded");
     expect(current.recognitions.whitelist?.ai?.status).toBe("pending");
-    expect(sendCard).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
   });
 });

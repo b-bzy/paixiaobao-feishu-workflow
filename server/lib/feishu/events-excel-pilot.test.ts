@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./client", () => ({ sendFeishuCard: vi.fn() }));
+vi.mock("./client", () => ({
+  sendFeishuCard: vi.fn(),
+  sendFeishuCardWithReceipt: vi.fn(async () => ({ messageId: "om-card" })),
+  updateFeishuCard: vi.fn(),
+}));
 vi.mock("./coupon-oa/approval-client", () => ({
   downloadFeishuMessageResource: vi.fn(),
   getFeishuMessageBody: vi.fn(),

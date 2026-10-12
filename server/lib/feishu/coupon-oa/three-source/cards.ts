@@ -393,6 +393,31 @@ function overDeductionChoice(
   return value === "是" || value === "否" ? value : undefined;
 }
 
+function aiStatusContent(draft: CouponThreeSourcePilotDraft): string[] {
+  const lines: string[] = [];
+  const workbookAi = draft.recognitions.couponTable?.ai;
+  if (workbookAi?.status === "pending") {
+    lines.push("**DeepSeek 表格识别：** 正在处理，请稍候。");
+  } else if (workbookAi?.status === "succeeded") {
+    lines.push(
+      "**DeepSeek 表格识别已完成：** 已回填通过校验的候选，请检查后提交。",
+    );
+  } else if (workbookAi) {
+    lines.push("**DeepSeek 表格识别未完成：** 已降级为人工检查和填写。");
+  }
+  const supplement = draft.supplementRecognition;
+  if (supplement?.status === "pending") {
+    lines.push("**补充说明识别：** 正在处理，完成后会更新本卡片。");
+  } else if (supplement?.status === "succeeded") {
+    lines.push(
+      "**补充说明识别已完成：** 已回填空白字段，原有人工内容未被覆盖。",
+    );
+  } else if (supplement) {
+    lines.push("**补充说明识别失败，请直接检查并填写字段。**");
+  }
+  return lines;
+}
+
 export function buildCouponThreeSourceMappingCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
@@ -432,6 +457,14 @@ export function buildCouponThreeSourceMappingCard(
           : []),
       ].join("\n"),
     },
+    ...(aiStatusContent(draft).length
+      ? [
+          {
+            tag: "markdown",
+            content: aiStatusContent(draft).join("\n"),
+          },
+        ]
+      : []),
     ...(reviewAiFields.length
       ? [
           {

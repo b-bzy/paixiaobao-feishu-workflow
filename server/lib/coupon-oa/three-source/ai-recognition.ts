@@ -22,7 +22,7 @@ import type {
 } from "./types";
 
 export const couponThreeSourceAiPromptVersion =
-  "coupon-three-source-p0-ai-primary-v1";
+  "coupon-three-source-p0-ai-primary-v2";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -550,23 +550,12 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const activityCopyCandidates: AiActivityCopyCandidate[] = [];
-  const couponRows = new Set(
-    couponCandidates.map(
-      (candidate) => `${candidate.sheetName}!${candidate.row}`,
-    ),
-  );
   for (const candidate of parsed.data.activityCopyCandidates) {
     const invalid = candidate.evidence.cells.filter(
       (cell) => !has(candidate.evidence.sheetName, cell),
     );
     const evidenceCells = candidate.evidence.cells.map(
       (cell) => `${candidate.evidence.sheetName}!${cell}`,
-    );
-    const evidencedRows = new Set(
-      candidate.evidence.cells.map(
-        (cell) =>
-          `${candidate.evidence.sheetName}!${Number(cell.match(/\d+$/)?.[0])}`,
-      ),
     );
     if (invalid.length) {
       issues.push(`AI 活动文案候选引用不存在的来源坐标：${invalid.join(",")}`);
@@ -584,13 +573,6 @@ export function validateCouponThreeSourceAiProposal(input: {
       !candidate.value.endsWith("优惠券申请")
     ) {
       issues.push("AI 活动名称不符合优惠券申请文案结构");
-      continue;
-    }
-    if (
-      candidate.key === "activityBackground" &&
-      [...couponRows].some((row) => !evidencedRows.has(row))
-    ) {
-      issues.push("AI 活动背景没有覆盖全部券档来源行");
       continue;
     }
     if (candidate.key === "activityBackground") {

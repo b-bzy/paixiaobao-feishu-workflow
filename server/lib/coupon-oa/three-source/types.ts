@@ -249,6 +249,14 @@ export interface AiCouponFieldCandidate {
   evidence?: CandidateEvidence;
 }
 
+export interface AiCampaignThemeCandidate {
+  value: string;
+  confidence: number;
+  reason: string;
+  origin: CandidateOrigin;
+  evidence: CandidateEvidence;
+}
+
 export interface AiListCandidate {
   role: "whitelist" | "blacklist" | "unknown";
   dimension: IdentifierDimension;
@@ -297,6 +305,7 @@ export interface ValidatedAiRecognition {
   roleCandidates: AiSourceRoleCandidate[];
   couponCandidates: CouponCandidate[];
   fieldCandidates: AiCouponFieldCandidate[];
+  campaignThemeCandidates?: AiCampaignThemeCandidate[];
   listCandidates: AiListCandidate[];
   activityCopyCandidates?: AiActivityCopyCandidate[];
   activityCopyAudit?: NonNullable<AiAuditSummary["activityCopy"]>;

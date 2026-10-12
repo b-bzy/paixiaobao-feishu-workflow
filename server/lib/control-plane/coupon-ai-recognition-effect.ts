@@ -100,7 +100,8 @@ function activityCopyFacts(input: {
     sourceHashes: { coupon: input.result.sourceHash },
     period: start && end ? `${start}至${end}` : (start ?? end),
     businessMode,
-    campaignTheme: input.campaignTheme,
+    campaignTheme:
+      input.result.campaignThemeCandidates?.[0]?.value ?? input.campaignTheme,
     tiers,
     sourceActivityNames: [stringField(input.result, "activityName") ?? ""],
   });
@@ -308,7 +309,15 @@ export function createCouponAiRecognitionEffectHandler(input: {
           }
         }
         result.activityCopyAudit = activityCopyAudit;
-        const invalid = result.issues.some((issue) => issue.includes("schema"));
+        const missingCouponCandidates =
+          run.sourceSlot === "couponTable" &&
+          result.couponCandidates.length === 0;
+        if (missingCouponCandidates) {
+          result.issues.push("AI 未返回任何可校验的优惠券候选");
+        }
+        const invalid =
+          missingCouponCandidates ||
+          result.issues.some((issue) => issue.includes("schema"));
         const audit: AiAuditSummary = {
           provider: "deepseek",
           model: run.model,

@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { z } from "zod";
-import {
-  activityCopyPromptVersion,
-  isPlaceholderActivityName,
-} from "./activity-copy";
+import { isPlaceholderActivityName } from "./activity-copy";
 import type {
   AiActivityCopyCandidate,
+  AiCampaignThemeCandidate,
   AiCouponFieldCandidate,
   AiListCandidate,
   AiSkuRegionCandidate,
@@ -22,7 +20,7 @@ import type {
 } from "./types";
 
 export const couponThreeSourceAiPromptVersion =
-  "coupon-three-source-p0-ai-primary-v2";
+  "coupon-three-source-p0-ai-primary-v3";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -241,7 +239,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
   sourceRoleCandidates: z
     .array(
       z.object({
-        role: z.enum(["couponTable", "whitelist", "blacklist"]),
+        role: z.string().trim().min(1).max(100),
         confidence: z.number().min(0).max(1),
         reasons: z.array(z.string().max(500)).max(20).default([]),
         evidence: evidenceSchema,
@@ -268,7 +266,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
   fieldCandidates: z
     .array(
       z.object({
-        key: z.enum(couponFieldKeys),
+        key: z.string().trim().min(1).max(100),
         sheetName: z.string().min(1),
         headerCell: cellAddressSchema,
         valueCell: cellAddressSchema,
@@ -369,6 +367,14 @@ export function validateCouponThreeSourceAiProposal(input: {
 
   const roleCandidates: AiSourceRoleCandidate[] = [];
   for (const candidate of parsed.data.sourceRoleCandidates) {
+    if (
+      candidate.role !== "couponTable" &&
+      candidate.role !== "whitelist" &&
+      candidate.role !== "blacklist"
+    ) {
+      issues.push(`AI 返回未登记的材料角色 ${candidate.role}，已忽略`);
+      continue;
+    }
     const invalid = candidate.evidence.cells.filter(
       (cell) => !has(candidate.evidence.sheetName, cell),
     );
@@ -485,7 +491,38 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const fieldCandidates: AiCouponFieldCandidate[] = [];
+  const campaignThemeCandidates: AiCampaignThemeCandidate[] = [];
   for (const candidate of parsed.data.fieldCandidates) {
+    if (
+      candidate.key === "activityTheme" ||
+      candidate.key === "campaignTheme"
+    ) {
+      if (
+        !has(candidate.sheetName, candidate.headerCell) ||
+        !has(candidate.sheetName, candidate.valueCell) ||
+        typeof candidate.value !== "string" ||
+        !candidate.value.trim()
+      ) {
+        issues.push("AI 活动主题候选缺少有效来源证据，已忽略");
+        continue;
+      }
+      campaignThemeCandidates.push({
+        value: candidate.value.trim(),
+        confidence: candidate.confidence,
+        reason: candidate.reason,
+        origin: candidate.origin,
+        evidence: {
+          sourceHash: input.workbook.sourceHash,
+          sheetName: candidate.sheetName,
+          cells: [candidate.headerCell, candidate.valueCell],
+        },
+      });
+      continue;
+    }
+    if (!(couponFieldKeys as readonly string[]).includes(candidate.key)) {
+      issues.push(`AI 返回未登记的字段 ${candidate.key}，已忽略`);
+      continue;
+    }
     if (
       !has(candidate.sheetName, candidate.headerCell) ||
       !has(candidate.sheetName, candidate.valueCell)
@@ -495,6 +532,7 @@ export function validateCouponThreeSourceAiProposal(input: {
     }
     fieldCandidates.push({
       ...candidate,
+      key: candidate.key as CouponFieldKey,
       evidence: {
         sourceHash: input.workbook.sourceHash,
         sheetName: candidate.sheetName,
@@ -617,6 +655,7 @@ export function validateCouponThreeSourceAiProposal(input: {
     roleCandidates,
     couponCandidates,
     fieldCandidates,
+    campaignThemeCandidates,
     listCandidates,
     activityCopyCandidates,
     templateCandidates,
@@ -637,6 +676,59 @@ export function buildCouponThreeSourceAiRequest(
     }>;
   } = {},
 ): { promptVersion: string; system: string; user: string } {
+  const outputContract = {
+    templateCandidates: [
+      {
+        templateKind: "regular_full_reduction",
+        confidence: 0.99,
+        supported: true,
+        reason: "string",
+        evidence: { sheetName: "string", cells: ["A1"] },
+      },
+    ],
+    tierCandidates: [
+      {
+        templateKind: "regular_full_reduction",
+        displayName: "满1999减120",
+        sheetName: "string",
+        row: 1,
+        evidenceCells: ["A1"],
+      },
+    ],
+    sourceRoleCandidates: [
+      {
+        role: "couponTable",
+        confidence: 0.99,
+        reasons: ["string"],
+        evidence: { sheetName: "string", cells: ["A1"] },
+      },
+    ],
+    couponCandidates: [
+      {
+        couponType: "regular_full_reduction",
+        displayName: "满1999减120",
+        sheetName: "string",
+        row: 1,
+        evidenceCells: ["A1"],
+      },
+    ],
+    fieldCandidates: [
+      {
+        key: "activityStartAt",
+        sheetName: "string",
+        headerCell: "A1",
+        valueCell: "A2",
+        confidence: 0.99,
+        reason: "string",
+        origin: "source_explicit",
+        value: "2026-11-01",
+      },
+    ],
+    listCandidates: [],
+    skuRegionCandidates: [],
+    activityCopyCandidates: [],
+    warnings: [],
+  };
   return {
     promptVersion: couponThreeSourceAiPromptVersion,
     system: [
@@ -648,19 +740,16 @@ export function buildCouponThreeSourceAiRequest(
       "字段候选必须标记 source_explicit、ai_derived 或 ai_inferred；推测不得伪装成源表明示值。",
       "名单必须返回 SKU 数据区域和所属券档，而不只返回表头。",
       "当前生成只开放 regular_full_reduction；其他模板可以识别，但必须标记 supported=false。",
-      `活动文案遵守 ${activityCopyPromptVersion}：根据已提供事实生成 activityName 和 activityBackground 候选。`,
-      "活动名称严格采用‘活动周期 + 业务模式 + 商品或活动主题 + 优惠券申请’结构。",
-      "不得返回正常活动、测试活动、促销活动、优惠券活动、默认活动、活动名称、未命名活动或待补充。",
-      "活动背景采用‘本期申请<活动名称去掉申请>，本期配置N档优惠券：<全部券档>；配合<已证实活动主题或业务说明>。’结构；没有证据的后半句应省略。",
-      "活动背景必须逐一覆盖全部券档，不能编造日期、渠道、预算、GMV、ROI、审批理由或超扣。",
+      "必须严格使用 user.outputContract 的键、嵌套结构和枚举值；每个顶层数组都必须返回，不能用别名、中文键或额外包装。",
+      "只识别当前工作簿中实际存在的内容；此阶段 activityCopyCandidates 必须返回空数组，活动文案由后续专用步骤生成。",
       "输入日期没有年份时，可以根据 currentDate 给出 ai_inferred 候选，但必须保留推测来源，不能标记 source_explicit。",
     ].join("\n"),
     user: JSON.stringify({
-      task: "完整识别材料角色、模板类型、全部券档、标准字段、名单区域和活动文案候选",
+      task: "完整识别材料角色、模板类型、全部券档、标准字段和名单区域",
       promptVersion: couponThreeSourceAiPromptVersion,
-      activityCopyPromptVersion,
       currentDate: new Date().toISOString().slice(0, 10),
       publicCampaignCandidates: context.publicCampaignCandidates ?? [],
+      outputContract,
       workbook,
     }),
   };

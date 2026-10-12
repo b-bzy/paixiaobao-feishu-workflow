@@ -278,6 +278,52 @@ describe("single coupon confirmation", () => {
     });
   });
 
+  it("reuses one consistent AI activity date across multiple coupon tiers", async () => {
+    const first = couponRow("活动A", "100", "20");
+    const second = couponRow("活动B", "200", "30");
+    first[4] = "9月30日";
+    second[4] = "9月30日";
+    first[5] = "2030-10-10";
+    second[5] = "2030-10-10";
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([first, second]),
+    );
+
+    const confirmed = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "owner-1",
+      revision: 3,
+      ownerFieldValues: {
+        activityStartAt: "2030-09-30 00:00",
+        activityPointPercent: 6,
+      },
+      aiRecognition: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [
+          {
+            key: "activityStartAt",
+            sheetName: "配券表",
+            headerCell: "E1",
+            valueCell: "E2",
+            confidence: 0.8,
+            reason: "缺少年份，按业务确认补全年份",
+            value: "2030-09-30",
+            origin: "ai_inferred",
+          },
+        ],
+        listCandidates: [],
+        issues: [],
+      },
+    });
+
+    expect(confirmed.tiers.map((tier) => tier.input.activityStartAt)).toEqual([
+      "2030-09-30",
+      "2030-09-30",
+    ]);
+  });
+
   it("allows validated owner supplements for a missing source field", async () => {
     const row = couponRow("活动A", "100", "20");
     row[3] = "";

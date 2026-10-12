@@ -385,6 +385,32 @@ const REGULAR_FIELD_KEYS = (
   Object.keys(HEADER_ALIASES) as CouponFieldKey[]
 ).filter((key) => key !== "activityPointPercent");
 
+const SHARED_ACTIVITY_FIELD_KEYS = new Set<CouponFieldKey>([
+  "activityStartAt",
+  "activityEndAt",
+  "claimWindow",
+  "useWindow",
+]);
+
+function sharedAiFieldCandidate(input: {
+  key: CouponFieldKey;
+  sheetName: string;
+  candidates: ValidatedAiRecognition["fieldCandidates"] | undefined;
+}): ValidatedAiRecognition["fieldCandidates"][number] | undefined {
+  if (!SHARED_ACTIVITY_FIELD_KEYS.has(input.key)) return undefined;
+  const candidates = (input.candidates ?? []).filter(
+    (candidate) =>
+      candidate.key === input.key && candidate.sheetName === input.sheetName,
+  );
+  if (!candidates.length) return undefined;
+  const normalizedValues = new Set(
+    candidates.map((candidate) =>
+      JSON.stringify(safelyNormalizeOwnerValue(input.key, candidate.value)),
+    ),
+  );
+  return normalizedValues.size === 1 ? candidates[0] : undefined;
+}
+
 function candidateForRow(
   recognition: WorkbookRecognition,
   worksheet: ExcelJS.Worksheet,
@@ -694,12 +720,18 @@ export async function confirmRegularFullReductionCoupon(
     const explicitlySelectedCandidate = candidateIdValue
       ? candidates.find((item) => item.id === candidateIdValue)
       : undefined;
-    const aiCandidate = input.aiRecognition?.fieldCandidates.find(
-      (item) =>
-        item.key === key &&
-        item.sheetName === selected.sheetName &&
-        Number(item.valueCell.match(/\d+$/)?.[0]) === selected.row,
-    );
+    const aiCandidate =
+      input.aiRecognition?.fieldCandidates.find(
+        (item) =>
+          item.key === key &&
+          item.sheetName === selected.sheetName &&
+          Number(item.valueCell.match(/\d+$/)?.[0]) === selected.row,
+      ) ??
+      sharedAiFieldCandidate({
+        key,
+        sheetName: selected.sheetName,
+        candidates: input.aiRecognition?.fieldCandidates,
+      });
     const candidate =
       explicitlySelectedCandidate ??
       (!aiCandidate && candidates.length === 1 ? candidates[0] : undefined);

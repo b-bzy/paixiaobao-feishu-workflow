@@ -69,6 +69,7 @@ Mac 仅在窗口内保存以下值并执行；不要把真实值复制到 shell 
 ```dotenv
 FEISHU_BRIDGE_P0_MODE=true
 FEISHU_BRIDGE_TARGET_URL=https://<已部署测试域名>/api/feishu/poc-bridge
+FEISHU_P0_EXPECTED_GIT_SHA=<该 Preview 对应的完整 40 位 Git SHA>
 FEISHU_BRIDGE_KEY_ID=<与 Vercel 相同的测试 key ID>
 FEISHU_BRIDGE_SHARED_SECRET=<与 Vercel 相同的测试 secret>
 FEISHU_BRIDGE_EVENT_TYPES=im.message.receive_v1,card.action.trigger
@@ -78,6 +79,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 
 - 不设 `FEISHU_BRIDGE_ALLOW_HTTP=true`；P0 对 Vercel 必须 HTTPS。
 - P0 mode 要求精确 `/api/feishu/poc-bridge`；不能指向 `/api/feishu/bridge`、`/api/feishu/process`、任意 query/hash 或其它域名路径。
+- P0 bridge 与 worker 启动前都必须通过 `/api/deployment-identity` 回读并严格匹配 `FEISHU_P0_EXPECTED_GIT_SHA`。旧 Preview 没有身份端点、SHA 缺失或不一致时立即退出，禁止消费共享 PostgreSQL 队列。
 - Preview 开启 Deployment Protection 时，本机 runner 必须从受控环境读取 `VERCEL_AUTOMATION_BYPASS_SECRET`。runner 仅把它放入 `x-vercel-protection-bypass` header；它不参与飞书 HMAC、不得复用 `FEISHU_BRIDGE_SHARED_SECRET`，也不得写入日志或聊天。
 - 通过受控本机环境保持测试 App/Bot 授权；不能使用生产 App 或不明来源凭据。
 
@@ -97,6 +99,11 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
    ```bash
    pnpm dev:coupon-three-source:p0
    ```
+   AI Gate 开启时，在同一组 `FEISHU_BRIDGE_TARGET_URL`、`FEISHU_P0_EXPECTED_GIT_SHA` 和 Protection Bypass 环境下另启受控 worker：
+   ```bash
+   pnpm dev:coupon-three-source:p0-worker
+   ```
+   不再用手写 `curl` 循环触发 tick，也不得从未校验 revision 的临时 URL 文件恢复 worker。
    日志只能显示目标 host、event type 和脱敏 ID；若看到 secret、完整 payload、完整 open ID 或附件内容，立刻停止。
 5. runner 的启动/HTTP 成功不代表可恢复，也不代表业务成功。启动后保持 pilot flag 关闭，直到明确记录测试窗口。
 

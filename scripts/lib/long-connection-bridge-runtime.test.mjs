@@ -31,26 +31,60 @@ describe("long connection bridge runtime", () => {
     expect(config.target.pathname).toBe(bridgePath);
     expect(config.eventTypes).toEqual(supportedBridgeEventTypes);
     expect(config.forwardTimeoutMs).toBe(10_000);
+    expect(config.vercelAutomationBypassSecret).toBeUndefined();
+  });
+
+  it("trims the optional Vercel automation bypass secret", () => {
+    const config = getBridgeRuntimeConfig(
+      environment({
+        VERCEL_AUTOMATION_BYPASS_SECRET: "  p0-vercel-bypass-secret  ",
+      }),
+    );
+
+    expect(config.vercelAutomationBypassSecret).toBe(
+      "p0-vercel-bypass-secret",
+    );
   });
 
   it("requires the dedicated P0 bridge path when P0 mode is enabled", () => {
     const config = getBridgeRuntimeConfig(
       environment({
         FEISHU_BRIDGE_P0_MODE: "true",
+        FEISHU_P0_EXPECTED_GIT_SHA:
+          "74bd72e319582a1bf05be812bff2d2508208c2e3",
         FEISHU_BRIDGE_TARGET_URL:
           "https://preview.example.com/api/feishu/poc-bridge",
       }),
     );
 
     expect(config.target.pathname).toBe(pocBridgePath);
+    expect(config.expectedGitCommitSha).toBe(
+      "74bd72e319582a1bf05be812bff2d2508208c2e3",
+    );
   });
 
   it("rejects a durable bridge target while P0 mode is enabled", () => {
     expect(() =>
       getBridgeRuntimeConfig(
-        environment({ FEISHU_BRIDGE_P0_MODE: "true" }),
+        environment({
+          FEISHU_BRIDGE_P0_MODE: "true",
+          FEISHU_P0_EXPECTED_GIT_SHA:
+            "74bd72e319582a1bf05be812bff2d2508208c2e3",
+        }),
       ),
     ).toThrow(`exact ${pocBridgePath} path`);
+  });
+
+  it("requires a full expected Git SHA in P0 mode", () => {
+    expect(() =>
+      getBridgeRuntimeConfig(
+        environment({
+          FEISHU_BRIDGE_P0_MODE: "true",
+          FEISHU_BRIDGE_TARGET_URL:
+            "https://preview.example.com/api/feishu/poc-bridge",
+        }),
+      ),
+    ).toThrow("FEISHU_P0_EXPECTED_GIT_SHA");
   });
 
   it("accepts an explicit message-only consumer list for R0.5", () => {
@@ -244,6 +278,32 @@ describe("long connection bridge runtime", () => {
     });
 
     expect(text).not.toHaveBeenCalled();
+  });
+
+  it("adds the Vercel automation bypass header only when configured", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 202 }));
+    const config = getBridgeRuntimeConfig(
+      environment({
+        VERCEL_AUTOMATION_BYPASS_SECRET: "p0-vercel-bypass-secret",
+      }),
+    );
+
+    await forwardBridgeRequest({ body: "{}", config, fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][1].headers).toMatchObject({
+      "x-vercel-protection-bypass": "p0-vercel-bypass-secret",
+    });
+
+    const unprotectedFetch = vi.fn(async () => ({ ok: true, status: 202 }));
+    await forwardBridgeRequest({
+      body: "{}",
+      config: getBridgeRuntimeConfig(environment()),
+      fetchImpl: unprotectedFetch,
+    });
+    expect(unprotectedFetch.mock.calls[0][1].headers).not.toHaveProperty(
+      "x-vercel-protection-bypass",
+    );
   });
 
   it("classifies network failures without preserving transport details", async () => {

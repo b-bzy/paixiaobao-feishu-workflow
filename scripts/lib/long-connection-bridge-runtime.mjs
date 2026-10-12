@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 
+import { parseExpectedGitCommitSha } from "./p0-deployment-identity.mjs";
+
 export const bridgePath = "/api/feishu/bridge";
 export const pocBridgePath = "/api/feishu/poc-bridge";
 export const supportedBridgeEventTypes = [
@@ -167,10 +169,15 @@ export function getBridgeRuntimeConfig(environment) {
     target: parseBridgeTarget(environment, mode.path),
     keyId,
     sharedSecret,
+    vercelAutomationBypassSecret:
+      environment.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || undefined,
     eventTypes: parseEventTypes(environment.FEISHU_BRIDGE_EVENT_TYPES),
     forwardTimeoutMs: parseForwardTimeout(
       environment.FEISHU_BRIDGE_FORWARD_TIMEOUT_MS,
     ),
+    expectedGitCommitSha: mode.p0Mode
+      ? parseExpectedGitCommitSha(environment.FEISHU_P0_EXPECTED_GIT_SHA)
+      : undefined,
     p0Mode: mode.p0Mode,
   };
 }
@@ -325,12 +332,20 @@ export async function forwardBridgeRequest({
   try {
     const response = await fetchImpl(config.target, {
       method: "POST",
-      headers: createBridgeSignedHeaders({
-        body,
-        target: config.target,
-        keyId: config.keyId,
-        sharedSecret: config.sharedSecret,
-      }),
+      headers: {
+        ...createBridgeSignedHeaders({
+          body,
+          target: config.target,
+          keyId: config.keyId,
+          sharedSecret: config.sharedSecret,
+        }),
+        ...(config.vercelAutomationBypassSecret
+          ? {
+              "x-vercel-protection-bypass":
+                config.vercelAutomationBypassSecret,
+            }
+          : {}),
+      },
       body,
       signal: abortController.signal,
     });

@@ -10,6 +10,7 @@ import {
   forwardBridgeRequest,
   getBridgeRuntimeConfig,
 } from "./lib/long-connection-bridge-runtime.mjs";
+import { verifyP0DeploymentIdentity } from "./lib/p0-deployment-identity.mjs";
 
 if (
   process.env.HTTP_PROXY ||
@@ -145,4 +146,23 @@ process.on("SIGTERM", () => shutdown());
 console.log(
   `[bridge] forwarding Feishu events to ${displayBridgeTarget(config.target)}; event types=${config.eventTypes.join(",")}`,
 );
+if (config.p0Mode) {
+  try {
+    const identity = await verifyP0DeploymentIdentity({
+      target: config.target,
+      expectedGitCommitSha: config.expectedGitCommitSha,
+      vercelAutomationBypassSecret:
+        process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || undefined,
+      timeoutMs: config.forwardTimeoutMs,
+    });
+    console.log(
+      `[bridge] verified P0 deployment revision ${identity.gitCommitSha.slice(0, 7)}`,
+    );
+  } catch (error) {
+    console.error(
+      `[bridge] P0 deployment identity check failed: code=${error?.code ?? "unexpected_error"}`,
+    );
+    process.exit(1);
+  }
+}
 for (const consumer of consumers) startConsumer(consumer);

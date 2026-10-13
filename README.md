@@ -14,6 +14,7 @@
 ├── apps/
 │   └── miaoda-admin/              # 妙搭管理员控制台（独立 Vite 包）
 ├── docs/                          # 架构、产品、运行与参考资产
+│   ├── README.md                  # 项目文档导航
 │   ├── adr/                       # 架构决策记录（ADR）
 │   └── oa-ticket-reimbursement-materials/
 │       ├── current/               # 当前生效的产品、实现和运行基线
@@ -107,6 +108,19 @@ pnpm dev                 # Nitro API，默认 http://localhost:3000
 pnpm dev:admin           # 妙搭管理端，默认 http://localhost:5173
 ```
 
+三源优惠券 P0 Preview 的受控本机测试链路使用：
+
+```bash
+pnpm p0:preview:check
+pnpm p0:preview:up
+pnpm p0:preview:status
+pnpm p0:preview:down
+```
+
+这些命令只适用于 `p0-three-source-direct-http` 的 draft-only Preview，
+不会授权 Production 或原生 OA。首次配置和故障处理见仓库 Skill
+`p0-preview-deploy`。
+
 `pnpm dev` 会自动加载项目根目录的 `.env.local`。优惠券 OA 草稿联调前，
 先运行 `zsh scripts/check-coupon-oa-local-draft-demo.sh`，确认当前模式为
 `draft-demo`。
@@ -129,6 +143,13 @@ pnpm test
 pnpm build
 pnpm build:admin
 ```
+
+## 产品与规划文档
+
+- [项目文档导航](docs/README.md)：按业务规划、架构决策和优惠券 OA 文档库浏览项目资料。
+- [拍小宝需求优先级清单（初稿）](docs/拍小宝需求优先级清单.md)：基于业务访谈整理的 AI 改造方向、优先级、首期范围与人工决策边界。
+
+> 需求优先级清单是业务规划底稿，不表示其中场景已经实现、获批上线或具备相应的飞书权限。实际已实现范围、试点门禁与运行状态以本 README、当前架构基线和优惠券 OA 文档库中的 `current/`、`records/` 为准。
 
 ## 架构文档
 

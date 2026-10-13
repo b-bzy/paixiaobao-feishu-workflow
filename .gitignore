@@ -12,3 +12,5 @@ coverage
 !.env.example
 __pycache__/
 docs/oa-ticket-reimbursement-materials/cases/
+docs/oa-ticket-reimbursement-materials/drafts/
+/outputs/coupon-three-source-e2e/

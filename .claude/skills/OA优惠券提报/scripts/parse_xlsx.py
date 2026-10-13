@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""OA 优惠券填报 skill 专用 .xlsx 读取器（仅用 Python 标准库，零依赖）。
+"""OA 优惠券提报 Skill 专用 .xlsx 读取器（仅用 Python 标准库，零依赖）。
 
 用法：
   python3 parse_xlsx.py FILE.xlsx                          # 每个工作表预览（markdown）

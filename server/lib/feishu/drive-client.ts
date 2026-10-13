@@ -51,13 +51,18 @@ export async function uploadFeishuDriveFile(input: {
   };
 }
 
-/** Downloads a previously uploaded Drive media file by its file token. */
+/**
+ * Downloads an explorer-parent Drive file (云空间资源文件) by its file token.
+ * Frozen pilot artifacts are uploaded with parent_type=explorer, so they must
+ * use the file download endpoint; the /medias/{token}/download endpoint only
+ * serves 云文档素材 and returns 403 for explorer files.
+ */
 export async function downloadFeishuDriveFile(
   fileToken: string,
 ): Promise<Uint8Array> {
   const token = await getTenantAccessToken();
   const response = await fetch(
-    `https://open.feishu.cn/open-apis/drive/v1/medias/${encodeURIComponent(fileToken)}/download`,
+    `https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}/download`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!response.ok) {

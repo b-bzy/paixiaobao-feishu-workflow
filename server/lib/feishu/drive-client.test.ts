@@ -91,7 +91,7 @@ describe("Feishu Drive upload", () => {
       new Uint8Array([4, 5, 6]),
     );
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
-      "/drive/v1/medias/file%20token/download",
+      "/drive/v1/files/file%20token/download",
     );
     expect(fetchMock.mock.calls[0]?.[1]).toEqual({
       headers: { Authorization: "Bearer tenant-token" },

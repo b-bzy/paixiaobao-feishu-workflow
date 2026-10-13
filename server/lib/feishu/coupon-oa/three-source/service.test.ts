@@ -158,6 +158,18 @@ describe("CouponThreeSourcePilotService", () => {
         if (current.task.revision !== expectedRevision) {
           throw new Error("stale revision");
         }
+        // Model the guarded Base store: every write must expect the revision
+        // that is actually persisted, so stale snapshots are rejected here
+        // exactly like updateCouponThreeSourcePilotDraft rejects them.
+        if (draft && expectedRevision !== undefined) {
+          if (draft.task.revision !== expectedRevision) {
+            throw new Error(
+              `Three-source pilot version changed; reopen the latest card (stored=${draft.task.revision}, expected=${expectedRevision})`,
+            );
+          }
+          draft = { ...draft, ...updates };
+          return draft;
+        }
         draft = { ...current, ...updates };
         return draft;
       },

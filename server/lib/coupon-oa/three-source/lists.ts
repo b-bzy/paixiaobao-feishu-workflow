@@ -40,6 +40,43 @@ function cellText(cell: ExcelJS.Cell): string {
   return String(cell.text || cell.value).trim();
 }
 
+function identifierValue(cell: ExcelJS.Cell): {
+  rawValue: string;
+  normalizedValue?: string;
+  issue?: string;
+} {
+  let rawValue = cellText(cell);
+  if (typeof cell.value !== "number") {
+    return { rawValue, normalizedValue: rawValue };
+  }
+  if (!Number.isSafeInteger(cell.value) || cell.value < 0) {
+    return {
+      rawValue,
+      issue: "是数值格式，但不是可无损转换的非负整数 SKU",
+    };
+  }
+  if (/^0+$/u.test(cell.numFmt)) {
+    rawValue = String(cell.value).padStart(cell.numFmt.length, "0");
+  }
+  if (!/^\d+$/u.test(rawValue)) {
+    return {
+      rawValue,
+      issue: "是数值格式，但显示值不是纯整数 SKU",
+    };
+  }
+  const significantDigits = rawValue.replace(/^0+/u, "") || "0";
+  if (
+    significantDigits.length > 15 ||
+    Number.parseInt(rawValue, 10) !== cell.value
+  ) {
+    return {
+      rawValue,
+      issue: "超过 Excel 15 位有效数字，可能已经丢失精度",
+    };
+  }
+  return { rawValue, normalizedValue: rawValue };
+}
+
 function isFormula(cell: ExcelJS.Cell): boolean {
   return (
     cell.type === ExcelJS.ValueType.Formula ||
@@ -173,7 +210,9 @@ export async function parseTieredIdentifierList(
     const row = worksheet.getRow(rowNumber);
     if (!row.hasValues) continue;
     const idCell = row.getCell(idColumn);
-    const idRaw = cellText(idCell);
+    const idValue = identifierValue(idCell);
+    const idRaw = idValue.rawValue;
+    const normalizedId = idValue.normalizedValue;
     const tierCell = tierColumn ? row.getCell(tierColumn) : undefined;
     const tierRaw = tierCell ? cellText(tierCell) : (input.defaultTier ?? "");
     const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
@@ -191,8 +230,8 @@ export async function parseTieredIdentifierList(
       issues.push(`${location} 不能以公式前缀开头`);
       continue;
     }
-    if (typeof idCell.value === "number") {
-      issues.push(`${location} 是数值格式，无法确认前导零`);
+    if (idValue.issue || !normalizedId) {
+      issues.push(`${location} ${idValue.issue ?? "不是有效 SKU"}`);
       continue;
     }
     if (MULTIPLE_IDENTIFIER_SEPARATOR.test(idRaw)) {
@@ -212,13 +251,13 @@ export async function parseTieredIdentifierList(
       );
       continue;
     }
-    if (seen.has(idRaw)) {
-      issues.push(`${location} 与前序 SKU 重复：${idRaw}`);
+    if (seen.has(normalizedId)) {
+      issues.push(`${location} 与前序 SKU 重复：${normalizedId}`);
       continue;
     }
-    seen.add(idRaw);
+    seen.add(normalizedId);
     entries.push({
-      id: idRaw,
+      id: normalizedId,
       tier: resolvedTier,
       provenance: provenance({
         source: input.recognition.source,
@@ -227,7 +266,7 @@ export async function parseTieredIdentifierList(
         row: rowNumber,
         column: identifier.column,
         rawValue: idRaw,
-        normalizedValue: idRaw,
+        normalizedValue: normalizedId,
       }),
     });
   }
@@ -310,28 +349,30 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       if (!sheetOrder.includes(resolvedTier)) sheetOrder.push(resolvedTier);
       for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
         const cell = worksheet.getRow(rowNumber).getCell(headerColumn);
-        const raw = cellText(cell);
+        const identifier = identifierValue(cell);
+        const raw = identifier.rawValue;
+        const normalized = identifier.normalizedValue;
         if (!raw) continue;
         const location = `${worksheet.name}!${cell.address}`;
         if (isFormula(cell) || /^[=+@-]/.test(raw)) {
           issues.push(`${location} 不能使用公式作为 SKU`);
           continue;
         }
-        if (typeof cell.value === "number") {
-          issues.push(`${location} 是数值格式，无法确认前导零`);
+        if (identifier.issue || !normalized) {
+          issues.push(`${location} ${identifier.issue ?? "不是有效 SKU"}`);
           continue;
         }
         if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
           issues.push(`${location} 包含多个 SKU 或分隔符`);
           continue;
         }
-        if (seenIds.has(raw)) {
-          issues.push(`${location} 与前序 SKU 重复：${raw}`);
+        if (seenIds.has(normalized)) {
+          issues.push(`${location} 与前序 SKU 重复：${normalized}`);
           continue;
         }
-        seenIds.add(raw);
+        seenIds.add(normalized);
         entries.push({
-          id: raw,
+          id: normalized,
           tier: resolvedTier,
           provenance: provenance({
             source: input.recognition.source,
@@ -340,7 +381,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
             row: rowNumber,
             column: headerColumnName,
             rawValue: raw,
-            normalizedValue: raw,
+            normalizedValue: normalized,
           }),
         });
       }
@@ -395,28 +436,32 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       rowNumber += 1
     ) {
       const cell = worksheet.getRow(rowNumber).getCell(column);
-      const raw = cellText(cell);
+      const identifierValueResult = identifierValue(cell);
+      const raw = identifierValueResult.rawValue;
+      const normalized = identifierValueResult.normalizedValue;
       if (!raw) continue;
       const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
       if (isFormula(cell) || /^[=+@-]/.test(raw)) {
         issues.push(`${location} 不能使用公式作为 SKU`);
         continue;
       }
-      if (typeof cell.value === "number") {
-        issues.push(`${location} 是数值格式，无法确认前导零`);
+      if (identifierValueResult.issue || !normalized) {
+        issues.push(
+          `${location} ${identifierValueResult.issue ?? "不是有效 SKU"}`,
+        );
         continue;
       }
       if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
         issues.push(`${location} 包含多个 SKU 或分隔符`);
         continue;
       }
-      if (seenIds.has(raw)) {
-        issues.push(`${location} 与前序 SKU 重复：${raw}`);
+      if (seenIds.has(normalized)) {
+        issues.push(`${location} 与前序 SKU 重复：${normalized}`);
         continue;
       }
-      seenIds.add(raw);
+      seenIds.add(normalized);
       entries.push({
-        id: raw,
+        id: normalized,
         tier: resolvedTier,
         provenance: provenance({
           source: input.recognition.source,
@@ -425,7 +470,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
           row: rowNumber,
           column: identifier.column,
           rawValue: raw,
-          normalizedValue: raw,
+          normalizedValue: normalized,
         }),
       });
     }
@@ -496,7 +541,9 @@ export async function parseSingleCouponIdentifierList(
     const row = worksheet.getRow(rowNumber);
     if (!row.hasValues) continue;
     const cell = row.getCell(idColumn);
-    const raw = cellText(cell);
+    const parsedIdentifier = identifierValue(cell);
+    const raw = parsedIdentifier.rawValue;
+    const normalized = parsedIdentifier.normalizedValue;
     const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
     if (!raw) continue;
     if (isFormula(cell)) {
@@ -507,21 +554,21 @@ export async function parseSingleCouponIdentifierList(
       issues.push(`${location} 不能以公式前缀开头`);
       continue;
     }
-    if (typeof cell.value === "number") {
-      issues.push(`${location} 是数值格式，无法确认前导零`);
+    if (parsedIdentifier.issue || !normalized) {
+      issues.push(`${location} ${parsedIdentifier.issue ?? "不是有效 SKU"}`);
       continue;
     }
     if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
       issues.push(`${location} 包含多个 SKU 或分隔符`);
       continue;
     }
-    if (seen.has(raw)) {
-      issues.push(`${location} 与前序 SKU 重复：${raw}`);
+    if (seen.has(normalized)) {
+      issues.push(`${location} 与前序 SKU 重复：${normalized}`);
       continue;
     }
-    seen.add(raw);
+    seen.add(normalized);
     entries.push({
-      id: raw,
+      id: normalized,
       provenance: provenance({
         source: input.recognition.source,
         sourceHash: hashValue,
@@ -529,7 +576,7 @@ export async function parseSingleCouponIdentifierList(
         row: rowNumber,
         column: identifier.column,
         rawValue: raw,
-        normalizedValue: raw,
+        normalizedValue: normalized,
       }),
     });
   }

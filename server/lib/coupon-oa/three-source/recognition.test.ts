@@ -383,6 +383,53 @@ describe("single coupon identifier list", () => {
 });
 
 describe("multi-sheet identifier list", () => {
+  it("normalizes exact numeric SKU cells and preserves displayed leading zeros", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const numeric = workbook.addWorksheet("数字SKU");
+    numeric.getCell("A1").value = "sku";
+    numeric.getCell("A2").value = 10_071_816_016_249;
+    const padded = workbook.addWorksheet("补零SKU");
+    padded.getCell("A1").value = "sku";
+    padded.getCell("A2").value = 123;
+    padded.getCell("A2").numFmt = "000000";
+    const source: OfflineSourceFile = {
+      fileName: "数字格式白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["数字SKU", "10071816016249"],
+      ["补零SKU", "000123"],
+    ]);
+  });
+
+  it("rejects numeric SKU cells beyond Excel's 15-digit precision", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("超长SKU");
+    sheet.getCell("A1").value = "sku";
+    sheet.getCell("A2").value = 1_234_567_890_123_456;
+    const source: OfflineSourceFile = {
+      fileName: "超长数字白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.entries).toEqual([]);
+    expect(parsed.issues.join("；")).toContain("15 位有效数字");
+  });
+
   it("uses AI-primary SKU regions before deterministic header aliases", async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("业务导出页");

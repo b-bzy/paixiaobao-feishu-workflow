@@ -463,14 +463,14 @@ describe("three-source coupon OA offline workflow", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("reports formulas, number cells, multiple IDs, duplicate IDs, and blank IDs as source-list issues", async () => {
+  it("reports formulas, unsafe numeric IDs, multiple IDs, duplicates, and blanks", async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("白名单错误数据");
     sheet.getCell("A1").value = "合成白名单";
     sheet.getRow(3).values = ["商品", "SKU", "券档"];
     sheet.getRow(4).values = ["公式", { formula: '"00101"' }, "满999减60"];
     sheet.getRow(5).values = ["公式前缀", "+00105", "满999减60"];
-    sheet.getRow(6).values = ["数值", 101, "满999减60"];
+    sheet.getRow(6).values = ["超长数值", 1_234_567_890_123_456, "满999减60"];
     sheet.getRow(7).values = ["多值", "00102,00103", "满999减60"];
     sheet.getRow(8).values = ["有效", "00104", "满999减60"];
     sheet.getRow(9).values = ["重复", "00104", "满999减60"];
@@ -487,7 +487,7 @@ describe("three-source coupon OA offline workflow", () => {
     expect(parsed.issues).toHaveLength(6);
     expect(parsed.issues.join("；")).toContain("不能使用公式");
     expect(parsed.issues.join("；")).toContain("公式前缀");
-    expect(parsed.issues.join("；")).toContain("数值格式");
+    expect(parsed.issues.join("；")).toContain("15 位有效数字");
     expect(parsed.issues.join("；")).toContain("包含多个 SKU");
     expect(parsed.issues.join("；")).toContain("重复");
     expect(parsed.issues.join("；")).toContain("为空");

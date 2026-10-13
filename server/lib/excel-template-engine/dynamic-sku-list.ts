@@ -32,7 +32,6 @@ function assertRows(tiers: Record<string, readonly string[]>): Array<{
 }> {
   const sheets: Array<{ name: string; ids: string[] }> = [];
   const names = new Set<string>();
-  const ids = new Set<string>();
   for (const [rawName, values] of Object.entries(tiers)) {
     const name = assertSheetName(rawName);
     const normalizedName = name.toLocaleLowerCase("zh-CN");
@@ -42,13 +41,14 @@ function assertRows(tiers: Record<string, readonly string[]>): Array<{
     if (values.length > maximumRowsPerSheet) {
       throw new Error(`${name} 超过名单最大行数`);
     }
+    const idsInSheet = new Set<string>();
     const rows = values.map((value) => {
       const id = value.trim();
       if (!id || /^[=+@-]/u.test(id) || /[\s,，、;；\n]/u.test(id)) {
         throw new Error(`${name} 的 SKU 必须是一格一个的安全文本`);
       }
-      if (ids.has(id)) throw new Error(`SKU 不能同时出现在多个 Sheet：${id}`);
-      ids.add(id);
+      if (idsInSheet.has(id)) throw new Error(`${name} 内存在重复 SKU：${id}`);
+      idsInSheet.add(id);
       return id;
     });
     sheets.push({ name, ids: rows });

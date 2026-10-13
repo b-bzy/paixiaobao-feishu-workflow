@@ -463,7 +463,7 @@ describe("three-source coupon OA offline workflow", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("reports formulas, unsafe numeric IDs, multiple IDs, duplicates, and blanks", async () => {
+  it("reports unsafe identifiers while skipping duplicates and blank rows", async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("白名单错误数据");
     sheet.getCell("A1").value = "合成白名单";
@@ -484,13 +484,13 @@ describe("three-source coupon OA offline workflow", () => {
       role: "whitelist",
     });
     expect(parsed.entries).toHaveLength(1);
-    expect(parsed.issues).toHaveLength(6);
+    expect(parsed.issues).toHaveLength(4);
     expect(parsed.issues.join("；")).toContain("不能使用公式");
     expect(parsed.issues.join("；")).toContain("公式前缀");
+    expect(parsed.issues.join("；")).not.toContain("与前序 SKU 重复");
     expect(parsed.issues.join("；")).toContain("15 位有效数字");
     expect(parsed.issues.join("；")).toContain("包含多个 SKU");
-    expect(parsed.issues.join("；")).toContain("重复");
-    expect(parsed.issues.join("；")).toContain("为空");
+    expect(parsed.issues.join("；")).not.toContain("为空");
   });
 
   it("applies the business-selected blacklist-wins decision without changing tiers", async () => {

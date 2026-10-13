@@ -528,4 +528,73 @@ describe("multi-sheet identifier list", () => {
       ["业务临时档", "业务临时档-sku"],
     ]);
   });
+
+  it("deduplicates within each Sheet while preserving the same SKU across Sheets", async () => {
+    const workbook = new ExcelJS.Workbook();
+    for (const sheetName of ["100减1", "2000减20"]) {
+      const sheet = workbook.addWorksheet(sheetName);
+      sheet.getCell("A1").value = "sku";
+      sheet.getCell("A2").value = "00123";
+      sheet.getCell("A3").value = "00123";
+      sheet.getColumn("A").numFmt = "@";
+    }
+    const source: OfflineSourceFile = {
+      fileName: "含重复SKU的多券档白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["100减1", "00123"],
+      ["2000减20", "00123"],
+    ]);
+  });
+
+  it("applies per-Sheet deduplication to AI-primary SKU regions", async () => {
+    const workbook = new ExcelJS.Workbook();
+    for (const sheetName of ["100减1", "2000减20"]) {
+      const sheet = workbook.addWorksheet(sheetName);
+      sheet.getCell("C1").value = "商品编码";
+      sheet.getCell("C2").value = "00123";
+      sheet.getCell("C3").value = "00123";
+      sheet.getColumn("C").numFmt = "@";
+    }
+    const source: OfflineSourceFile = {
+      fileName: "AI识别多券档白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      aiSkuRegions: ["100减1", "2000减20"].map((sheetName, index) => ({
+        id: `ai-region-${index + 1}`,
+        role: "whitelist",
+        dimension: "SKU",
+        tierDisplayName: sheetName,
+        headerCell: "C1",
+        confidence: 0.99,
+        reason: "AI 识别为 SKU 区域",
+        evidence: {
+          sourceHash: recognition.sourceHash,
+          sheetName,
+          cells: ["C1", "C2", "C3"],
+          region: { startCell: "C2", endCell: "C3" },
+        },
+      })),
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["100减1", "00123"],
+      ["2000减20", "00123"],
+    ]);
+  });
 });

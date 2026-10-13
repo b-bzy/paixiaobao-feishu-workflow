@@ -25,18 +25,23 @@
     "test": "vitest run",
     "test:control-plane": "vitest run server/lib/control-plane",
     "test:control-plane:postgres": "vitest run server/lib/control-plane/postgres-command-intake.integration.test.ts",
-    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:up": "node scripts/prepare-local-minio-image.mjs && docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "db:migrate:control-plane": "node scripts/migrate-control-plane.mjs",
     "db:migrate:control-plane:test": "node scripts/migrate-control-plane-test.mjs",
     "verify:feishu-dev-release-baseline": "node scripts/verify-feishu-dev-release-baseline.mjs",
     "run:feishu-dev-release-baseline:hermetic": "node scripts/run-feishu-dev-release-baseline-hermetic.mjs",
     "test:coupon-three-source:offline": "vitest run server/lib/coupon-oa/three-source/offline.test.ts",
+    "test:coupon-three-source:e2e-local:fast": "node --import tsx scripts/run-coupon-three-source-e2e-local.mjs --lane fast",
+    "test:coupon-three-source:e2e-local:durable": "node --import tsx scripts/run-coupon-three-source-e2e-local.mjs --lane durable",
+    "test:coupon-three-source:e2e-local": "node --import tsx scripts/run-coupon-three-source-e2e-local.mjs --lane all",
+    "test:coupon-three-source:e2e-local:deepseek": "node --import tsx scripts/run-coupon-three-source-e2e-local.mjs --lane deepseek",
     "test:coupon-activity-copy": "vitest run scripts/lib/coupon-activity-copy.test.mjs",
     "run:coupon-three-source:local-case": "node scripts/run-coupon-three-source-local-case.mjs",
     "recognize:coupon-three-source:deepseek": "node scripts/recognize-coupon-three-source-deepseek.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1150.0",
     "exceljs": "^4.4.0",
     "h3": "1.15.11",
     "nitropack": "^2.13.2",
@@ -49,6 +54,7 @@
     "@biomejs/biome": "2.2.6",
     "@types/node": "^24.12.0",
     "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^4.1.0"
   }

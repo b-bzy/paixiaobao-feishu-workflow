@@ -1,5 +1,8 @@
 import type { MultiTierSkuSheetName } from "../../excel-template-engine/template-manifests";
-import { parseTieredIdentifierList } from "./lists";
+import {
+  parseMultiSheetTieredIdentifierList,
+  parseTieredIdentifierList,
+} from "./lists";
 import {
   extractRegularFullReductionInput,
   inspectThreeSourceWorkbook,
@@ -55,6 +58,8 @@ export interface OfflineThreeSourceRunInput {
   screenshotRenderer?: WorkbookScreenshotRenderer;
   templates: OfflineArtifactTemplates;
   activityPointPercent: number;
+  /** Dynamic mode keeps every business Sheet as an independent coupon tier. */
+  listMode?: "legacy-column" | "dynamic-multi-sheet";
 }
 
 export interface OfflineThreeSourceRunResult {
@@ -94,17 +99,28 @@ export async function runOfflineThreeSourceWorkflow(
   const coupon = await extractRegularFullReductionInput({
     recognition: couponRecognition,
   });
-  const whitelist = await parseTieredIdentifierList({
-    recognition: whitelistRecognition,
-    role: "whitelist",
-    ...input.whitelistSelection,
-  });
+  const whitelist =
+    input.listMode === "dynamic-multi-sheet"
+      ? await parseMultiSheetTieredIdentifierList({
+          recognition: whitelistRecognition,
+          role: "whitelist",
+        })
+      : await parseTieredIdentifierList({
+          recognition: whitelistRecognition,
+          role: "whitelist",
+          ...input.whitelistSelection,
+        });
   const blacklist = blacklistRecognition
-    ? await parseTieredIdentifierList({
-        recognition: blacklistRecognition,
-        role: "blacklist",
-        ...input.blacklistSelection,
-      })
+    ? input.listMode === "dynamic-multi-sheet"
+      ? await parseMultiSheetTieredIdentifierList({
+          recognition: blacklistRecognition,
+          role: "blacklist",
+        })
+      : await parseTieredIdentifierList({
+          recognition: blacklistRecognition,
+          role: "blacklist",
+          ...input.blacklistSelection,
+        })
     : undefined;
   const blacklistStatus = blacklist
     ? blacklist.issues.length

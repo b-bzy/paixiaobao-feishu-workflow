@@ -39,15 +39,25 @@ describe("dynamic SKU list workbook", () => {
     });
   });
 
-  it("rejects duplicate SKU values across Sheets", async () => {
+  it("keeps the same SKU independently when it belongs to different Sheets", async () => {
+    const result = await generateDynamicSkuListWorkbook({
+      tiers: { "100减1": ["00123"], "2000减20": ["00123"] },
+      activityName: "跨券档重复测试",
+      revision: 1,
+      role: "whitelist",
+    });
+    expect(result.rowsBySheet).toEqual({ "100减1": 1, "2000减20": 1 });
+  });
+
+  it("rejects duplicate SKU values inside one Sheet", async () => {
     await expect(
       generateDynamicSkuListWorkbook({
-        tiers: { "100减1": ["00123"], "2000减20": ["00123"] },
-        activityName: "重复测试",
+        tiers: { "100减1": ["00123", "00123"] },
+        activityName: "同券档重复测试",
         revision: 1,
         role: "whitelist",
       }),
-    ).rejects.toThrow("SKU 不能同时出现在多个 Sheet");
+    ).rejects.toThrow("100减1 内存在重复 SKU");
   });
 
   it("rejects invalid and duplicate Sheet names", async () => {

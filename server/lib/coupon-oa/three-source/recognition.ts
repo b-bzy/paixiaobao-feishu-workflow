@@ -148,10 +148,14 @@ function roleCandidates(input: {
   const worksheetText = input.worksheetTexts.map(normalize).join(" ");
   const fileName = normalize(input.sourceFileName);
   const roleSignal = (marker: "白名单" | "黑名单") => {
-    if (worksheetText.includes(marker)) {
+    const englishMarker = marker === "白名单" ? "whitelist" : "blacklist";
+    if (
+      worksheetText.includes(marker) ||
+      worksheetText.includes(englishMarker)
+    ) {
       return { score: 80, reason: `识别到名单标记“${marker}”和有效 ID 列` };
     }
-    if (fileName.includes(marker)) {
+    if (fileName.includes(marker) || fileName.includes(englishMarker)) {
       return { score: 30, reason: `文件名包含“${marker}”，且识别到有效 ID 列` };
     }
     return undefined;
@@ -321,14 +325,23 @@ function selectFieldCandidate(
     }
     return candidate;
   }
-  if (candidates.length !== 1) {
+  const canonicalCandidates = candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex(
+        (current) =>
+          current.sheetName === candidate.sheetName &&
+          current.column === candidate.column &&
+          normalize(current.header) === normalize(candidate.header),
+      ) === index,
+  );
+  if (canonicalCandidates.length !== 1) {
     throw new Error(
-      candidates.length
+      canonicalCandidates.length
         ? `字段 ${key} 存在多个候选，需要业务员确认`
         : `配券表缺少字段：${key}`,
     );
   }
-  return candidates[0];
+  return canonicalCandidates[0];
 }
 
 function sourceCell(
@@ -974,8 +987,12 @@ export async function extractRegularFullReductionInput(
     activityBackground: value("activityBackground"),
     businessMode: value("businessMode"),
     applicantName: value("applicantName"),
-    activityStartAt: value("activityStartAt"),
-    activityEndAt: value("activityEndAt"),
+    activityStartAt:
+      canonicalCouponBusinessDate(value("activityStartAt")) ??
+      value("activityStartAt"),
+    activityEndAt:
+      canonicalCouponBusinessDate(value("activityEndAt")) ??
+      value("activityEndAt"),
     channels: normalizeChannels(value("channels")),
     thresholdYuan: number(value("thresholdYuan")),
     discountAmountYuan: number(value("discountAmountYuan")),
@@ -1003,7 +1020,7 @@ export async function extractRegularFullReductionInput(
   });
   if (!parsed.success) {
     throw new Error(
-      `配券表字段不符合常规满减券规则：${parsed.error.issues.map((issue) => issue.message).join("；")}`,
+      `配券表字段不符合常规满减券规则：${parsed.error.issues.map((issue) => `${issue.path.join(".")} ${issue.message}`).join("；")}`,
     );
   }
   return {

@@ -20,6 +20,13 @@ import type {
 import { threeSourceRuleVersion } from "./types";
 
 const MULTIPLE_IDENTIFIER_SEPARATOR = /[\s,，、;；\n]/;
+const EMPTY_IDENTIFIER_MARKERS = new Set(["n/a", "na", "无", "空", "-"]);
+
+function isEmptyIdentifierMarker(value: string): boolean {
+  return EMPTY_IDENTIFIER_MARKERS.has(
+    value.normalize("NFKC").trim().toLowerCase(),
+  );
+}
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -217,11 +224,7 @@ export async function parseTieredIdentifierList(
     const tierRaw = tierCell ? cellText(tierCell) : (input.defaultTier ?? "");
     const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
 
-    if (!idRaw && !tierRaw) continue;
-    if (!idRaw) {
-      issues.push(`${location} 为空`);
-      continue;
-    }
+    if (!idRaw || isEmptyIdentifierMarker(idRaw)) continue;
     if (isFormula(idCell)) {
       issues.push(`${location} 不能使用公式作为 SKU`);
       continue;
@@ -252,7 +255,6 @@ export async function parseTieredIdentifierList(
       continue;
     }
     if (seen.has(normalizedId)) {
-      issues.push(`${location} 与前序 SKU 重复：${normalizedId}`);
       continue;
     }
     seen.add(normalizedId);
@@ -297,7 +299,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     input.recognition.sourceHash || sourceHash(input.recognition.source);
   const entries: ParsedTieredIdentifierList["entries"] = [];
   const issues: string[] = [];
-  const seenIds = new Set<string>();
+  const seenIdsBySheet = new Map<string, Set<string>>();
   const seenTiers = new Set<string>();
   const sheetOrder: string[] = [];
   const identifierCandidates = input.recognition.listCandidates.filter(
@@ -347,12 +349,14 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       }
       const resolvedTier = worksheet.name;
       if (!sheetOrder.includes(resolvedTier)) sheetOrder.push(resolvedTier);
+      const seenIds = seenIdsBySheet.get(worksheet.name) ?? new Set<string>();
+      seenIdsBySheet.set(worksheet.name, seenIds);
       for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
         const cell = worksheet.getRow(rowNumber).getCell(headerColumn);
         const identifier = identifierValue(cell);
         const raw = identifier.rawValue;
         const normalized = identifier.normalizedValue;
-        if (!raw) continue;
+        if (!raw || isEmptyIdentifierMarker(raw)) continue;
         const location = `${worksheet.name}!${cell.address}`;
         if (isFormula(cell) || /^[=+@-]/.test(raw)) {
           issues.push(`${location} 不能使用公式作为 SKU`);
@@ -367,7 +371,6 @@ export async function parseMultiSheetTieredIdentifierList(input: {
           continue;
         }
         if (seenIds.has(normalized)) {
-          issues.push(`${location} 与前序 SKU 重复：${normalized}`);
           continue;
         }
         seenIds.add(normalized);
@@ -400,6 +403,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   }
 
   for (const worksheet of workbook.worksheets) {
+    const seenIds = new Set<string>();
     const sheetCandidates = identifierCandidates.filter(
       (candidate) => candidate.sheetName === worksheet.name,
     );
@@ -439,7 +443,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       const identifierValueResult = identifierValue(cell);
       const raw = identifierValueResult.rawValue;
       const normalized = identifierValueResult.normalizedValue;
-      if (!raw) continue;
+      if (!raw || isEmptyIdentifierMarker(raw)) continue;
       const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
       if (isFormula(cell) || /^[=+@-]/.test(raw)) {
         issues.push(`${location} 不能使用公式作为 SKU`);
@@ -456,7 +460,6 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         continue;
       }
       if (seenIds.has(normalized)) {
-        issues.push(`${location} 与前序 SKU 重复：${normalized}`);
         continue;
       }
       seenIds.add(normalized);
@@ -545,7 +548,7 @@ export async function parseSingleCouponIdentifierList(
     const raw = parsedIdentifier.rawValue;
     const normalized = parsedIdentifier.normalizedValue;
     const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
-    if (!raw) continue;
+    if (!raw || isEmptyIdentifierMarker(raw)) continue;
     if (isFormula(cell)) {
       issues.push(`${location} 不能使用公式作为 SKU`);
       continue;

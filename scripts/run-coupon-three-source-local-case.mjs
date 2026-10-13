@@ -45,6 +45,100 @@ function argument(name) {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+function canonicalBusinessDate(value, label) {
+  const candidate = String(value ?? "").normalize("NFKC").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+    throw new Error(`${label}必须使用 YYYY-MM-DD 格式`);
+  }
+  const [year, month, day] = candidate.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`${label}不是有效日期`);
+  }
+  return candidate;
+}
+
+async function loadSecondRoundSimulation(input) {
+  const inputPath = resolve(input.path);
+  if (!pathInside(input.caseDirectory, inputPath)) {
+    throw new Error("--second-round-input 必须位于当前 case 目录内");
+  }
+  const parsed = JSON.parse(await readFile(inputPath, "utf8"));
+  if (parsed?.simulation !== true) {
+    throw new Error("第二轮本地输入必须显式设置 simulation=true");
+  }
+  const businessModeCandidate = String(parsed.businessMode ?? "")
+    .normalize("NFKC")
+    .trim();
+  const businessMode =
+    businessModeCandidate.toLowerCase() === "pop"
+      ? "pop"
+      : businessModeCandidate;
+  if (!["严选", "寄卖", "pop"].includes(businessMode)) {
+    throw new Error("业务模式必须是严选、寄卖或 POP");
+  }
+  const activityName = String(parsed.activityName ?? "").trim();
+  const activityBackground = String(parsed.activityBackground ?? "").trim();
+  if (!activityName || activityName.length > 120) {
+    throw new Error("活动名称必须为 1 至 120 个字符");
+  }
+  if (!activityBackground || activityBackground.length > 2_000) {
+    throw new Error("活动背景必须为 1 至 2000 个字符");
+  }
+  const activityPointPercent = Number(
+    String(parsed.activityPointPercent ?? "").replace(/%$/u, ""),
+  );
+  if (
+    !Number.isFinite(activityPointPercent) ||
+    activityPointPercent <= 0 ||
+    activityPointPercent > 100
+  ) {
+    throw new Error("活动点位必须是大于 0 且不超过 100 的百分数");
+  }
+  const activityStartAt = canonicalBusinessDate(
+    parsed.activityStartAt,
+    "活动开始日期",
+  );
+  const activityEndAt = canonicalBusinessDate(
+    parsed.activityEndAt,
+    "活动结束日期",
+  );
+  if (activityEndAt < activityStartAt) {
+    throw new Error("活动结束日期不能早于开始日期");
+  }
+  const overDeduction = String(parsed.overDeduction ?? "").trim();
+  if (!["是", "否"].includes(overDeduction)) {
+    throw new Error("是否超扣必须填写“是”或“否”");
+  }
+  const overDeductionReason = String(parsed.overDeductionReason ?? "").trim();
+  if (overDeduction === "是" && !overDeductionReason) {
+    throw new Error("选择超扣时必须填写超扣原因");
+  }
+  if (overDeductionReason.length > 4_000) {
+    throw new Error("超扣原因不能超过 4000 个字符");
+  }
+  const metadata = await fileMetadata(inputPath);
+  return {
+    path: relative(input.caseDirectory, inputPath),
+    sha256: metadata.sha256,
+    values: {
+      businessMode,
+      activityName,
+      activityBackground,
+      activityPointPercent,
+      activityStartAt,
+      activityEndAt,
+      overDeduction,
+      overDeductionReason: overDeduction === "是" ? overDeductionReason : "",
+      channelsConfirmed: parsed.channelsConfirmed === true,
+    },
+  };
+}
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -841,6 +935,7 @@ function draftMarkdown(input) {
     aiMappingReview,
     activityCopy,
     secondRoundDialogue,
+    secondRoundSimulation,
   } = input;
   const rows = coupon.records
     .map(
@@ -856,29 +951,40 @@ function draftMarkdown(input) {
     .join("\n");
   const generatedNarrative = activityCopy?.candidate?.generatedCandidate;
   const selectedNarrative = activityCopy?.selection;
-  const activityNameValue = selectedNarrative?.activityName
+  const simulatedValues = secondRoundSimulation?.values;
+  const activityNameValue = simulatedValues?.activityName
+    ? simulatedValues.activityName
+    : selectedNarrative?.activityName
     ? selectedNarrative.activityName
     : generatedNarrative?.activityName
       ? `候选：${generatedNarrative.activityName}`
       : coupon.activityNames.join("、") || "待补充";
-  const activityNameStatus = selectedNarrative
+  const activityNameStatus = simulatedValues?.activityName
+    ? "第二轮本地模拟输入已通过确定性校验"
+    : selectedNarrative
     ? `已通过候选 hash 本地确认：${selectedNarrative.candidateHash}`
     : generatedNarrative
       ? `生成候选状态：${generatedNarrative.status}；配券表 K 列原值：${coupon.activityNames.join("、") || "无"}`
       : "配券表 K 列候选；需业务确认";
-  const activityBackgroundValue = selectedNarrative?.activityBackground
+  const activityBackgroundValue = simulatedValues?.activityBackground
+    ? simulatedValues.activityBackground
+    : selectedNarrative?.activityBackground
     ? selectedNarrative.activityBackground
     : generatedNarrative?.activityBackground
       ? `候选：${generatedNarrative.activityBackground}`
       : "待补充";
-  const activityBackgroundStatus = selectedNarrative
+  const activityBackgroundStatus = simulatedValues?.activityBackground
+    ? "第二轮本地模拟输入已通过确定性校验；仍不可提交 OA"
+    : selectedNarrative
     ? "已通过候选 hash 本地确认；仍不可提交 OA"
     : generatedNarrative
       ? generatedNarrative.blockers.length
         ? `已写入待审核草稿；以下差异需业务审核：${generatedNarrative.blockers.join("；")}`
         : "已生成待确认候选；需传入 --confirm-activity-copy <candidateHash> 才能选择"
       : "源表未提供，阻断正式提交";
-  const activityCopyIssues = selectedNarrative
+  const activityCopyIssues = simulatedValues?.activityBackground
+    ? []
+    : selectedNarrative
     ? []
     : generatedNarrative?.blockers?.length
       ? generatedNarrative.blockers.map((blocker) => `活动文案候选：${blocker}`)
@@ -887,17 +993,30 @@ function draftMarkdown(input) {
         : ["活动背景未提供"];
   const noticeMarkdown = [
     ...(generatedNarrative?.notices ?? []).map((notice) => `- ${notice.message}`),
-    "- 是否超扣点当前默认“否”，将在最终统一确认时一并确认；如改为“是”，必须填写原因。",
+    ...(simulatedValues
+      ? [
+          `- 第二轮字段来自本地模拟输入 \`${secondRoundSimulation.path}\`，不代表真实业务确认。`,
+        ]
+      : [
+          "- 是否超扣点当前默认“否”，将在最终统一确认时一并确认；如改为“是”，必须填写原因。",
+        ]),
     "- 本期按配券表与白名单已一一映射的四个券档生成；未配置其他券档不构成模板差异。",
   ].join("\n");
-  const blockerMarkdown = [
-    "业务模式、带年份的活动日期尚未提供。",
-    ...activityCopyIssues,
-    "活动点位不能从同时存在的 1% 与 2% 券档中自动选择。",
-    "渠道文案映射和最终申请人仍需业务/流程确认。",
-  ]
+  const blockerItems = simulatedValues
+    ? simulatedValues.channelsConfirmed
+      ? []
+      : ["配置渠道映射尚未由业务确认。"]
+    : [
+        "业务模式、带年份的活动日期尚未提供。",
+        ...activityCopyIssues,
+        "活动点位不能从同时存在的 1% 与 2% 券档中自动选择。",
+        "渠道文案映射和最终申请人仍需业务/流程确认。",
+      ];
+  const blockerMarkdown = blockerItems.length
+    ? blockerItems
     .map((issue, index) => `${index + 1}. ${issue}`)
-    .join("\n");
+        .join("\n")
+    : "无第二轮待补充项。申请人和部门仍只会在飞书最终确认时按当前身份解析。";
   return `# 优惠券 OA 填单底稿（本地练习）\n\n` +
     `> **状态：${runMode}**  \n` +
     `> 本文件只在本机生成；未调用飞书、未上传文件、未创建原生 OA，不能作为正式提交材料。\n\n` +
@@ -917,17 +1036,17 @@ function draftMarkdown(input) {
     `| 申请类型 | 优惠券申请 | 固定值 |\n` +
     `| 部门 | 最终确认时自动带出 | 最终确认人的飞书主部门；无法唯一确定时阻断并要求确认 |\n` +
     `| 申请人 | 最终确认时自动带出 | 最终确认人的飞书身份；配券表人名不能作为 OA 联系人 |\n` +
-    `| 业务模式 | 待补充 | 源表未提供，阻断正式提交 |\n` +
+    `| 业务模式 | ${markdown(simulatedValues?.businessMode ?? "待补充")} | ${simulatedValues ? "第二轮本地模拟输入已校验" : "源表未提供，阻断正式提交"} |\n` +
     `| 活动名称 | ${markdown(activityNameValue)} | ${markdown(activityNameStatus)} |\n` +
     `| 活动背景 | ${markdown(activityBackgroundValue)} | ${markdown(activityBackgroundStatus)} |\n` +
-    `| 活动点位(%) | 待补充 | 四券档含 1% 与 2%，不可自动合并为单值 |\n` +
+    `| 活动点位(%) | ${simulatedValues ? simulatedValues.activityPointPercent : "待补充"} | ${simulatedValues ? "第二轮本地模拟输入已校验" : "四券档含 1% 与 2%，不可自动合并为单值"} |\n` +
     `| 平台承担比例(%) | ${coupon.platformShares.map((value) => value * 100).join("、")}% | 配券表 T 列，八条记录一致 |\n` +
-    `| 是否超扣点 / 原因 | 否（默认） | 工作流默认值；将在最终统一确认时一并确认，选择“是”时原因必填 |\n` +
+    `| 是否超扣点 / 原因 | ${simulatedValues ? `${simulatedValues.overDeduction}${simulatedValues.overDeductionReason ? `：${simulatedValues.overDeductionReason}` : ""}` : "否（默认）"} | ${simulatedValues ? "第二轮本地模拟输入已校验" : "工作流默认值；将在最终统一确认时一并确认，选择“是”时原因必填"} |\n` +
     `| 预估费用 | ${coupon.aggregate.estimatedCostYuan} 元 | 按四个券档单次汇总；使用源表公式 |\n` +
     `| 预估 GMV | ${coupon.aggregate.estimatedGmvYuan} 元 | 按四个券档单次汇总；使用源表公式 |\n` +
     `| ROI | ${coupon.aggregate.estimatedRoi} | 同一汇总口径重新计算 |\n` +
     `| 配置渠道 | ${coupon.channelLabels.map((item) => `${item.source} → ${item.oa}`).join("；")} | 本地映射候选，待业务确认 |\n` +
-    `| 活动开始 / 结束日期 | 待补充 | 配券表仅有无年份的可领/可用时间文本；请参照配券节奏表人工确认 |\n` +
+    `| 活动开始 / 结束日期 | ${simulatedValues ? `${simulatedValues.activityStartAt} 至 ${simulatedValues.activityEndAt}` : "待补充"} | ${simulatedValues ? "第二轮本地模拟输入已校验" : "配券表仅有无年份的可领/可用时间文本；请参照配券节奏表人工确认"} |\n` +
     `| 活动 ID / 批次 ID / putKey / PC/M 链接 | 保持空白 | 按已确认规则不追问、不生成 |\n\n` +
     `## 配券表映射明细\n\n` +
     `| 源行 | 券名称 | 源渠道 | 门槛 | 面额 | 总申请数量 | 预计费用 | 预计 GMV | ROI |\n| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n${rows}\n\n` +
@@ -955,6 +1074,7 @@ async function main() {
   const requestedAiMappingRun = argument("--ai-mapping-run");
   const requestedActivityCopyContext = argument("--activity-copy-context");
   const requestedConfirmActivityCopy = argument("--confirm-activity-copy");
+  const requestedSecondRoundInput = argument("--second-round-input");
   if (requestedOutputSuffix && !/^[a-zA-Z0-9_-]+$/.test(requestedOutputSuffix)) {
     throw new Error("--output-suffix 只能包含字母、数字、下划线和连字符");
   }
@@ -994,6 +1114,12 @@ async function main() {
         path: requestedAiMappingRun,
         caseDirectory,
         sources: sourcesBefore,
+      })
+    : undefined;
+  const secondRoundSimulation = requestedSecondRoundInput
+    ? await loadSecondRoundSimulation({
+        path: requestedSecondRoundInput,
+        caseDirectory,
       })
     : undefined;
   const baseRunName = `r001-${hashPrefix(sourcesBefore.coupon.sha256)}-${hashPrefix(sourcesBefore.whitelist.sha256)}`;
@@ -1057,10 +1183,20 @@ async function main() {
   ) {
     throw new Error("活动文案 AI 审查与当前本地事实 hash 不匹配");
   }
+  const couponForOutput = secondRoundSimulation
+    ? {
+        ...coupon,
+        activityNames: [secondRoundSimulation.values.activityName],
+        records: coupon.records.map((record) => ({
+          ...record,
+          activityName: secondRoundSimulation.values.activityName,
+        })),
+      }
+    : coupon;
   const couponArtifactPath = join(artifactsDirectory, outputCouponFileName);
   const generatedCouponArtifact = await writeMappedCouponWorkbook(
     couponArtifactPath,
-    coupon,
+    couponForOutput,
   );
   const couponArtifact = {
     path: couponArtifactPath,
@@ -1092,7 +1228,10 @@ async function main() {
   const relativeOutput = relative(caseDirectory, outputDirectory) || ".";
   const generatedNarrative = activityCopy.candidate?.generatedCandidate;
   const selectedNarrative = activityCopy.selection;
-  const activityCopyBlockers = selectedNarrative
+  const simulatedValues = secondRoundSimulation?.values;
+  const activityCopyBlockers = simulatedValues?.activityBackground
+    ? []
+    : selectedNarrative
     ? []
     : generatedNarrative?.blockers?.length
       ? generatedNarrative.blockers.map((blocker) => `活动文案候选：${blocker}`)
@@ -1117,6 +1256,7 @@ async function main() {
       reason: "本次本地练习未绑定 DeepSeek 映射审查结果",
     },
     activityCopy,
+    secondRoundSimulation,
     userConfirmedDecisions: {
       noBlacklistConfirmed: true,
       identifierColumn: "SKUID",
@@ -1127,6 +1267,12 @@ async function main() {
       costFormula: "source_total_quantity_times_face_value_times_claim_rate_times_use_rate_times_platform_share",
       calculationImageMode: "filled_standard_coupon_workbook_render",
       activityNarrativeCandidateHash: selectedNarrative?.candidateHash ?? null,
+      ...(secondRoundSimulation
+        ? {
+            secondRoundSimulationSha256: secondRoundSimulation.sha256,
+            channelsConfirmed: simulatedValues.channelsConfirmed,
+          }
+        : {}),
     },
     oaValues: {
       applicationType: "优惠券申请",
@@ -1138,12 +1284,21 @@ async function main() {
         source: "feishuIdentity",
         status: "resolved_on_final_confirmation",
       },
-      businessMode: { status: "unresolved" },
+      businessMode: simulatedValues
+        ? {
+            value: simulatedValues.businessMode,
+            source: "localSecondRoundSimulation",
+            status: "confirmed_for_local_practice",
+          }
+        : { status: "unresolved" },
       activityName: {
         sourceCandidate: coupon.activityNames,
         generatedCandidate: generatedNarrative?.activityName ?? null,
-        selectedValue: selectedNarrative?.activityName ?? null,
-        status: selectedNarrative
+        selectedValue:
+          simulatedValues?.activityName ?? selectedNarrative?.activityName ?? null,
+        status: simulatedValues?.activityName
+          ? "confirmed_for_local_practice"
+          : selectedNarrative
           ? "confirmed_for_local_practice"
           : generatedNarrative?.activityName
             ? generatedNarrative.status
@@ -1151,31 +1306,61 @@ async function main() {
       },
       activityBackground: {
         generatedCandidate: generatedNarrative?.activityBackground ?? null,
-        selectedValue: selectedNarrative?.activityBackground ?? null,
-        blockers: generatedNarrative?.blockers ?? activityCopyBlockers,
-        status: selectedNarrative
+        selectedValue:
+          simulatedValues?.activityBackground ??
+          selectedNarrative?.activityBackground ??
+          null,
+        blockers: simulatedValues
+          ? []
+          : (generatedNarrative?.blockers ?? activityCopyBlockers),
+        status: simulatedValues?.activityBackground
+          ? "confirmed_for_local_practice"
+          : selectedNarrative
           ? "confirmed_for_local_practice"
           : generatedNarrative?.activityBackground
             ? generatedNarrative.status
             : "unresolved",
       },
       activityPointPercent: {
-        status: "unresolved",
-        reason: "source contains multiple coupon discount ratios",
+        ...(simulatedValues
+          ? {
+              value: simulatedValues.activityPointPercent,
+              source: "localSecondRoundSimulation",
+              status: "confirmed_for_local_practice",
+            }
+          : {
+              status: "unresolved",
+              reason: "source contains multiple coupon discount ratios",
+            }),
       },
       platformBearingPercent: coupon.platformShares.map((value) => value * 100),
       overDeduction: {
-        value: "否",
-        source: "workflowDefault",
-        status: "defaulted_pending_unified_confirmation",
-        confirmationMode: "unified_final_confirmation",
+        value: simulatedValues?.overDeduction ?? "否",
+        source: simulatedValues
+          ? "localSecondRoundSimulation"
+          : "workflowDefault",
+        status: simulatedValues
+          ? "confirmed_for_local_practice"
+          : "defaulted_pending_unified_confirmation",
+        ...(simulatedValues?.overDeductionReason
+          ? { reason: simulatedValues.overDeductionReason }
+          : {}),
       },
       estimatedCostYuan: coupon.aggregate.estimatedCostYuan,
       estimatedGmvYuan: coupon.aggregate.estimatedGmvYuan,
       estimatedRoi: coupon.aggregate.estimatedRoi,
       channels: coupon.channelLabels,
       activityDates: {
-        status: "unresolved",
+        status: simulatedValues
+          ? "confirmed_for_local_practice"
+          : "unresolved",
+        ...(simulatedValues
+          ? {
+              startAt: simulatedValues.activityStartAt,
+              endAt: simulatedValues.activityEndAt,
+              source: "localSecondRoundSimulation",
+            }
+          : {}),
         sourceClaimWindows: uniqueBy(coupon.records, (record) => record.claimWindow).map(
           (record) => record.claimWindow,
         ),
@@ -1185,7 +1370,7 @@ async function main() {
       },
       intentionallyBlank: ["活动ID", "批次Id", "优惠券活动配置KEY(putKey)", "PC端领券链接", "M端领券链接"],
     },
-    couponRows: coupon.records,
+    couponRows: couponForOutput.records,
     whitelist: {
       mode: "four_tier_local_practice_template",
       templateSubsetStatus: "verified_configured_subset",
@@ -1232,11 +1417,16 @@ async function main() {
       },
     },
     blockers: [
-      "业务模式未提供",
-      ...activityCopyBlockers,
-      "带年份的活动日期未确认",
-      "活动点位无法从混合券档自动确定",
-      "申请人和部门仅能在最终确认时按飞书身份解析；部门无法唯一确定时阻断",
+      ...(simulatedValues
+        ? simulatedValues.channelsConfirmed
+          ? []
+          : ["配置渠道映射尚未由业务确认"]
+        : [
+            "业务模式未提供",
+            ...activityCopyBlockers,
+            "带年份的活动日期未确认",
+            "活动点位无法从混合券档自动确定",
+          ]),
     ],
   };
   const secondRoundDialogue = buildSecondRoundDialogue({
@@ -1246,7 +1436,7 @@ async function main() {
   practiceDraft.secondRoundDialogue = secondRoundDialogue;
   const markdownDraft = draftMarkdown({
     caseRelativeOutput: relativeOutput,
-    coupon,
+    coupon: couponForOutput,
     whitelist,
     couponArtifact,
     whitelistArtifact,
@@ -1255,8 +1445,15 @@ async function main() {
     aiMappingReview,
     activityCopy,
     secondRoundDialogue,
+    secondRoundSimulation,
   });
   await writePrivateJson(join(outputDirectory, "activity-copy-run.json"), activityCopy);
+  if (secondRoundSimulation) {
+    await writePrivateJson(
+      join(outputDirectory, "second-round-simulation.json"),
+      secondRoundSimulation,
+    );
+  }
   await writePrivateJson(join(outputDirectory, "second-round-dialogue.json"), secondRoundDialogue);
   await writePrivate(
     join(outputDirectory, "second-round-dialogue.md"),

@@ -194,10 +194,17 @@ describe("three-source pilot Base store", () => {
     vi.stubGlobal("fetch", fake.fetchMock);
     const draft = await seedDraft();
     const createdFields = callFields(fake.fetchMock.mock.calls[0]);
-    // Realistic read-after-write anomaly: the PUT echoes the pre-write record.
+    // Realistic read-after-write anomaly: the PUT echoes the new state but a
+    // fresh GET still shows the pre-write record.
     fake.fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
       const method = (init.method ?? "GET").toUpperCase();
-      if (method === "GET") {
+      const bodyFields = init.body
+        ? (JSON.parse(String(init.body)).fields as BaseFields)
+        : undefined;
+      if (method === "GET" || method === "PUT") {
+        if (method === "PUT" && bodyFields) {
+          return okRecord("rec-three-source", bodyFields);
+        }
         return okRecord("rec-three-source", createdFields);
       }
       return okRecord("rec-three-source", createdFields);
@@ -215,7 +222,28 @@ describe("three-source pilot Base store", () => {
         },
         draft.task.revision,
       ),
-    ).rejects.toThrow("write-back verification failed");
+    ).rejects.toThrow("persistence verification failed");
+  });
+
+  it("refuses to write a state that exceeds the Base storage budget", async () => {
+    const fake = baseFake();
+    vi.stubGlobal("fetch", fake.fetchMock);
+    const draft = await seedDraft();
+    const huge = {
+      entries: Array.from(
+        { length: 4_000 },
+        (_, index) => `SKU-diag-${index}-商品占位名称文本`,
+      ),
+    };
+
+    await expect(
+      updateCouponThreeSourcePilotDraft(
+        draft,
+        { whitelist: huge } as never,
+        draft.task.revision,
+      ),
+    ).rejects.toThrow("超出 Base 存储预算");
+    expect(fake.putCount()).toBe(0);
   });
 
   it("drops workbook bytes when it stores a recognition result", () => {

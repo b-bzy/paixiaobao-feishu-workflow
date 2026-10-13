@@ -376,6 +376,16 @@ describe("CouponThreeSourcePilotService", () => {
         updateDraft.mock.calls.findIndex((call) => call === markerCall)
       ];
     expect(markerOrder).toBeLessThan(uploadArtifact.mock.invocationCallOrder[0]);
+    // The final persisted state must stay small enough for the Base cell
+    // limit: heavy parsed datasets are cleared, only frozen artifacts and
+    // the OA prefill snapshot survive.
+    const finalCall = updateDraft.mock.calls[updateDraft.mock.calls.length - 1];
+    const finalUpdates = finalCall?.[1] as Record<string, unknown>;
+    expect(finalUpdates.whitelist).toBeUndefined();
+    expect(finalUpdates.couponSet).toBeUndefined();
+    expect(finalUpdates.package).toBeUndefined();
+    expect(finalUpdates.oaPrefill).toBeDefined();
+    expect(generated.artifacts.length).toBeGreaterThan(0);
     expect(
       generated.artifacts.filter((artifact) => artifact.role === "calcImage"),
     ).toHaveLength(1);
@@ -486,7 +496,10 @@ describe("CouponThreeSourcePilotService", () => {
     });
 
     expect(current.task.status).toBe("AwaitingFinalConfirmation");
-    expect(current.couponSet?.tiers).toHaveLength(2);
+    // The parsed coupon set is intentionally not persisted after generation
+    // (Base cell budget); the tier count is baked into the frozen artifacts.
+    expect(current.couponSet).toBeUndefined();
+    expect(current.oaPrefill?.values.businessMode).toBeDefined();
     expect(current.artifacts.map((artifact) => artifact.role)).toEqual([
       "couponTable",
       "productWhitelist",

@@ -905,15 +905,20 @@ export class CouponThreeSourcePilotService {
       screenshots,
       activityPointPercent,
     });
+    // The fully parsed coupon/whitelist/blacklist datasets are only needed
+    // in memory for artifact generation and are baked into the frozen
+    // artifacts plus the OA prefill snapshot. Persisting them would push the
+    // Base State JSON past its cell limit and be silently dropped, so they
+    // are cleared from the stored draft.
     return this.dependencies.updateDraft(
       draftForGeneration,
       {
         task,
-        coupon,
-        couponSet,
-        whitelist,
-        blacklist,
-        package: packageValue,
+        coupon: undefined,
+        couponSet: undefined,
+        whitelist: undefined,
+        blacklist: undefined,
+        package: undefined,
         artifacts: frozenArtifacts,
         oaPrefill,
         validationIssues: [],

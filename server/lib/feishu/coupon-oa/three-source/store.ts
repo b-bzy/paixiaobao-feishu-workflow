@@ -322,6 +322,11 @@ export async function listActiveCouponThreeSourcePilotDrafts(
     );
 }
 
+// Feishu Base silently drops text-field writes beyond its cell limit (the
+// API still echoes success), so state must stay well below it and every
+// write must be verified against a fresh read of the stored record.
+const maxStateJsonChars = 90_000;
+
 export async function updateCouponThreeSourcePilotDraft(
   draft: CouponThreeSourcePilotDraft,
   updates: Partial<
@@ -370,6 +375,12 @@ export async function updateCouponThreeSourcePilotDraft(
     updatedAt: _updatedAt,
     ...value
   } = next;
+  const stateJson = JSON.stringify(state(value));
+  if (stateJson.length > maxStateJsonChars) {
+    throw new Error(
+      `三源提报状态超出 Base 存储预算（${stateJson.length} > ${maxStateJsonChars} 字符），已拒绝写入以避免静默丢失`,
+    );
+  }
   const result = await request(
     `/bitable/v1/apps/${appToken}/tables/${tableId}/records/${draft.recordId}`,
     { method: "PUT", body: JSON.stringify({ fields: fields(value) }) },
@@ -379,13 +390,18 @@ export async function updateCouponThreeSourcePilotDraft(
       "Feishu Base did not return an updated three-source pilot record",
     );
   }
-  const persisted = parseRecord(result.data.record);
-  if (persisted.task.revision !== next.task.revision) {
+  // The PUT response only echoes the submitted fields; re-read the record to
+  // verify Base actually persisted the revision and status.
+  const verified = await getCouponThreeSourcePilotDraft(draft.recordId);
+  if (
+    verified.task.revision !== next.task.revision ||
+    verified.task.status !== next.task.status
+  ) {
     throw new Error(
-      "Three-source pilot write-back verification failed; reopen the latest card",
+      "Three-source pilot persistence verification failed; reopen the latest card",
     );
   }
-  return persisted;
+  return verified;
 }
 
 export function toStoredWorkbookRecognition(input: {

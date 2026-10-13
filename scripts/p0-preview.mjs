@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import {
   clearP0PreviewState,
   loadP0PreviewConfig,
@@ -9,6 +10,10 @@ import {
   writeP0PreviewState,
 } from "./lib/p0-preview-config.mjs";
 import { deployP0Preview, verifyP0Preview } from "./lib/p0-preview-deploy.mjs";
+
+if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY) {
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+}
 
 const expectedBranch = "p0-three-source-direct-http";
 const statePath = ".local/p0-preview-state.json";

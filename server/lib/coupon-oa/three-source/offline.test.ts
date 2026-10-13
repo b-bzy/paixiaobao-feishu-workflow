@@ -3,11 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { verifyMultiTierSkuListWorkbook } from "../../excel-template-engine";
-import {
-  multiTierSkuBlacklistManifest,
-  multiTierSkuWhitelistManifest,
-} from "../../excel-template-engine/template-manifests";
+import { verifyDynamicSkuListWorkbook } from "../../excel-template-engine";
 import {
   bindCouponApprovalSchema,
   type CouponApprovalDefinition,
@@ -301,7 +297,7 @@ describe("three-source coupon OA offline workflow", () => {
     expect(result.confirmation.overlap.ids).toEqual(["00999"]);
     expect(result.package.overlap.decision).toBe("whitelist_wins");
     expect(result.package.whitelistByTier.满999减60).toEqual(["00123"]);
-    expect(result.package.blacklistByTier?.满3999减240).toEqual([]);
+    expect(result.package.blacklistByTier?.满3999减240).toBeUndefined();
     expect(result.package.blacklistByTier?.满4999减300).toEqual(["00888"]);
     expect(result.package.computed.estimatedCostYuan).toBe(9000);
     expect(result.package.computed.estimatedRoi).toBeCloseTo(120000 / 9000);
@@ -356,14 +352,12 @@ describe("three-source coupon OA offline workflow", () => {
     ) {
       throw new Error("测试未生成预期的白名单或黑名单附件");
     }
-    await verifyMultiTierSkuListWorkbook({
+    await verifyDynamicSkuListWorkbook({
       bytes: whitelistArtifact.bytes,
-      manifest: multiTierSkuWhitelistManifest,
       expectedTiers: result.package.whitelistByTier,
     });
-    await verifyMultiTierSkuListWorkbook({
+    await verifyDynamicSkuListWorkbook({
       bytes: blacklistArtifact.bytes,
-      manifest: multiTierSkuBlacklistManifest,
       expectedTiers: result.package.blacklistByTier,
     });
   });
@@ -503,7 +497,7 @@ describe("three-source coupon OA offline workflow", () => {
     const result = await runOfflineThreeSourceWorkflow(
       await happyPathInput("blacklist_wins"),
     );
-    expect(result.package.whitelistByTier.满2999减120).toEqual([]);
+    expect(result.package.whitelistByTier.满2999减120).toBeUndefined();
     expect(result.package.blacklistByTier?.满3999减240).toEqual(["00999"]);
     expect(result.package.overlap).toMatchObject({
       ids: ["00999"],
@@ -528,7 +522,7 @@ describe("three-source coupon OA offline workflow", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates stale revisions, changed mappings, and changed list-template fingerprints", async () => {
+  it("invalidates stale revisions and changed mappings without depending on a fixed list template", async () => {
     const result = await runOfflineThreeSourceWorkflow(await happyPathInput());
     expect(() =>
       assertExpectedRevision(result.confirmation, "offline-owner-001", 2),
@@ -549,15 +543,17 @@ describe("three-source coupon OA offline workflow", () => {
       currentTemplates.whitelistTemplateBytes,
     );
     changedWhitelistTemplate[0] ^= 1;
-    await expect(
-      generateOfflineArtifacts({
-        package: result.package,
-        templates: {
-          ...currentTemplates,
-          whitelistTemplateBytes: changedWhitelistTemplate,
-        },
-      }),
-    ).rejects.toThrow("fingerprint 不匹配");
+    const regenerated = await generateOfflineArtifacts({
+      package: result.package,
+      templates: {
+        ...currentTemplates,
+        whitelistTemplateBytes: changedWhitelistTemplate,
+      },
+    });
+    expect(
+      regenerated.find((artifact) => artifact.role === "productWhitelist")
+        ?.template.id,
+    ).toBe("coupon-dynamic-sku-whitelist-v1");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

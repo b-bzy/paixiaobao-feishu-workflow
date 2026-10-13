@@ -2,6 +2,7 @@ node_modules
 .nitro
 .output
 .vercel
+.local/
 .env
 .env*.local
 coverage

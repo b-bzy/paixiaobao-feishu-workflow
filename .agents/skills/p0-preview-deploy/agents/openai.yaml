@@ -1,0 +1,4 @@
+interface:
+  display_name: "P0 Preview 快速部署"
+  short_description: "部署并管理三源优惠券 P0 Preview 测试链路"
+  default_prompt: "部署并启动当前 P0 Preview 测试链路，完成 revision 回读和状态检查。"

@@ -49,6 +49,12 @@
 
 功能范围仍刻意受限于常规满减券和 SKU 名单，但本地代码现支持 `严选`、`寄卖`、`pop`。严选不冻结 `calcImage`；寄卖/POP 优先冻结 owner 确认的有序用户图片，没有用户图片时从最终标准配券工作簿显示值生成分页 PNG。图片和 Excel 都需在交接前从 Drive 回读并校验 bytes/hash。完整边界与运行步骤见[本机长连接 draft-only POC 运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
 
+三源商品白名单与可选黑名单按源工作簿的有效 Sheet 动态处理，不再要求固定
+五个券档 Sheet 名。每个生成 Sheet 保留源名称、相对顺序和 SKU 行顺序，但标准
+产物只包含一列文本格式 `sku`，不复制源表其他列、公式或关系。DeepSeek 可识别
+名单区域和券档候选，服务端仍负责坐标、SKU、安全和 revision 校验；源名单不会
+直接成为 OA 附件。
+
 ---
 
 ## 3. 系统全景结构

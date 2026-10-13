@@ -97,7 +97,26 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 
 ## 3. 启动顺序
 
-### 3.0 飞书测试前本地 Gate
+### 3.0 日常 Preview 快速迭代
+
+首次把本机凭据写入权限为 `0600`、Git 忽略的
+`.local/p0-preview.env` 后，日常迭代使用仓库命令，不再手工复制部署 URL、
+修改临时 relay 或编写 `curl` tick 循环：
+
+```bash
+pnpm p0:preview:check   # 只读检查
+pnpm p0:preview:deploy  # 仅部署并回读完整 revision
+pnpm p0:preview:up      # 部署后启动唯一 bridge 与 worker
+pnpm p0:preview:status  # 只读状态与 revision 回读
+pnpm p0:preview:down    # 只停止状态文件中验证为本次会话的进程
+```
+
+`deploy`/`up` 只允许 `p0-three-source-direct-http` 的干净、可复现工作区，
+并直接使用 `x-vercel-protection-bypass` 请求头访问受保护 Preview。
+命令成功只证明部署身份和本机进程状态，不代表飞书 E2E、Base/Drive 产物或
+OA 测试稿成功。详细操作边界由仓库 Skill `p0-preview-deploy` 约束。
+
+### 3.1 飞书测试前本地 Gate
 
 开始 bridge 或邀请 owner 在飞书测试前，必须同时满足：相关单元/集成测试通过；
 脱敏 Excel 的显式 DeepSeek 预检通过；`pnpm typecheck` 与 `pnpm build` 通过；

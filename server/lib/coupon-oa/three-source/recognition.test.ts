@@ -421,8 +421,8 @@ describe("multi-sheet identifier list", () => {
 
     expect(parsed.issues).toEqual([]);
     expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
-      ["满1999减120", "00123"],
-      ["满1999减120", "00999"],
+      ["业务导出页", "00123"],
+      ["业务导出页", "00999"],
     ]);
   });
 
@@ -455,7 +455,7 @@ describe("multi-sheet identifier list", () => {
     ]);
   });
 
-  it("keeps valid sibling Sheets when one Sheet is not registered", async () => {
+  it("accepts arbitrary sibling Sheet names without a global tier registry", async () => {
     const workbook = new ExcelJS.Workbook();
     for (const sheetName of ["满999减60", "业务临时档"]) {
       const sheet = workbook.addWorksheet(sheetName);
@@ -474,7 +474,11 @@ describe("multi-sheet identifier list", () => {
       role: "whitelist",
     });
 
-    expect(parsed.entries).toHaveLength(1);
-    expect(parsed.issues).toContain("业务临时档 无法唯一映射到已登记券档");
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.sheetOrder).toEqual(["满999减60", "业务临时档"]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["满999减60", "满999减60-sku"],
+      ["业务临时档", "业务临时档-sku"],
+    ]);
   });
 });

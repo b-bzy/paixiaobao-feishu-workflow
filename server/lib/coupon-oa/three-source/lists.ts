@@ -259,7 +259,8 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   const entries: ParsedTieredIdentifierList["entries"] = [];
   const issues: string[] = [];
   const seenIds = new Set<string>();
-  const seenTiers = new Set<MultiTierSkuSheetName>();
+  const seenTiers = new Set<string>();
+  const sheetOrder: string[] = [];
   const identifierCandidates = input.recognition.listCandidates.filter(
     (candidate) => candidate.kind === "identifier",
   );
@@ -305,16 +306,8 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         issues.push(`${worksheet.name} 的名单区域无法通过服务端校验`);
         continue;
       }
-      const resolvedTier =
-        (region.tierDisplayName
-          ? tierName(region.tierDisplayName)
-          : undefined) ??
-        tierName(worksheet.name) ??
-        (aiRegions.length === 1 ? multiTierSkuSheetNames[0] : undefined);
-      if (!resolvedTier) {
-        issues.push(`${worksheet.name} 无法唯一对应已登记券档`);
-        continue;
-      }
+      const resolvedTier = worksheet.name;
+      if (!sheetOrder.includes(resolvedTier)) sheetOrder.push(resolvedTier);
       for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
         const cell = worksheet.getRow(rowNumber).getCell(headerColumn);
         const raw = cellText(cell);
@@ -360,6 +353,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       sourceHash: sourceHashValue,
       dimension: "SKU",
       entries,
+      sheetOrder,
       issues,
     };
   }
@@ -370,20 +364,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     );
     if (!sheetCandidates.length) continue;
     const selected = input.selection?.sheets[worksheet.name];
-    const resolvedTier =
-      selected?.templateTier ??
-      tierName(worksheet.name) ??
-      (workbook.worksheets.filter((sheet) =>
-        identifierCandidates.some(
-          (candidate) => candidate.sheetName === sheet.name,
-        ),
-      ).length === 1
-        ? multiTierSkuSheetNames[0]
-        : undefined);
-    if (!resolvedTier) {
-      issues.push(`${worksheet.name} 无法唯一映射到已登记券档`);
-      continue;
-    }
+    const resolvedTier = selected?.templateTier?.trim() || worksheet.name;
     if (seenTiers.has(resolvedTier)) {
       issues.push(
         `${worksheet.name} 与其他 Sheet 重复映射券档 ${resolvedTier}`,
@@ -391,6 +372,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       continue;
     }
     seenTiers.add(resolvedTier);
+    sheetOrder.push(resolvedTier);
     const identifier = selected?.identifierCandidateId
       ? sheetCandidates.find(
           (candidate) => candidate.id === selected.identifierCandidateId,
@@ -456,6 +438,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     sourceHash: sourceHashValue,
     dimension: "SKU",
     entries,
+    sheetOrder,
     issues,
   };
 }
@@ -567,7 +550,7 @@ export async function parseSingleCouponIdentifierList(
 
 export function groupIdentifiersByTier(
   list: ParsedTieredIdentifierList,
-): Record<MultiTierSkuSheetName, string[]> {
+): Record<string, string[]> {
   if (list.dimension !== "SKU") {
     throw new Error(`标准 SKU 附件不支持 ${list.dimension} 维度`);
   }
@@ -576,14 +559,12 @@ export function groupIdentifiersByTier(
       `${list.role} 存在未解决的数据问题：${list.issues.join("；")}`,
     );
   }
-  const result = multiTierSkuSheetNames.reduce(
-    (tiers, tier) => {
-      tiers[tier] = [];
-      return tiers;
-    },
-    {} as Record<MultiTierSkuSheetName, string[]>,
-  );
-  for (const entry of list.entries) result[entry.tier].push(entry.id);
+  const result: Record<string, string[]> = {};
+  for (const tier of list.sheetOrder ?? []) result[tier] = [];
+  for (const entry of list.entries) {
+    result[entry.tier] ??= [];
+    result[entry.tier].push(entry.id);
+  }
   return result;
 }
 

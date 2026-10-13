@@ -1,6 +1,5 @@
 import type {
   MultiTierSkuListWorkbookManifest,
-  MultiTierSkuSheetName,
   SingleCouponSkuListWorkbookManifest,
 } from "~/lib/excel-template-engine/template-manifests";
 import type {
@@ -337,7 +336,7 @@ export interface AiPrimaryRecognitionProjection {
 
 export interface TieredIdentifierEntry {
   id: string;
-  tier: MultiTierSkuSheetName;
+  tier: string;
   provenance: SourceProvenance;
 }
 
@@ -346,6 +345,7 @@ export interface ParsedTieredIdentifierList {
   sourceHash: string;
   dimension: IdentifierDimension;
   entries: TieredIdentifierEntry[];
+  sheetOrder?: string[];
   issues: string[];
 }
 
@@ -353,7 +353,7 @@ export interface MultiSheetListSelection {
   sheets: Record<
     string,
     {
-      templateTier: MultiTierSkuSheetName;
+      templateTier: string;
       identifierCandidateId?: string;
     }
   >;
@@ -402,8 +402,8 @@ export interface CanonicalPackage {
   couponName?: string;
   whitelist?: ParsedSingleCouponIdentifierList;
   blacklist?: ParsedSingleCouponIdentifierList;
-  whitelistByTier: Record<MultiTierSkuSheetName, string[]>;
-  blacklistByTier?: Record<MultiTierSkuSheetName, string[]>;
+  whitelistByTier: Record<string, string[]>;
+  blacklistByTier?: Record<string, string[]>;
   blacklistStatus: BlacklistStatus;
   overlap: OverlapSnapshot;
 }

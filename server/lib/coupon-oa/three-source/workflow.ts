@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  generateMultiTierSkuListWorkbook,
+  generateDynamicSkuListWorkbook,
   generateRegularFullReductionWorkbook,
   generateRegularFullReductionWorkbookSet,
   generateSingleCouponSkuListWorkbook,
@@ -310,9 +310,7 @@ export async function generateOfflineArtifacts(input: {
         computed: input.package.computed,
         revision: input.package.revision,
       });
-  const whitelistWorkbook = await generateMultiTierSkuListWorkbook({
-    templateBytes: input.templates.whitelistTemplateBytes,
-    manifest: multiTierSkuWhitelistManifest,
+  const whitelistWorkbook = await generateDynamicSkuListWorkbook({
     tiers: input.package.whitelistByTier,
     activityName: input.package.coupon.input.activityName,
     revision: input.package.revision,
@@ -333,13 +331,11 @@ export async function generateOfflineArtifacts(input: {
       bytes: whitelistWorkbook.bytes,
       sha256: whitelistWorkbook.sha256,
       rowCount: whitelistWorkbook.rowCount,
-      template: multiTierSkuWhitelistManifest,
+      template: { id: "coupon-dynamic-sku-whitelist-v1", version: "v1" },
     },
   ];
   if (input.package.blacklistByTier) {
-    const blacklistWorkbook = await generateMultiTierSkuListWorkbook({
-      templateBytes: input.templates.blacklistTemplateBytes,
-      manifest: multiTierSkuBlacklistManifest,
+    const blacklistWorkbook = await generateDynamicSkuListWorkbook({
       tiers: input.package.blacklistByTier,
       activityName: input.package.coupon.input.activityName,
       revision: input.package.revision,
@@ -351,7 +347,7 @@ export async function generateOfflineArtifacts(input: {
       bytes: blacklistWorkbook.bytes,
       sha256: blacklistWorkbook.sha256,
       rowCount: blacklistWorkbook.rowCount,
-      template: multiTierSkuBlacklistManifest,
+      template: { id: "coupon-dynamic-sku-blacklist-v1", version: "v1" },
     });
   }
   return artifacts;

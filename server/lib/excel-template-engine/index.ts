@@ -10,6 +10,12 @@ import {
   skuWhitelistPilotManifest,
 } from "./template-manifests";
 
+export type { DynamicSkuListWorkbook } from "./dynamic-sku-list";
+export {
+  generateDynamicSkuListWorkbook,
+  verifyDynamicSkuListWorkbook,
+} from "./dynamic-sku-list";
+
 const xlsxMimeType =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 

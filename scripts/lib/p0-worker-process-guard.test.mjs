@@ -46,4 +46,15 @@ describe("P0 worker process guard", () => {
       }),
     ).not.toThrow();
   });
+
+  it("ignores wrappers that only mention the worker script", () => {
+    const processes = [
+      "75779 /bin/zsh -c node scripts/run-p0-control-plane-worker.mjs",
+      "75799 rtk node scripts/run-p0-control-plane-worker.mjs",
+      "75805 rg scripts/run-p0-control-plane-worker.mjs",
+      "75820 /opt/homebrew/bin/node scripts/run-p0-control-plane-worker.mjs",
+    ].join("\n");
+
+    expect(conflictingP0WorkerProcesses(processes, [75820])).toEqual([]);
+  });
 });

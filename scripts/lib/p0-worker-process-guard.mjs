@@ -1,5 +1,9 @@
 const legacyTickMarker = "/api/internal/control-plane/tick";
 const guardedWorkerMarker = "scripts/run-p0-control-plane-worker.mjs";
+const guardedWorkerCommand = new RegExp(
+  `^(?:\\S*/)?node(?:\\s+--\\S+)*\\s+${guardedWorkerMarker.replaceAll("/", "\\/")}(?:\\s|$)`,
+  "u",
+);
 
 function processLine(line) {
   const match = line.trim().match(/^(\d+)\s+(.*)$/u);
@@ -18,8 +22,9 @@ export function conflictingP0WorkerProcesses(
     .filter((process) => {
       if (!process || ignored.has(process.pid)) return false;
       return (
-        process.command.includes(legacyTickMarker) ||
-        process.command.includes(guardedWorkerMarker)
+        (process.command.includes("curl") &&
+          process.command.includes(legacyTickMarker)) ||
+        guardedWorkerCommand.test(process.command)
       );
     })
     .map((process) => process.pid);

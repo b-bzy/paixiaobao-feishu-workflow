@@ -1,11 +1,16 @@
 import { expect, it } from "vitest";
 import { deployP0Preview, deploymentUrlFromStdout } from "./p0-preview-deploy.mjs";
 
-it("accepts exactly one Vercel Preview URL", () => {
+it("uses the final Vercel Preview URL from decorated CLI output", () => {
   expect(
     deploymentUrlFromStdout("https://sample-abc.vercel.app\n"),
   ).toBe("https://sample-abc.vercel.app");
-  expect(() => deploymentUrlFromStdout("ready\n")).toThrow("唯一");
+  expect(
+    deploymentUrlFromStdout(
+      "Inspect: https://inspect.example\nReady: https://sample-abc.vercel.app [1m]\n",
+    ),
+  ).toBe("https://sample-abc.vercel.app");
+  expect(() => deploymentUrlFromStdout("ready\n")).toThrow("Preview URL");
 });
 
 it("deploys with branch metadata and verifies identity using bypass", async () => {

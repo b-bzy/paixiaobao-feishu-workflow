@@ -5,14 +5,12 @@ import { verifyP0DeploymentIdentity } from "./p0-deployment-identity.mjs";
 const execFileAsync = promisify(execFile);
 
 export function deploymentUrlFromStdout(stdout) {
-  const urls = stdout
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => /^https:\/\/[^/]+\.vercel\.app$/u.test(line));
-  if (urls.length !== 1) {
-    throw new Error("Vercel 部署输出没有唯一 Preview URL");
+  const urls = stdout.match(/https:\/\/[^\s/]+\.vercel\.app/gu) ?? [];
+  const deploymentUrl = urls.at(-1);
+  if (!deploymentUrl) {
+    throw new Error("Vercel 部署输出没有 Preview URL");
   }
-  return urls[0];
+  return deploymentUrl;
 }
 
 export async function deployP0Preview({

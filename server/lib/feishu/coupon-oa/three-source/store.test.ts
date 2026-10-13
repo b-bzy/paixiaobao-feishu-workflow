@@ -14,19 +14,78 @@ import {
   updateCouponThreeSourcePilotDraft,
 } from "./store";
 
-function respondingFetch(recordId = "rec-three-source") {
-  return vi.fn(async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as {
-      fields: Record<string, unknown>;
-    };
-    return {
-      ok: true,
-      json: async () => ({
-        code: 0,
-        msg: "success",
-        data: { record: { record_id: recordId, fields: body.fields } },
-      }),
-    };
+type BaseFields = Record<string, unknown>;
+
+function okRecord(recordId: string, fields: BaseFields) {
+  return {
+    ok: true,
+    json: async () => ({
+      code: 0,
+      msg: "success",
+      data: { record: { record_id: recordId, fields } },
+    }),
+  };
+}
+
+/**
+ * Method-aware Base fake: POST creates, GET returns the currently stored
+ * record, PUT overwrites it. `storedFields` simulates concurrent writers so
+ * tests can move the stored revision behind the caller's back.
+ */
+function baseFake(recordId = "rec-three-source") {
+  let storedFields: BaseFields = {};
+  const calls: Array<{ method: string; bodyFields?: BaseFields }> = [];
+  const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+    const method = (init.method ?? "GET").toUpperCase();
+    const bodyFields = init.body
+      ? (JSON.parse(String(init.body)).fields as BaseFields)
+      : undefined;
+    calls.push({ method, bodyFields });
+    if (method === "GET") return okRecord(recordId, storedFields);
+    storedFields = { ...bodyFields };
+    return okRecord(recordId, storedFields);
+  });
+  return {
+    fetchMock,
+    calls,
+    setStored: (fields: BaseFields) => {
+      storedFields = fields;
+    },
+    putCount: () => calls.filter((call) => call.method === "PUT").length,
+  };
+}
+
+function callFields(call: unknown[]): BaseFields {
+  const init = call[1] as RequestInit;
+  return JSON.parse(String(init.body)).fields as BaseFields;
+}
+
+/**
+ * The authoritative revision/status live inside the State JSON blob; the
+ * Revision/Status columns are display-only. Concurrent writers therefore
+ * patch the stored task through this helper.
+ */
+function withStoredTask(fields: BaseFields, patch: {
+  revision?: number;
+  status?: string;
+}): BaseFields {
+  const stored = JSON.parse(String(fields["State JSON"]));
+  return {
+    ...fields,
+    "State JSON": JSON.stringify({
+      ...stored,
+      task: { ...stored.task, ...patch },
+    }),
+  };
+}
+
+async function seedDraft() {
+  return createCouponThreeSourcePilotDraft({
+    ownerOpenId: "ou_test",
+    task: createCouponThreeSourceTask({
+      taskId: "CTS-test",
+      ownerOpenId: "ou_test",
+    }),
   });
 }
 
@@ -41,7 +100,7 @@ describe("three-source pilot Base store", () => {
   });
 
   it("persists one task state without source bytes", async () => {
-    const fetchMock = respondingFetch("rec-created");
+    const { fetchMock } = baseFake("rec-created");
     vi.stubGlobal("fetch", fetchMock);
     const task = createCouponThreeSourceTask({
       taskId: "CTS-test",
@@ -68,20 +127,94 @@ describe("three-source pilot Base store", () => {
   });
 
   it("rejects a stale expected revision before a Base write", async () => {
-    const fetchMock = respondingFetch();
+    const { fetchMock } = baseFake();
     vi.stubGlobal("fetch", fetchMock);
-    const draft = await createCouponThreeSourcePilotDraft({
-      ownerOpenId: "ou_test",
-      task: createCouponThreeSourceTask({
-        taskId: "CTS-test",
-        ownerOpenId: "ou_test",
-      }),
-    });
+    const draft = await seedDraft();
 
     await expect(
       updateCouponThreeSourcePilotDraft(draft, {}, draft.task.revision + 1),
     ).rejects.toThrow("version changed");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to overwrite a newer stored revision with a stale snapshot", async () => {
+    const fake = baseFake();
+    vi.stubGlobal("fetch", fake.fetchMock);
+    const draft = await seedDraft();
+
+    const createdFields = callFields(fake.fetchMock.mock.calls[0]);
+    fake.setStored(
+      withStoredTask(createdFields, {
+        revision: draft.task.revision + 1,
+        status: "AwaitingSourceConfirmation",
+      }),
+    );
+
+    await expect(
+      updateCouponThreeSourcePilotDraft(draft, {}, draft.task.revision),
+    ).rejects.toThrow("version changed");
+    expect(fake.putCount()).toBe(0);
+  });
+
+  it("writes on top of the freshly stored state when the revision matches", async () => {
+    const fake = baseFake();
+    vi.stubGlobal("fetch", fake.fetchMock);
+    const draft = await seedDraft();
+
+    const updated = await updateCouponThreeSourcePilotDraft(
+      draft,
+      { validationIssues: ["测试标记"] },
+      draft.task.revision,
+    );
+
+    expect(fake.putCount()).toBe(1);
+    const putFields = fake.calls.find((call) => call.method === "PUT")
+      ?.bodyFields as BaseFields;
+    expect(putFields.Revision).toBe(draft.task.revision);
+    expect(String(putFields["State JSON"])).toContain("测试标记");
+    expect(updated.validationIssues).toEqual(["测试标记"]);
+    expect(updated.task.revision).toBe(draft.task.revision);
+  });
+
+  it("refuses to write when the stored draft was concurrently canceled", async () => {
+    const fake = baseFake();
+    vi.stubGlobal("fetch", fake.fetchMock);
+    const draft = await seedDraft();
+    const createdFields = callFields(fake.fetchMock.mock.calls[0]);
+    fake.setStored(withStoredTask(createdFields, { status: "Canceled" }));
+
+    await expect(
+      updateCouponThreeSourcePilotDraft(draft, {}, draft.task.revision),
+    ).rejects.toThrow("cannot be changed");
+    expect(fake.putCount()).toBe(0);
+  });
+
+  it("fails closed when the write-back echoes a different revision", async () => {
+    const fake = baseFake();
+    vi.stubGlobal("fetch", fake.fetchMock);
+    const draft = await seedDraft();
+    const createdFields = callFields(fake.fetchMock.mock.calls[0]);
+    // Realistic read-after-write anomaly: the PUT echoes the pre-write record.
+    fake.fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const method = (init.method ?? "GET").toUpperCase();
+      if (method === "GET") {
+        return okRecord("rec-three-source", createdFields);
+      }
+      return okRecord("rec-three-source", createdFields);
+    });
+
+    const bumpedTask = {
+      ...draft.task,
+      revision: draft.task.revision + 1,
+      status: "AwaitingFinalConfirmation",
+    };
+    await expect(
+      updateCouponThreeSourcePilotDraft(
+        draft,
+        { task: bumpedTask },
+        draft.task.revision,
+      ),
+    ).rejects.toThrow("write-back verification failed");
   });
 
   it("drops workbook bytes when it stores a recognition result", () => {

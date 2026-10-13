@@ -349,7 +349,21 @@ export async function updateCouponThreeSourcePilotDraft(
   }
   const tableId = getCouponThreeSourcePilotTableId();
   const appToken = getCouponThreeSourcePilotBaseAppToken();
-  const next = { ...draft, ...updates };
+  // Base has no conditional write, so guard the read-modify-write by
+  // re-reading the stored revision and refusing to overwrite a newer one.
+  // The in-memory check above only validates the caller's stale snapshot.
+  const stored = await getCouponThreeSourcePilotDraft(draft.recordId);
+  if (stored.task.revision !== expectedRevision) {
+    throw new Error(
+      "Three-source pilot version changed; reopen the latest card",
+    );
+  }
+  if (!isActive(stored)) {
+    throw new Error(
+      "Confirmed or canceled three-source pilot drafts cannot be changed",
+    );
+  }
+  const next = { ...stored, ...updates };
   const {
     recordId: _,
     createdAt: _createdAt,
@@ -365,7 +379,13 @@ export async function updateCouponThreeSourcePilotDraft(
       "Feishu Base did not return an updated three-source pilot record",
     );
   }
-  return parseRecord(result.data.record);
+  const persisted = parseRecord(result.data.record);
+  if (persisted.task.revision !== next.task.revision) {
+    throw new Error(
+      "Three-source pilot write-back verification failed; reopen the latest card",
+    );
+  }
+  return persisted;
 }
 
 export function toStoredWorkbookRecognition(input: {

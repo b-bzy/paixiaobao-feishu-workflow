@@ -17,6 +17,10 @@ import {
 export type FrozenThreeSourceArtifact = FrozenCouponOaArtifact & {
   templateId: string;
   templateVersion: string;
+  /** Pilot owner who was granted Drive view permission for in-card preview. */
+  previewGrantedFor?: string;
+  /** Last preview grant failure reason; the preview entry stays hidden. */
+  previewGrantError?: string;
 };
 
 function attachmentByRole(

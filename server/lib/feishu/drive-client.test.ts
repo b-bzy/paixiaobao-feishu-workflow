@@ -5,6 +5,7 @@ vi.mock("./client", () => ({ getTenantAccessToken: vi.fn() }));
 import { getTenantAccessToken } from "./client";
 import {
   downloadFeishuDriveFile,
+  grantFeishuDriveFileViewPermission,
   uploadFeishuBitableAttachment,
   uploadFeishuDriveFile,
 } from "./drive-client";
@@ -197,5 +198,147 @@ describe("Feishu Drive upload", () => {
       "Feishu Base attachment upload failed: Base upload denied",
     );
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Feishu Drive preview permission grant", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("grants view permission to the pilot owner with a timeout", async () => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, msg: "success", data: {} }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      grantFeishuDriveFileViewPermission({
+        fileToken: "file-token",
+        memberOpenId: "ou_owner",
+      }),
+    ).resolves.toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "https://open.feishu.cn/open-apis/drive/v1/permissions/file-token/members?type=file",
+    );
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Authorization: "Bearer tenant-token",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      perm: "view",
+      member_type: "openid",
+      member_id: "ou_owner",
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reports Feishu error details when the grant is denied", async () => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: async () => ({ code: 1061004, msg: "no permission" }),
+      }),
+    );
+
+    await expect(
+      grantFeishuDriveFileViewPermission({
+        fileToken: "file-token",
+        memberOpenId: "ou_owner",
+      }),
+    ).rejects.toThrow(
+      "Feishu Drive file permission grant failed: 403 code 1061004: no permission",
+    );
+  });
+
+  it("keeps failing on a non-JSON error response without details", async () => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 500 })),
+    );
+
+    await expect(
+      grantFeishuDriveFileViewPermission({
+        fileToken: "file-token",
+        memberOpenId: "ou_owner",
+      }),
+    ).rejects.toThrow("Feishu Drive file permission grant failed: 500");
+  });
+
+  it("treats code 1063003 as success only when the read-back confirms the member", async () => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 1063003, msg: "forbidden operation" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 0,
+          msg: "success",
+          data: {
+            members: [
+              { member_type: "openid", member_id: "ou_owner", perm: "view" },
+            ],
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      grantFeishuDriveFileViewPermission({
+        fileToken: "file-token",
+        memberOpenId: "ou_owner",
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [readBackUrl, readBackInit] = fetchMock.mock.calls[1] as [
+      string,
+      RequestInit,
+    ];
+    expect(readBackUrl).toBe(
+      "https://open.feishu.cn/open-apis/drive/v1/permissions/file-token/members?type=file",
+    );
+    expect(readBackInit.method).toBeUndefined();
+  });
+
+  it("rejects code 1063003 when the member is missing from the read-back", async () => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 1063003, msg: "forbidden operation" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0, msg: "success", data: { members: [] } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      grantFeishuDriveFileViewPermission({
+        fileToken: "file-token",
+        memberOpenId: "ou_owner",
+      }),
+    ).rejects.toThrow(
+      "Feishu Drive file permission grant failed: 200 code 1063003: forbidden operation",
+    );
   });
 });

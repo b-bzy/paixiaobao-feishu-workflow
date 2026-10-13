@@ -39,7 +39,10 @@ import {
   createCouponSetCanonicalPackage,
   generateOfflineArtifacts,
 } from "../../../coupon-oa/three-source/workflow";
-import { uploadFeishuDriveFile } from "../../drive-client";
+import {
+  grantFeishuDriveFileViewPermission,
+  uploadFeishuDriveFile,
+} from "../../drive-client";
 import { downloadFeishuMessageResource } from "../../message-client";
 import {
   getCouponThreeSourceAiConfig,
@@ -80,6 +83,10 @@ export interface CouponThreeSourcePilotDependencies {
     contentType: string;
     bytes: Uint8Array;
   }): Promise<{ fileToken: string }>;
+  grantArtifactPreview?(input: {
+    fileToken: string;
+    memberOpenId: string;
+  }): Promise<void>;
   folderToken(): string;
   loadTemplates: typeof loadCouponThreeSourceTemplates;
   createDraft: typeof createCouponThreeSourcePilotDraft;
@@ -147,6 +154,7 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
     },
     renderScreenshots: renderCouponArtifactScreenshots,
     uploadArtifact: uploadFeishuDriveFile,
+    grantArtifactPreview: grantFeishuDriveFileViewPermission,
     folderToken: getCouponThreeSourcePilotFolderToken,
     loadTemplates: loadCouponThreeSourceTemplates,
     createDraft: createCouponThreeSourcePilotDraft,
@@ -827,6 +835,22 @@ export class CouponThreeSourcePilotService {
               : xlsxContentType,
           bytes: artifact.bytes,
         });
+        // In-card preview is auxiliary: a failed grant only hides the eye
+        // entry and must not break freezing or the confirmation card.
+        let previewGrantedFor: string | undefined;
+        let previewGrantError: string | undefined;
+        if (this.dependencies.grantArtifactPreview) {
+          try {
+            await this.dependencies.grantArtifactPreview({
+              fileToken: uploaded.fileToken,
+              memberOpenId: input.ownerOpenId,
+            });
+            previewGrantedFor = input.ownerOpenId;
+          } catch (error) {
+            previewGrantError =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
         return {
           artifactId:
             artifact.role === "calcImage"
@@ -846,6 +870,8 @@ export class CouponThreeSourcePilotService {
             artifact.role === "calcImage"
               ? (artifact.templateVersion ?? "1")
               : artifact.template.version,
+          ...(previewGrantedFor ? { previewGrantedFor } : {}),
+          ...(previewGrantError ? { previewGrantError } : {}),
           ...(artifact.role === "calcImage"
             ? {
                 contentType: artifact.contentType,

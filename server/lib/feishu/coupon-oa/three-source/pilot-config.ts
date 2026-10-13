@@ -25,3 +25,19 @@ export function getCouponThreeSourcePilotTableId(): string {
 export function getCouponThreeSourcePilotFolderToken(): string {
   return value("FEISHU_COUPON_THREE_SOURCE_PILOT_FOLDER_TOKEN");
 }
+
+/**
+ * HTTPS web origin of the Feishu tenant (e.g. https://example.feishu.cn),
+ * used to build in-card Drive file preview links. Unset or invalid values
+ * disable the preview entry instead of breaking card rendering.
+ */
+export function getCouponThreeSourcePreviewWebBaseUrl(): string | undefined {
+  const raw = process.env.FEISHU_WEB_BASE_URL?.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}

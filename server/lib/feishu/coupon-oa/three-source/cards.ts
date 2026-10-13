@@ -5,6 +5,8 @@ import type {
   CouponFieldKey,
 } from "../../../coupon-oa/three-source/types";
 import type { FeishuCard } from "../../expense-poc";
+import type { FrozenThreeSourceArtifact } from "./handoff";
+import { getCouponThreeSourcePreviewWebBaseUrl } from "./pilot-config";
 import type {
   CouponThreeSourcePilotDraft,
   StoredWorkbookRecognition,
@@ -841,10 +843,64 @@ export function buildCouponThreeSourceOverlapCard(input: {
   });
 }
 
+const previewArtifactLabels = {
+  couponTable: "配券表",
+  productWhitelist: "白名单",
+  productBlacklist: "黑名单",
+  calcImage: "测算图",
+} as const;
+
+/**
+ * One 👁 preview button per frozen artifact the current owner can open in
+ * the Feishu client. Rendered only when the view permission grant succeeded
+ * and the tenant web origin is configured; otherwise the card keeps the
+ * plain file list.
+ */
+function previewEntryRow(
+  draft: CouponThreeSourcePilotDraft,
+): Record<string, unknown> | undefined {
+  const baseUrl = getCouponThreeSourcePreviewWebBaseUrl();
+  if (!baseUrl) return undefined;
+  const granted = draft.artifacts.filter(
+    (artifact: FrozenThreeSourceArtifact) =>
+      artifact.previewGrantedFor === draft.ownerOpenId,
+  );
+  if (!granted.length) return undefined;
+  return {
+    tag: "column_set",
+    flex_mode: "bisect",
+    horizontal_spacing: "8px",
+    columns: granted.map((artifact) => ({
+      tag: "column",
+      width: "weighted",
+      weight: 1,
+      elements: [
+        {
+          tag: "button",
+          text: plainText(
+            artifact.role === "calcImage"
+              ? `👁 ${previewArtifactLabels[artifact.role]}${(artifact.order ?? 0) + 1}`
+              : `👁 ${previewArtifactLabels[artifact.role]}`,
+          ),
+          type: "default",
+          width: "fill",
+          behaviors: [
+            {
+              type: "open_url",
+              default_url: `${baseUrl}/file/${encodeURIComponent(artifact.fileToken)}`,
+            },
+          ],
+        },
+      ],
+    })),
+  };
+}
+
 export function buildCouponThreeSourcePreviewCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
   const prefill = draft.oaPrefill;
+  const previewRow = previewEntryRow(draft);
   return card({
     title: "标准附件已生成，待创建 OA 测试稿",
     subtitle: "第 5 步：确认当前 revision",
@@ -869,6 +925,7 @@ export function buildCouponThreeSourcePreviewCard(
           "确认后只会创建既有 OA 测试稿；不会自动提交正式 OA。",
         ].join("\n"),
       },
+      ...(previewRow ? [previewRow] : []),
       button(draft, {
         action: "coupon_three_source_final_confirm",
         text: "确认并创建 OA 测试稿",

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
   buildCouponThreeSourceIntakeCard,
@@ -116,7 +116,17 @@ function draft(): CouponThreeSourcePilotDraft {
   };
 }
 
+const originalPreviewBaseUrl = process.env.FEISHU_WEB_BASE_URL;
+
 describe("three-source Bot cards", () => {
+  afterEach(() => {
+    if (originalPreviewBaseUrl === undefined) {
+      delete process.env.FEISHU_WEB_BASE_URL;
+    } else {
+      process.env.FEISHU_WEB_BASE_URL = originalPreviewBaseUrl;
+    }
+  });
+
   it("starts one recognition batch only after the owner finishes uploading", () => {
     const current = draft();
     const rendered = JSON.stringify(buildCouponThreeSourceIntakeCard(current));
@@ -322,6 +332,105 @@ describe("three-source Bot cards", () => {
     expect(preview).toContain("coupon_three_source_final_confirm");
     expect(preview).toContain("不会自动提交正式 OA");
     expect(preview).not.toContain("calcImage");
+  });
+
+  it("adds a preview eye button only for artifacts granted to the owner", () => {
+    process.env.FEISHU_WEB_BASE_URL = "https://example.feishu.cn";
+    const current = draft();
+    current.task.status = "AwaitingFinalConfirmation";
+    current.artifacts = [
+      {
+        artifactId: "couponTable-a",
+        order: 0,
+        role: "couponTable",
+        fileName: "标准配券表.xlsx",
+        fileToken: "tok-coupon",
+        bytes: 10,
+        sha256: "a".repeat(64),
+        templateId: "tpl-coupon",
+        templateVersion: "1",
+        previewGrantedFor: "ou_owner",
+      },
+      {
+        artifactId: "productWhitelist-b",
+        order: 1,
+        role: "productWhitelist",
+        fileName: "标准白名单.xlsx",
+        fileToken: "tok-white",
+        bytes: 10,
+        sha256: "b".repeat(64),
+        templateId: "tpl-white",
+        templateVersion: "1",
+        previewGrantedFor: "ou_owner",
+      },
+      {
+        artifactId: "productBlacklist-c",
+        order: 2,
+        role: "productBlacklist",
+        fileName: "标准黑名单.xlsx",
+        fileToken: "tok-black",
+        bytes: 10,
+        sha256: "c".repeat(64),
+        templateId: "tpl-black",
+        templateVersion: "1",
+      },
+    ];
+    const preview = JSON.stringify(buildCouponThreeSourcePreviewCard(current));
+    expect(preview).toContain('"open_url"');
+    expect(preview).toContain("https://example.feishu.cn/file/tok-coupon");
+    expect(preview).toContain("https://example.feishu.cn/file/tok-white");
+    expect(preview).toContain("👁 配券表");
+    expect(preview).toContain("👁 白名单");
+    expect(preview).not.toContain("file/tok-black");
+    expect(preview).not.toContain("👁 黑名单");
+  });
+
+  it("keeps the plain file list when preview is unavailable", () => {
+    delete process.env.FEISHU_WEB_BASE_URL;
+    const current = draft();
+    current.task.status = "AwaitingFinalConfirmation";
+    current.artifacts = [
+      {
+        artifactId: "couponTable-a",
+        order: 0,
+        role: "couponTable",
+        fileName: "标准配券表.xlsx",
+        fileToken: "tok-coupon",
+        bytes: 10,
+        sha256: "a".repeat(64),
+        templateId: "tpl-coupon",
+        templateVersion: "1",
+        previewGrantedFor: "ou_owner",
+      },
+      {
+        artifactId: "productWhitelist-b",
+        order: 1,
+        role: "productWhitelist",
+        fileName: "标准白名单.xlsx",
+        fileToken: "tok-white",
+        bytes: 10,
+        sha256: "b".repeat(64),
+        templateId: "tpl-white",
+        templateVersion: "1",
+        previewGrantedFor: "ou_someone_else",
+      },
+    ];
+
+    // No tenant web origin configured: even granted artifacts stay plain.
+    const withoutOrigin = JSON.stringify(
+      buildCouponThreeSourcePreviewCard(current),
+    );
+    expect(withoutOrigin).not.toContain("open_url");
+    expect(withoutOrigin).toContain("标准配券表.xlsx");
+
+    // Origin configured but only the artifact granted to another user must
+    // not expose a link.
+    process.env.FEISHU_WEB_BASE_URL = "https://example.feishu.cn";
+    current.artifacts = current.artifacts.slice(1);
+    const notGrantedToOwner = JSON.stringify(
+      buildCouponThreeSourcePreviewCard(current),
+    );
+    expect(notGrantedToOwner).not.toContain("open_url");
   });
 
   it("suppresses generation while AI is pending", () => {

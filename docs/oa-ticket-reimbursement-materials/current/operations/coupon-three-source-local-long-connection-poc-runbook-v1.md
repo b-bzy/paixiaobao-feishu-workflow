@@ -62,6 +62,7 @@
 | `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED` | 默认 `false`。只用于缺年份日期和公开活动主题的软证据，不是通用互联网搜索。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT`、`..._TIMEOUT_MS` | 仅日历 Gate 开启时配置受控 HTTPS JSON endpoint；请求不得包含工作簿、员工、SKU 或券额。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS` | 默认 `45000`，允许范围 1000–120000。 |
+| `FEISHU_WEB_BASE_URL` | 可选。测试租户的 HTTPS 网页域名（如 `https://example.feishu.cn`），仅用于拼三源确认卡的 `👁` 冻结产物预览链接。未配置或非法时按钮自动隐藏，流程不受影响；启用预览还需应用已发布 Drive 协作者授权与读取权限（见 2.3），且只能给唯一测试用户授 `view`。 |
 | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` | 只在 AI Gate 开启时需要；base URL 必须是官方 HTTPS endpoint。实际值不得进入聊天、日志或文档。 |
 | `DATABASE_URL`、`FEISHU_WORKER_ID`、`CONTROL_PLANE_TICK_TOKEN` | AI Gate 开启时必须配置；用于 migration 0005、durable effect 与受保护 tick。 |
 
@@ -93,7 +94,7 @@ VERCEL_AUTOMATION_BYPASS_SECRET=<仅当 Preview 开启 Deployment Protection 时
 1. **保持长连接事件模式**；不要切换为开发者服务器回调，不配置 callback URL，也不做 URL challenge。
 2. 订阅并对测试 Bot 生效 `im.message.receive_v1` 和 `card.action.trigger`，且 Bot 只对唯一测试用户可见。
 3. 测试前确认没有其它 `lark-cli`、SDK runner、旧 bridge 或 HTTP callback consumer。一次只能有一个 active consumer。
-4. 不为解决问题扩大权限或可见范围。消息、文件下载、Base、Drive、Approval 所需权限缺失时关闭 POC，交应用管理员做最小权限评审。
+4. 不为解决问题扩大权限或可见范围。消息、文件下载、Base、Drive、Approval 所需权限缺失时关闭 POC，交应用管理员做最小权限评审。卡内 `👁` 冻结产物预览额外依赖 Drive 文件读取/下载与协作者授权（新增协作者）权限已随应用版本发布；未发布时预览按钮自动隐藏，不得为显示按钮放宽其它权限或把链接分享给测试用户之外的人。
 
 ## 3. 启动顺序
 
@@ -147,7 +148,7 @@ OA 测试稿成功。详细操作边界由仓库 Skill `p0-preview-deploy` 约�
 2. 在 Bot 单聊发送精确 `/OA优惠券提报`，确认收到材料收集卡。
 3. 发送原始配券表和 SKU 白名单 `.xlsx`；可发送 SKU 黑名单。文件事件由服务端按 message ID 回读原始 `file_key`，但源文件不得出现在 OA 附件中。上传阶段不应逐文件发卡或调用 DeepSeek；全部材料发送完后，在最初的收集卡点击“材料已上传完毕，开始统一识别”。
 4. AI-primary 开启时只应出现一张“AI 识别中”；worker 完成整批识别后只应再出现一条汇总第二轮卡片消息。后续无黑名单、超扣选择和补充说明识别必须原位更新这条消息，聊天中不得再追加第二、第三张同名卡片。卡片必须只显示中文业务字段、摘要及不含敏感信息的 DeepSeek 状态，不得出现 Sheet、列号、坐标、内部 key、prompt version 或技术映射选择器。在该卡检查系统识别的唯一券模板、全部券档、缺失字段、名单摘要、OA 活动点位，以及未上传黑名单时的“本次无黑名单”声明；同一常规满减模板的多行是多个券档，不要求只选一行。已登记的名单多 Sheet 自动对应全部券档。无年份日期或公开活动主题必须标记“系统推测”并由 owner 确认。活动名称不得是占位语，活动背景必须覆盖全部券档。业务员也可用系统输入法把语音转写到可编辑补充说明框，检查文字后点击识别回填；AI 只填补空白字段，不能覆盖 owner 已输入的非空内容，提交前仍可修改。有白黑名单交集时再作出明确决定。
-5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀。严选不得含 `calcImage`；寄卖/POP 需核对所有图片页数和顺序。用户发送新图片批次时，必须明确选择“追加”或“整组替换”。
+5. 确认生成标准附件，记录脱敏 revision、角色和 hash 前缀。严选不得含 `calcImage`；寄卖/POP 需核对所有图片页数和顺序。用户发送新图片批次时，必须明确选择“追加”或“整组替换”。若已配置 `FEISHU_WEB_BASE_URL` 且权限版本已发布，确认卡中每个冻结产物旁出现 `👁` 预览按钮，点击后唯一测试用户可在飞书客户端打开该冻结文件的原生预览；未配置或授权失败时按钮必须隐藏且卡片退回纯文件列表，冻结与确认流程不受影响。
 
 ### 三业务模式与图片回归矩阵
 

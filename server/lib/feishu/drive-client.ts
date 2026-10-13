@@ -80,6 +80,83 @@ export async function downloadFeishuDriveFile(
   return new Uint8Array(await response.arrayBuffer());
 }
 
+const drivePermissionTimeoutMs = 10_000;
+
+interface FeishuDrivePermissionMember {
+  member_type?: string;
+  member_id?: string;
+  perm?: string;
+}
+
+function drivePermissionUrl(fileToken: string): string {
+  return `https://open.feishu.cn/open-apis/drive/v1/permissions/${encodeURIComponent(fileToken)}/members?type=file`;
+}
+
+async function readBackFeishuDriveFileViewPermission(input: {
+  fileToken: string;
+  memberOpenId: string;
+  token: string;
+}): Promise<boolean> {
+  const response = await fetch(drivePermissionUrl(input.fileToken), {
+    headers: { Authorization: `Bearer ${input.token}` },
+    signal: AbortSignal.timeout(drivePermissionTimeoutMs),
+  });
+  const result = (await response.json().catch(() => undefined)) as
+    | FeishuResponse<{ members?: FeishuDrivePermissionMember[] }>
+    | undefined;
+  if (!response.ok || !result || Number(result.code) !== 0) return false;
+  return (result.data?.members ?? []).some(
+    (member) =>
+      member.member_type === "openid" &&
+      member.member_id === input.memberOpenId &&
+      (member.perm === "view" ||
+        member.perm === "edit" ||
+        member.perm === "full_access"),
+  );
+}
+
+/**
+ * Grants one user view permission on a Drive-uploaded file so the Feishu
+ * client can open its native preview. Feishu reports code 1063003 both for
+ * members that already hold permission and for genuinely forbidden grants,
+ * so that case is confirmed by reading the member list back.
+ */
+export async function grantFeishuDriveFileViewPermission(input: {
+  fileToken: string;
+  memberOpenId: string;
+}): Promise<void> {
+  const token = await getTenantAccessToken();
+  const response = await fetch(drivePermissionUrl(input.fileToken), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      perm: "view",
+      member_type: "openid",
+      member_id: input.memberOpenId,
+    }),
+    signal: AbortSignal.timeout(drivePermissionTimeoutMs),
+  });
+  const result = (await response.json().catch(() => undefined)) as
+    | FeishuResponse<unknown>
+    | undefined;
+  if (response.ok && Number(result?.code) === 0) return;
+  if (Number(result?.code) === 1063003) {
+    const granted = await readBackFeishuDriveFileViewPermission({
+      fileToken: input.fileToken,
+      memberOpenId: input.memberOpenId,
+      token,
+    });
+    if (granted) return;
+  }
+  const detail = result ? ` code ${String(result.code)}: ${result.msg}` : "";
+  throw new Error(
+    `Feishu Drive file permission grant failed: ${response.status}${detail}`,
+  );
+}
+
 /**
  * Uploads bytes as a Base-owned attachment and appends them to one attachment
  * cell. Normal Drive media tokens cannot be assigned to a Bitable record.

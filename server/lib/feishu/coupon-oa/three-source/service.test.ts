@@ -142,6 +142,13 @@ describe("CouponThreeSourcePilotService", () => {
     const uploadArtifact = vi.fn(async (input: { name: string }) => ({
       fileToken: `drive-${input.name}`,
     }));
+    const grantArtifactPreview = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(
+        new Error("Feishu Drive file permission grant failed: 403"),
+      );
     const dependencies: CouponThreeSourcePilotDependencies = {
       downloadSource: async (source) => {
         const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
@@ -154,6 +161,7 @@ describe("CouponThreeSourcePilotService", () => {
       },
       renderScreenshots,
       uploadArtifact,
+      grantArtifactPreview,
       folderToken: () => "fld-three-source",
       loadTemplates,
       createDraft: async (input) => {
@@ -252,6 +260,18 @@ describe("CouponThreeSourcePilotService", () => {
       current.oaPrefill?.attachments.map((attachment) => attachment.role),
     ).toEqual(["couponTable", "productWhitelist"]);
     expect(uploadArtifact).toHaveBeenCalledTimes(2);
+    expect(grantArtifactPreview).toHaveBeenCalledTimes(2);
+    for (const call of grantArtifactPreview.mock.calls) {
+      expect(call[0]).toMatchObject({ memberOpenId: "ou_owner" });
+    }
+    expect(
+      current.artifacts.every(
+        (artifact) => artifact.previewGrantedFor === "ou_owner",
+      ),
+    ).toBe(true);
+    expect(
+      current.artifacts.every((artifact) => !artifact.previewGrantError),
+    ).toBe(true);
 
     current = await service.confirmFinalPreview({
       draft: current,
@@ -319,6 +339,18 @@ describe("CouponThreeSourcePilotService", () => {
     ).toHaveLength(1);
     expect(renderScreenshots).not.toHaveBeenCalled();
     expect(uploadArtifact.mock.calls.length).toBeGreaterThan(2);
+    // The rejected preview grant only hides the in-card preview entry; the
+    // freeze itself still succeeds for every artifact.
+    expect(
+      generated.artifacts.every((artifact) => !artifact.previewGrantedFor),
+    ).toBe(true);
+    expect(
+      generated.artifacts.every(
+        (artifact) =>
+          typeof artifact.previewGrantError === "string" &&
+          artifact.previewGrantError.includes("403"),
+      ),
+    ).toBe(true);
   });
 
   it("generates one artifact set for multiple amount tiers", async () => {

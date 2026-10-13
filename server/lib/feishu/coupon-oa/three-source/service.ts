@@ -768,6 +768,14 @@ export class CouponThreeSourcePilotService {
       expectedRevision: task.revision,
       snapshotHash: packageValue.sourceConfirmationHash,
     });
+    // Persist the in-flight marker before the slow freeze/upload phase so a
+    // concurrent click or upload is rejected by the GeneratingArtifacts gate
+    // instead of re-entering this read-modify-write path with a stale snapshot.
+    await this.dependencies.updateDraft(
+      draftForGeneration,
+      { task },
+      draftForGeneration.task.revision,
+    );
     const artifacts = await generateOfflineArtifacts({
       package: packageValue,
       templates: await this.dependencies.loadTemplates(),

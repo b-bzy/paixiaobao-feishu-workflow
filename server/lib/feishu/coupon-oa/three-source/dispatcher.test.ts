@@ -69,6 +69,72 @@ function dependencies(input: {
 }
 
 describe("three-source Bot dispatcher", () => {
+  it("rejects card actions while standard artifacts are generating", async () => {
+    const generating = {
+      ...draft(),
+      task: {
+        ...draft().task,
+        revision: 4,
+        status: "GeneratingArtifacts" as const,
+      },
+    };
+    const updateSelections = vi.fn();
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [generating],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_mapping_confirm:rec-three-source:4",
+        form: {},
+        idempotencyKey: "evt-double-click",
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "三源标准产物正在生成，请等待最新卡片完成后再操作",
+    });
+    expect(updateSelections).not.toHaveBeenCalled();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendCard.mock.calls[0][1])).toContain(
+      "三源标准产物正在生成",
+    );
+  });
+
+  it("rejects file intake while standard artifacts are generating", async () => {
+    const generating = {
+      ...draft(),
+      task: {
+        ...draft().task,
+        revision: 4,
+        status: "GeneratingArtifacts" as const,
+      },
+    };
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [generating],
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchFile({
+        openId: "ou_owner",
+        messageId: "om-late-upload",
+        fileKey: "file-late",
+        fileName: "配券型号表-late.xlsx",
+        idempotencyKey: "evt-late-upload",
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "三源标准产物正在生成，请等待最新卡片完成后再上传材料",
+    });
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendCard.mock.calls[0][1])).toContain(
+      "三源标准产物正在生成",
+    );
+  });
+
   it("fails closed without reading workflow state while the pilot flag is off", async () => {
     const { values, sendCard } = dependencies({ enabled: false });
     const dispatcher = createCouponThreeSourceDispatcher(values);

@@ -149,6 +149,19 @@ describe("CouponThreeSourcePilotService", () => {
       .mockRejectedValue(
         new Error("Feishu Drive file permission grant failed: 403"),
       );
+    const updateDraft = vi.fn(
+      async (
+        current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+        expectedRevision?: number,
+      ) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        draft = { ...current, ...updates };
+        return draft;
+      },
+    );
     const dependencies: CouponThreeSourcePilotDependencies = {
       downloadSource: async (source) => {
         const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
@@ -187,13 +200,7 @@ describe("CouponThreeSourcePilotService", () => {
         draft && !["DraftOnlyConfirmed", "Canceled"].includes(draft.task.status)
           ? [draft]
           : [],
-      updateDraft: async (current, updates, expectedRevision) => {
-        if (current.task.revision !== expectedRevision) {
-          throw new Error("stale revision");
-        }
-        draft = { ...current, ...updates };
-        return draft;
-      },
+      updateDraft,
       handoff,
     };
     const service = new CouponThreeSourcePilotService(dependencies);
@@ -334,6 +341,29 @@ describe("CouponThreeSourcePilotService", () => {
       operationId: "generate-pop",
     });
     expect(generated.task.status).toBe("AwaitingFinalConfirmation");
+    // The in-flight marker must be persisted before any heavy artifact work
+    // so concurrent clicks/uploads hit the GeneratingArtifacts gate.
+    const markerCall = updateDraft.mock.calls.find(
+      ([, updates]) =>
+        (updates as { task?: { status?: string } }).task?.status ===
+        "GeneratingArtifacts",
+    );
+    expect(markerCall).toBeDefined();
+    const markerArgs = markerCall as [
+      CouponThreeSourcePilotDraft,
+      Partial<CouponThreeSourcePilotDraft>,
+      number | undefined,
+    ];
+    expect(markerArgs[0]).toMatchObject({
+      recordId: current.recordId,
+      ownerOpenId: "ou_owner",
+    });
+    expect(markerArgs[2]).toBe(markerArgs[0].task.revision);
+    const markerOrder =
+      updateDraft.mock.invocationCallOrder[
+        updateDraft.mock.calls.findIndex((call) => call === markerCall)
+      ];
+    expect(markerOrder).toBeLessThan(uploadArtifact.mock.invocationCallOrder[0]);
     expect(
       generated.artifacts.filter((artifact) => artifact.role === "calcImage"),
     ).toHaveLength(1);

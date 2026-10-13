@@ -465,6 +465,15 @@ export function createCouponThreeSourceDispatcher(
       );
       return { handled: true, message: conflict };
     }
+    if (active[0].task.status === "GeneratingArtifacts") {
+      const busy = "三源标准产物正在生成，请等待最新卡片完成后再上传材料";
+      await dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({ message: busy }),
+        input.idempotencyKey,
+      );
+      return { handled: true, message: busy };
+    }
     try {
       let fileKey = stringValue(input.fileKey);
       let fileName = stringValue(input.fileName);
@@ -600,6 +609,9 @@ export function createCouponThreeSourceDispatcher(
       const draft = await dependencies.getDraft(recordId);
       if (draft.ownerOpenId !== input.openId) {
         throw new Error("只有当前三源提报创建人可以继续操作");
+      }
+      if (draft.task.status === "GeneratingArtifacts") {
+        throw new Error("三源标准产物正在生成，请等待最新卡片完成后再操作");
       }
       const expectedRevision =
         action === "coupon_three_source_recognition_start" ||

@@ -36,6 +36,7 @@ export async function loadP0PreviewConfig({
   path = ".local/p0-preview.env",
   statImpl = stat,
   readFileImpl = readFile,
+  environment = process.env,
 } = {}) {
   const details = await statImpl(path);
   if ((details.mode & 0o077) !== 0) {
@@ -48,6 +49,7 @@ export async function loadP0PreviewConfig({
     "CONTROL_PLANE_TICK_TOKEN",
     "VERCEL_AUTOMATION_BYPASS_SECRET",
   ]) {
+    values[key] ||= environment[key]?.trim();
     if (!values[key]?.trim()) throw new Error(`${key} 未配置`);
   }
   if (!/^[A-Za-z0-9._-]{1,64}$/u.test(values.FEISHU_BRIDGE_KEY_ID)) {

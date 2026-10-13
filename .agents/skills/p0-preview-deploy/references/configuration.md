@@ -11,6 +11,10 @@ CONTROL_PLANE_TICK_TOKEN=<preview worker token>
 VERCEL_AUTOMATION_BYPASS_SECRET=<Vercel automation bypass secret>
 ```
 
+The bypass secret may instead be injected into the command environment so it is
+not persisted in `.local/p0-preview.env`; all other required runner values still
+come from that mode-`0600` file.
+
 Never paste real values into chat, source files, screenshots, shell arguments, documentation, or test fixtures. The script reads this file without evaluating shell substitutions.
 
 Vercel Preview must already contain the test App/OA/Base/Drive/database/DeepSeek configuration for branch `p0-three-source-direct-http`. Native submit must remain disabled. Ordinary `deploy` does not edit environment variables or Gates.

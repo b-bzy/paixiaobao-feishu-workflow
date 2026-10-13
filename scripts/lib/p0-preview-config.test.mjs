@@ -32,3 +32,17 @@ it("loads the required runner credentials", async () => {
   });
   expect(config.FEISHU_BRIDGE_KEY_ID).toBe("coupon-p0-preview-v1");
 });
+
+it("accepts a process-only bypass secret without persisting it", async () => {
+  const config = await loadP0PreviewConfig({
+    statImpl: async () => ({ mode: 0o100600 }),
+    readFileImpl: async () =>
+      [
+        "FEISHU_BRIDGE_KEY_ID=coupon-p0-preview-v1",
+        `FEISHU_BRIDGE_SHARED_SECRET=${"a".repeat(64)}`,
+        "CONTROL_PLANE_TICK_TOKEN=tick",
+      ].join("\n"),
+    environment: { VERCEL_AUTOMATION_BYPASS_SECRET: "bypass" },
+  });
+  expect(config.VERCEL_AUTOMATION_BYPASS_SECRET).toBe("bypass");
+});

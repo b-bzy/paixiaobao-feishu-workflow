@@ -11,10 +11,24 @@ describe("deployment identity", () => {
       getDeploymentIdentity({
         VERCEL_ENV: "preview",
         VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
+        FEISHU_BASE_APP_TOKEN: "basCouponDraft",
+        FEISHU_COUPON_DRAFT_TABLE_ID: "tblCouponDraft",
       }),
     ).toEqual({
       environment: "preview",
       gitCommitSha: "74bd72e319582a1bf05be812bff2d2508208c2e3",
+      readiness: { couponOaDraftStoreConfigured: true },
+    });
+  });
+
+  it("reports missing coupon OA draft storage without exposing credentials", () => {
+    expect(
+      getDeploymentIdentity({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
+      }),
+    ).toMatchObject({
+      readiness: { couponOaDraftStoreConfigured: false },
     });
   });
 

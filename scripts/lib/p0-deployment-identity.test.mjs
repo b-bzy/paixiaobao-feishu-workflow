@@ -30,7 +30,10 @@ describe("P0 deployment identity", () => {
       status: 200,
       json: async () => ({
         code: 0,
-        result: { gitCommitSha: expectedGitCommitSha },
+        result: {
+          gitCommitSha: expectedGitCommitSha,
+          readiness: { couponOaDraftStoreConfigured: true },
+        },
       }),
     }));
 
@@ -64,6 +67,7 @@ describe("P0 deployment identity", () => {
             code: 0,
             result: {
               gitCommitSha: "04b456b1b12e201c3fbc2f55ea6c94de48189f3f",
+              readiness: { couponOaDraftStoreConfigured: true },
             },
           }),
         })),
@@ -79,5 +83,27 @@ describe("P0 deployment identity", () => {
         fetchImpl: vi.fn(async () => ({ ok: false, status: 404 })),
       }),
     ).rejects.toMatchObject({ code: "identity_http_error" });
+  });
+
+  it("fails closed when the OA test-draft Base is missing", async () => {
+    await expect(
+      verifyP0DeploymentIdentity({
+        target,
+        expectedGitCommitSha,
+        fetchImpl: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 0,
+            result: {
+              gitCommitSha: expectedGitCommitSha,
+              readiness: { couponOaDraftStoreConfigured: false },
+            },
+          }),
+        })),
+      }),
+    ).rejects.toMatchObject({
+      code: "coupon_oa_draft_store_not_configured",
+    });
   });
 });

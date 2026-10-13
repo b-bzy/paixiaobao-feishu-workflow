@@ -28,7 +28,13 @@ it("deploys with branch metadata and verifies identity using bypass", async () =
     fetchImpl: async (_url, options) => {
       identityHeaders = options.headers;
       return new Response(
-        JSON.stringify({ code: 0, result: { gitCommitSha: sha } }),
+        JSON.stringify({
+          code: 0,
+          result: {
+            gitCommitSha: sha,
+            readiness: { couponOaDraftStoreConfigured: true },
+          },
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     },

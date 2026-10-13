@@ -95,6 +95,8 @@ const approvalAttachments = [
 describe("three-source OA draft handoff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.FEISHU_BASE_APP_TOKEN = "basCouponDraft";
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
     vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([]);
     vi.mocked(uploadVerifiedCouponOaArtifacts).mockResolvedValue(
       approvalAttachments,
@@ -109,6 +111,18 @@ describe("three-source OA draft handoff", () => {
       attachments: input.attachments ?? [],
       validationIssues: [],
     }));
+  });
+
+  it("fails before uploading artifacts when the OA test-draft Base is incomplete", async () => {
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    await expect(
+      handoffThreeSourcePilotToOaDraft({
+        ownerOpenId: "ou_test",
+        prefill,
+        artifacts: frozenArtifacts,
+      }),
+    ).rejects.toThrow("OA 测试稿 Base 未配置：缺少 FEISHU_BASE_APP_TOKEN");
+    expect(uploadVerifiedCouponOaArtifacts).not.toHaveBeenCalled();
   });
 
   it("maps strict-only values and generated attachments into the existing OA draft shape", () => {

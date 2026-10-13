@@ -24,10 +24,33 @@ export function isCouponOaDraftDemo(): boolean {
   return getCouponOaMode() === "draft-demo";
 }
 
-export function isCouponOaDraftStoreConfigured(): boolean {
-  const appToken = process.env.FEISHU_BASE_APP_TOKEN?.trim();
-  const tableId = process.env.FEISHU_COUPON_DRAFT_TABLE_ID?.trim();
-  return Boolean(appToken && tableId && /^tbl[a-zA-Z0-9]+$/.test(tableId));
+export function getCouponOaDraftStoreConfigurationIssue(
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (!environment.FEISHU_BASE_APP_TOKEN?.trim()) {
+    return "OA 测试稿 Base 未配置：缺少 FEISHU_BASE_APP_TOKEN";
+  }
+  const tableId = environment.FEISHU_COUPON_DRAFT_TABLE_ID?.trim();
+  if (!tableId) {
+    return "OA 测试稿 Base 未配置：缺少 FEISHU_COUPON_DRAFT_TABLE_ID";
+  }
+  if (!/^tbl[a-zA-Z0-9]+$/.test(tableId)) {
+    return "OA 测试稿 Base 配置无效：FEISHU_COUPON_DRAFT_TABLE_ID 格式错误";
+  }
+  return undefined;
+}
+
+export function isCouponOaDraftStoreConfigured(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !getCouponOaDraftStoreConfigurationIssue(environment);
+}
+
+export function assertCouponOaDraftStoreConfigured(
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  const issue = getCouponOaDraftStoreConfigurationIssue(environment);
+  if (issue) throw new Error(issue);
 }
 
 function nativeSubmitEnabled(): boolean {

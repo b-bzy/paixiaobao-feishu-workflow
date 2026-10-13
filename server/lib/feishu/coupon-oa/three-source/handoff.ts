@@ -3,6 +3,7 @@ import {
   type CouponOaDraftValues,
   couponApplicationValuesSchema,
 } from "../approval-schema";
+import { assertCouponOaDraftStoreConfigured } from "../config";
 import {
   type CouponOaDraft,
   createCouponOaDraft,
@@ -112,6 +113,7 @@ export async function handoffThreeSourcePilotToOaDraft(input: {
   artifacts: FrozenThreeSourceArtifact[];
   oaDraftRecordId?: string;
 }): Promise<CouponOaDraft> {
+  assertCouponOaDraftStoreConfigured();
   if (input.oaDraftRecordId) return getCouponOaDraft(input.oaDraftRecordId);
 
   const active = await listActiveCouponOaDrafts(input.ownerOpenId);

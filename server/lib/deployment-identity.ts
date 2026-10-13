@@ -1,3 +1,5 @@
+import { isCouponOaDraftStoreConfigured } from "./feishu/coupon-oa/config";
+
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
 
 export class DeploymentIdentityUnavailableError extends Error {}
@@ -15,5 +17,8 @@ export function getDeploymentIdentity(
   return {
     gitCommitSha,
     environment: environment.VERCEL_ENV?.trim() || "unknown",
+    readiness: {
+      couponOaDraftStoreConfigured: isCouponOaDraftStoreConfigured(environment),
+    },
   } as const;
 }

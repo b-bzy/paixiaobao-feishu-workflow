@@ -79,6 +79,12 @@ export async function verifyP0DeploymentIdentity({
       `P0 deployment identity mismatch: expected ${expected.slice(0, 7)}, received ${actual.slice(0, 7)}`,
     );
   }
+  if (body?.result?.readiness?.couponOaDraftStoreConfigured !== true) {
+    throw new P0DeploymentIdentityError(
+      "coupon_oa_draft_store_not_configured",
+      "P0 Preview 缺少 OA 测试稿 Base 配置",
+    );
+  }
 
   return { gitCommitSha: actual };
 }

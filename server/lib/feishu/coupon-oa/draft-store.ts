@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { getTenantAccessToken } from "../client";
 import type { CouponOaDraftValues } from "./approval-schema";
-import { getCouponOaDraftTableId } from "./config";
+import {
+  assertCouponOaDraftStoreConfigured,
+  getCouponOaDraftTableId,
+} from "./config";
 
 export const couponOaDraftStatuses = [
   "Draft",
@@ -79,8 +82,7 @@ async function request(
   path: string,
   init: RequestInit = {},
 ): Promise<BaseRecord> {
-  const appToken = process.env.FEISHU_BASE_APP_TOKEN;
-  if (!appToken) throw new Error("Feishu Base POC is not configured");
+  assertCouponOaDraftStoreConfigured();
   const token = await getTenantAccessToken();
   const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
     ...init,
@@ -203,9 +205,9 @@ export async function getCouponOaDraft(
 export async function listActiveCouponOaDrafts(
   ownerOpenId: string,
 ): Promise<CouponOaDraft[]> {
+  assertCouponOaDraftStoreConfigured();
   const tableId = getCouponOaDraftTableId();
   const appToken = process.env.FEISHU_BASE_APP_TOKEN;
-  if (!appToken) throw new Error("Feishu Base POC is not configured");
   const token = await getTenantAccessToken();
   const response = await fetch(
     `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?page_size=100`,

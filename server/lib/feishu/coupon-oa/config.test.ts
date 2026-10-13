@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  assertCouponOaDraftStoreConfigured,
   assertCouponOaNativeSubmitAllowed,
   assertCouponOaUserAllowed,
   couponOaDraftInvocation,
@@ -61,6 +62,14 @@ describe("coupon OA configuration", () => {
 
     process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
     expect(isCouponOaDraftStoreConfigured()).toBe(true);
+  });
+
+  it("explains incomplete OA test-draft Base configuration in Chinese", () => {
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
+    expect(() => assertCouponOaDraftStoreConfigured()).toThrow(
+      "OA 测试稿 Base 未配置：缺少 FEISHU_BASE_APP_TOKEN",
+    );
   });
 
   it("defaults to disabled mode and only enables supported explicit modes", () => {

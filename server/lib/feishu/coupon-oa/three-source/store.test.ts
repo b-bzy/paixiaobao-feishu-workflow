@@ -203,15 +203,16 @@ describe("three-source pilot Base store", () => {
       return okRecord("rec-three-source", createdFields);
     });
 
-    const bumpedTask = {
-      ...draft.task,
-      revision: draft.task.revision + 1,
-      status: "AwaitingFinalConfirmation",
-    };
     await expect(
       updateCouponThreeSourcePilotDraft(
         draft,
-        { task: bumpedTask },
+        {
+          task: {
+            ...draft.task,
+            revision: draft.task.revision + 1,
+            status: "AwaitingFinalConfirmation",
+          },
+        },
         draft.task.revision,
       ),
     ).rejects.toThrow("write-back verification failed");

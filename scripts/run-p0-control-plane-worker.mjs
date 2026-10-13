@@ -1,9 +1,14 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { execFileSync } from "node:child_process";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 import { verifyP0DeploymentIdentity } from "./lib/p0-deployment-identity.mjs";
 import { assertExclusiveP0Worker } from "./lib/p0-worker-process-guard.mjs";
+import {
+  defaultTickMaxConsecutiveFailures,
+  defaultTickRetryBackoffBaseMs,
+  maxTickRetryBackoffCapMs,
+  runP0WorkerLoop,
+} from "./lib/p0-control-plane-worker-loop.mjs";
 
 if (
   process.env.HTTP_PROXY ||
@@ -25,6 +30,18 @@ function requiredEnvironment(name) {
   return value;
 }
 
+function boundedIntegerEnvironment(name, { minimum, maximum, fallback }) {
+  const value = process.env[name]?.trim() || String(fallback);
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${name} must be an integer`);
+  }
+  const parsed = Number(value);
+  if (parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+}
+
 function p0Target() {
   const value = requiredEnvironment("FEISHU_BRIDGE_TARGET_URL");
   const target = new URL(value);
@@ -43,20 +60,6 @@ function p0Target() {
   return target;
 }
 
-function intervalMs() {
-  const value = process.env.CONTROL_PLANE_TICK_INTERVAL_MS?.trim() || "3000";
-  if (!/^\d+$/u.test(value)) {
-    throw new Error("CONTROL_PLANE_TICK_INTERVAL_MS must be an integer");
-  }
-  const parsed = Number(value);
-  if (parsed < 1000 || parsed > 60_000) {
-    throw new Error(
-      "CONTROL_PLANE_TICK_INTERVAL_MS must be between 1000 and 60000",
-    );
-  }
-  return parsed;
-}
-
 const target = p0Target();
 const expectedGitCommitSha = requiredEnvironment(
   "FEISHU_P0_EXPECTED_GIT_SHA",
@@ -65,7 +68,22 @@ const tickToken = requiredEnvironment("CONTROL_PLANE_TICK_TOKEN");
 const vercelAutomationBypassSecret =
   process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || undefined;
 const tickUrl = new URL("/api/internal/control-plane/tick", target.origin);
-const tickIntervalMs = intervalMs();
+const tickIntervalMs = boundedIntegerEnvironment(
+  "CONTROL_PLANE_TICK_INTERVAL_MS",
+  { minimum: 1_000, maximum: 60_000, fallback: 3_000 },
+);
+const maxConsecutiveFailures = boundedIntegerEnvironment(
+  "CONTROL_PLANE_TICK_MAX_CONSECUTIVE_FAILURES",
+  { minimum: 1, maximum: 100, fallback: defaultTickMaxConsecutiveFailures },
+);
+const retryBackoffBaseMs = boundedIntegerEnvironment(
+  "CONTROL_PLANE_TICK_RETRY_BACKOFF_MS",
+  {
+    minimum: 250,
+    maximum: maxTickRetryBackoffCapMs,
+    fallback: defaultTickRetryBackoffBaseMs,
+  },
+);
 
 const identity = await verifyP0DeploymentIdentity({
   target,
@@ -84,50 +102,25 @@ process.on("SIGTERM", () => {
   stopping = true;
 });
 
-while (!stopping) {
-  const headers = {
+const outcome = await runP0WorkerLoop({
+  tickUrl,
+  headers: {
     authorization: `Bearer ${tickToken}`,
     "content-type": "application/json",
-  };
-  if (vercelAutomationBypassSecret) {
-    headers["x-vercel-protection-bypass"] = vercelAutomationBypassSecret;
-  }
+    ...(vercelAutomationBypassSecret
+      ? { "x-vercel-protection-bypass": vercelAutomationBypassSecret }
+      : {}),
+  },
+  tickIntervalMs,
+  maxConsecutiveFailures,
+  retryBackoffBaseMs,
+  isStopping: () => stopping,
+  log: (line) => console.log(`[worker] ${line}`),
+});
 
-  let response;
-  try {
-    response = await fetch(tickUrl, {
-      method: "POST",
-      headers,
-      body: "{}",
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch {
-    console.error("[worker] control-plane tick failed before receiving a response");
-    process.exit(1);
-  }
-  if (!response.ok) {
-    console.error(`[worker] control-plane tick received HTTP ${response.status}`);
-    process.exit(1);
-  }
-
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    console.error("[worker] control-plane tick returned invalid JSON");
-    process.exit(1);
-  }
-  if (body?.code !== 0) {
-    console.error("[worker] control-plane tick returned an unsuccessful result");
-    process.exit(1);
-  }
-
-  const claimed =
-    (body.result?.jobs?.claimed ?? 0) + (body.result?.effects?.claimed ?? 0);
-  if (claimed > 0) {
-    console.log(
-      `[worker] processed jobs=${body.result.jobs?.succeeded ?? 0} effects=${body.result.effects?.succeeded ?? 0}`,
-    );
-  }
-  await delay(tickIntervalMs);
+if (outcome.gaveUp) {
+  console.error(
+    `[worker] giving up after ${outcome.consecutiveFailures} consecutive tick failures (${outcome.reason})`,
+  );
+  process.exit(1);
 }

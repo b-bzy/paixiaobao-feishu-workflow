@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { parseExpectedGitCommitSha } from "./p0-deployment-identity.mjs";
 
@@ -9,9 +10,15 @@ export const supportedBridgeEventTypes = [
   "card.action.trigger",
 ];
 export const defaultBridgeForwardTimeoutMs = 10_000;
+export const defaultBridgeForwardAttempts = 3;
+export const defaultBridgeForwardRetryDelayMs = 2_000;
 
 const minimumBridgeForwardTimeoutMs = 1_000;
 const maximumBridgeForwardTimeoutMs = 60_000;
+const minimumBridgeForwardAttempts = 1;
+const maximumBridgeForwardAttempts = 10;
+const minimumBridgeForwardRetryDelayMs = 250;
+const maximumBridgeForwardRetryDelayMs = 30_000;
 const keyIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 export class BridgeConfigurationError extends Error {}
@@ -119,25 +126,32 @@ function parseEventTypes(value) {
 }
 
 function parseForwardTimeout(value) {
+  return parsePositiveInteger(value, "FEISHU_BRIDGE_FORWARD_TIMEOUT_MS", {
+    minimum: minimumBridgeForwardTimeoutMs,
+    maximum: maximumBridgeForwardTimeoutMs,
+    fallback: defaultBridgeForwardTimeoutMs,
+  });
+}
+
+function parsePositiveInteger(
+  value,
+  name,
+  { minimum, maximum, fallback },
+) {
   if (value === undefined || value.trim() === "") {
-    return defaultBridgeForwardTimeoutMs;
+    return fallback;
   }
   if (!/^\d+$/u.test(value.trim())) {
-    throw new BridgeConfigurationError(
-      "FEISHU_BRIDGE_FORWARD_TIMEOUT_MS must be an integer",
-    );
+    throw new BridgeConfigurationError(`${name} must be an integer`);
   }
 
-  const timeoutMs = Number(value);
-  if (
-    timeoutMs < minimumBridgeForwardTimeoutMs ||
-    timeoutMs > maximumBridgeForwardTimeoutMs
-  ) {
+  const parsed = Number(value);
+  if (parsed < minimum || parsed > maximum) {
     throw new BridgeConfigurationError(
-      "FEISHU_BRIDGE_FORWARD_TIMEOUT_MS must be between 1000 and 60000",
+      `${name} must be between ${minimum} and ${maximum}`,
     );
   }
-  return timeoutMs;
+  return parsed;
 }
 
 function parseBridgeMode(environment) {
@@ -174,6 +188,24 @@ export function getBridgeRuntimeConfig(environment) {
     eventTypes: parseEventTypes(environment.FEISHU_BRIDGE_EVENT_TYPES),
     forwardTimeoutMs: parseForwardTimeout(
       environment.FEISHU_BRIDGE_FORWARD_TIMEOUT_MS,
+    ),
+    forwardAttempts: parsePositiveInteger(
+      environment.FEISHU_BRIDGE_FORWARD_ATTEMPTS,
+      "FEISHU_BRIDGE_FORWARD_ATTEMPTS",
+      {
+        minimum: minimumBridgeForwardAttempts,
+        maximum: maximumBridgeForwardAttempts,
+        fallback: defaultBridgeForwardAttempts,
+      },
+    ),
+    forwardRetryDelayMs: parsePositiveInteger(
+      environment.FEISHU_BRIDGE_FORWARD_RETRY_DELAY_MS,
+      "FEISHU_BRIDGE_FORWARD_RETRY_DELAY_MS",
+      {
+        minimum: minimumBridgeForwardRetryDelayMs,
+        maximum: maximumBridgeForwardRetryDelayMs,
+        fallback: defaultBridgeForwardRetryDelayMs,
+      },
     ),
     expectedGitCommitSha: mode.p0Mode
       ? parseExpectedGitCommitSha(environment.FEISHU_P0_EXPECTED_GIT_SHA)
@@ -364,22 +396,36 @@ export async function forwardBridgeRequest({
   }
 }
 
-export function createSerialForwarder({ forward, onFatal }) {
-  let stopped = false;
+export async function forwardBridgeRequestWithRetries({
+  body,
+  config,
+  fetchImpl = fetch,
+  sleepImpl = delay,
+}) {
+  let lastError;
+  for (let attempt = 1; attempt <= config.forwardAttempts; attempt += 1) {
+    try {
+      return await forwardBridgeRequest({ body, config, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      if (attempt < config.forwardAttempts) {
+        await sleepImpl(
+          config.forwardRetryDelayMs * 2 ** (attempt - 1),
+        );
+      }
+    }
+  }
+  throw lastError;
+}
+
+export function createSerialForwarder({ forward, onDrop }) {
   let tail = Promise.resolve();
 
   function enqueue(item) {
-    if (stopped) return tail;
-
     tail = tail
-      .then(() => {
-        if (stopped) return undefined;
-        return forward(item);
-      })
+      .then(() => forward(item))
       .catch((error) => {
-        if (stopped) return;
-        stopped = true;
-        onFatal(item, error);
+        onDrop?.(item, error);
       });
     return tail;
   }
@@ -387,7 +433,6 @@ export function createSerialForwarder({ forward, onFatal }) {
   return {
     enqueue,
     drain: () => tail,
-    stopped: () => stopped,
   };
 }
 

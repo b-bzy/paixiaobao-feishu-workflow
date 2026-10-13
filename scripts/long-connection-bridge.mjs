@@ -7,7 +7,7 @@ import {
   createBridgeEventEnvelope,
   createSerialForwarder,
   displayBridgeTarget,
-  forwardBridgeRequest,
+  forwardBridgeRequestWithRetries,
   getBridgeRuntimeConfig,
 } from "./lib/long-connection-bridge-runtime.mjs";
 import { verifyP0DeploymentIdentity } from "./lib/p0-deployment-identity.mjs";
@@ -67,7 +67,7 @@ function formatForwardFailure(error) {
 async function forward({ key, event, toPayload }) {
   const payload = toPayload(event);
   const body = JSON.stringify(payload);
-  const result = await forwardBridgeRequest({ body, config });
+  const result = await forwardBridgeRequestWithRetries({ body, config });
 
   console.log(
     `[bridge] forwarded ${key}: id=${payload.header?.event_id ?? "missing"} status=${result.status}`,
@@ -76,11 +76,10 @@ async function forward({ key, event, toPayload }) {
 
 const serialForwarder = createSerialForwarder({
   forward,
-  onFatal: (item, error) => {
+  onDrop: (item, error) => {
     console.error(
-      `[bridge] forward failed: event=${item.key} id=${eventId(item.event)} ${formatForwardFailure(error)}`,
+      `[bridge] forward failed after ${config.forwardAttempts} attempts: event=${item.key} id=${eventId(item.event)} ${formatForwardFailure(error)}`,
     );
-    shutdown(1);
   },
 });
 

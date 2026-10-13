@@ -7,6 +7,7 @@ import {
   createBridgeSignedHeaders,
   createSerialForwarder,
   forwardBridgeRequest,
+  forwardBridgeRequestWithRetries,
   getBridgeRuntimeConfig,
   pocBridgePath,
   supportedBridgeEventTypes,
@@ -31,6 +32,8 @@ describe("long connection bridge runtime", () => {
     expect(config.target.pathname).toBe(bridgePath);
     expect(config.eventTypes).toEqual(supportedBridgeEventTypes);
     expect(config.forwardTimeoutMs).toBe(10_000);
+    expect(config.forwardAttempts).toBe(3);
+    expect(config.forwardRetryDelayMs).toBe(2_000);
     expect(config.vercelAutomationBypassSecret).toBeUndefined();
   });
 
@@ -346,25 +349,118 @@ describe("long connection bridge runtime", () => {
     vi.useRealTimers();
   });
 
-  it("stops the serial queue after its first forwarding failure", async () => {
+  it("drops the failed event and keeps forwarding later events", async () => {
     const forwarded = [];
-    const fatal = vi.fn();
+    const dropped = [];
     const queue = createSerialForwarder({
       forward: async ({ id }) => {
         forwarded.push(id);
         if (id === "first") throw new BridgeForwardError("network_error");
       },
-      onFatal: fatal,
+      onDrop: (item, error) => dropped.push([item.id, error.code]),
     });
 
     queue.enqueue({ id: "first" });
     queue.enqueue({ id: "second" });
     await queue.drain();
 
-    expect(forwarded).toEqual(["first"]);
-    expect(fatal).toHaveBeenCalledTimes(1);
-    expect(fatal.mock.calls[0][0]).toMatchObject({ id: "first" });
-    expect(fatal.mock.calls[0][1]).toMatchObject({ code: "network_error" });
-    expect(queue.stopped()).toBe(true);
+    expect(forwarded).toEqual(["first", "second"]);
+    expect(dropped).toEqual([["first", "network_error"]]);
+  });
+
+  it("retries a failed forward with fresh signing headers until it succeeds", async () => {
+    const config = getBridgeRuntimeConfig(
+      environment({ FEISHU_BRIDGE_FORWARD_ATTEMPTS: "3" }),
+    );
+    const sleeps = [];
+    const responses = [
+      { ok: false, status: 503, text: async () => "sensitive body" },
+      { ok: true, status: 200 },
+    ];
+    const fetchImpl = vi.fn(async () => responses.shift());
+
+    const result = await forwardBridgeRequestWithRetries({
+      body: "{}",
+      config,
+      fetchImpl,
+      sleepImpl: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(result).toEqual({ status: 200 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleeps).toEqual([2_000]);
+    const firstHeaders = fetchImpl.mock.calls[0][1].headers;
+    const secondHeaders = fetchImpl.mock.calls[1][1].headers;
+    expect(firstHeaders["x-feishu-bridge-nonce"]).not.toBe(
+      secondHeaders["x-feishu-bridge-nonce"],
+    );
+    expect(firstHeaders["x-feishu-bridge-signature"]).not.toBe(
+      secondHeaders["x-feishu-bridge-signature"],
+    );
+  });
+
+  it("drops the event only after exhausting every forward attempt", async () => {
+    const config = getBridgeRuntimeConfig(
+      environment({
+        FEISHU_BRIDGE_FORWARD_ATTEMPTS: "2",
+        FEISHU_BRIDGE_FORWARD_RETRY_DELAY_MS: "250",
+      }),
+    );
+    const sleeps = [];
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      text: async () => "sensitive body",
+    }));
+
+    await expect(
+      forwardBridgeRequestWithRetries({
+        body: "{}",
+        config,
+        fetchImpl,
+        sleepImpl: async (ms) => {
+          sleeps.push(ms);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 503 });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleeps).toEqual([250]);
+  });
+
+  it("accepts explicit forward retry tuning", () => {
+    const config = getBridgeRuntimeConfig(
+      environment({
+        FEISHU_BRIDGE_FORWARD_ATTEMPTS: "5",
+        FEISHU_BRIDGE_FORWARD_RETRY_DELAY_MS: "500",
+      }),
+    );
+
+    expect(config.forwardAttempts).toBe(5);
+    expect(config.forwardRetryDelayMs).toBe(500);
+  });
+
+  it.each([
+    ["0", "between 1 and 10"],
+    ["eleven", "must be an integer"],
+  ])("rejects unsafe forward attempts %s", (attempts, message) => {
+    expect(() =>
+      getBridgeRuntimeConfig(
+        environment({ FEISHU_BRIDGE_FORWARD_ATTEMPTS: attempts }),
+      ),
+    ).toThrow(message);
+  });
+
+  it.each([
+    ["100", "between 250 and 30000"],
+    ["fast", "must be an integer"],
+  ])("rejects unsafe forward retry delay %s", (delay, message) => {
+    expect(() =>
+      getBridgeRuntimeConfig(
+        environment({ FEISHU_BRIDGE_FORWARD_RETRY_DELAY_MS: delay }),
+      ),
+    ).toThrow(message);
   });
 });

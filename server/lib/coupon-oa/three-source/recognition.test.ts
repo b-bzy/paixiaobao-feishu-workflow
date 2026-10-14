@@ -202,7 +202,7 @@ describe("single coupon confirmation", () => {
     expect(confirmed.activityPointPercent).toBe(6);
   });
 
-  it("requires owner confirmation for activity point and override reasons", async () => {
+  it("requires owner confirmation for activity point and accepts explicit-value overrides", async () => {
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([couponRow("活动A", "100", "20")]),
     );
@@ -217,18 +217,22 @@ describe("single coupon confirmation", () => {
         couponCandidateId: candidate.id,
       }),
     ).rejects.toThrow("活动点位必须由业务员确认");
-    await expect(
-      confirmRegularFullReductionCoupon({
-        recognition,
-        ownerId: "owner-1",
-        revision: 1,
-        couponCandidateId: candidate.id,
-        ownerFieldValues: {
-          thresholdYuan: 999,
-          activityPointPercent: 6,
-        },
-      }),
-    ).rejects.toThrow("修改表格中的明确值时必须填写原因");
+    const confirmed = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      couponCandidateId: candidate.id,
+      ownerFieldValues: {
+        thresholdYuan: 999,
+        activityPointPercent: 6,
+      },
+    });
+    expect(confirmed.input.thresholdYuan).toBe(999);
+    expect(confirmed.provenance.thresholdYuan).toMatchObject({
+      sourceKind: "ownerSupplement",
+      ownerId: "owner-1",
+      revision: 1,
+    });
   });
 
   it("accepts an owner-confirmed AI inference without a separate override reason", async () => {

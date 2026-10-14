@@ -645,10 +645,6 @@ function normalizedOwnerValue(key: CouponFieldKey, value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
 }
 
-function normalizedValuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function safelyNormalizeOwnerValue(
   key: CouponFieldKey,
   value: unknown,
@@ -775,30 +771,9 @@ export async function confirmRegularFullReductionCoupon(
         key,
         input.ownerFieldValues?.[key],
       );
-      const sourceValue = source?.rawValue
-        ? safelyNormalizeOwnerValue(key, source.rawValue)
-        : undefined;
-      const aiValue =
-        aiCandidate?.value !== undefined
-          ? safelyNormalizeOwnerValue(key, aiCandidate.value)
-          : undefined;
-      const activityCopyValue = input.aiRecognition?.activityCopyCandidates
-        ?.filter((candidate) => candidate.key === key)
-        .map((candidate) => safelyNormalizeOwnerValue(key, candidate.value))
-        .find((value) => normalizedValuesEqual(value, ownerValue));
-      const confirmsRecognizedValue =
-        normalizedValuesEqual(sourceValue, ownerValue) ||
-        normalizedValuesEqual(aiValue, ownerValue) ||
-        activityCopyValue !== undefined ||
-        ((key === "activityName" || key === "activityBackground") &&
-          Boolean(ownerValue));
-      if (
-        source?.rawValue &&
-        !confirmsRecognizedValue &&
-        !input.overrideReasons?.[key]?.trim()
-      ) {
-        throw new Error("修改表格中的明确值时必须填写原因");
-      }
+      // Owner-provided values take precedence over explicit workbook cells;
+      // the modification is fully traced in provenance (sourceKind
+      // "ownerSupplement" plus before/after values, owner and revision).
       values[key] = ownerValue;
       provenance[key] = {
         sourceHash: input.recognition.sourceHash,

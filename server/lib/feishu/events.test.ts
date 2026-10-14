@@ -7,6 +7,7 @@ vi.mock("./client", () => ({
   updateFeishuCard: vi.fn(),
 }));
 vi.mock("./coupon-oa/draft-store", () => ({
+  COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION: "coupon-three-source-pilot-v1",
   getCouponOaDraft: vi.fn(),
   listActiveCouponOaDrafts: vi.fn(),
   saveCouponOaDraft: vi.fn(),
@@ -60,7 +61,10 @@ import {
   saveCouponOaDraft,
   updateCouponOaDraft,
 } from "./coupon-oa/draft-store";
-import { submitConfirmedCouponOaDraft } from "./coupon-oa/submit-service";
+import {
+  confirmCouponOaDraft,
+  submitConfirmedCouponOaDraft,
+} from "./coupon-oa/submit-service";
 import { handleFeishuPocEvent, isExpenseInvocation } from "./events";
 
 function couponOaEvent(
@@ -609,5 +613,181 @@ describe("handleFeishuPocEvent", () => {
       "ou_submitter",
       expect.objectContaining({ schema: "2.0" }),
     );
+  });
+
+  describe("three-source P0 ingress passthrough", () => {
+    const pilotOaDraft = {
+      ...couponDraft,
+      schemaVersion: "coupon-three-source-pilot-v1",
+    };
+
+    function cardActionEvent(
+      action: string,
+      draftRecordId = "rec-coupon-draft",
+    ) {
+      return {
+        header: { event_id: `event-${action}`, token: "verify-me" },
+        operator: { open_id: "ou_submitter" },
+        action: { value: { action, draftRecordId } },
+      };
+    }
+
+    it("routes coupon_oa_confirm on a pilot draft through to the submit card", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue(pilotOaDraft);
+      vi.mocked(missingCouponOaAttachments).mockReturnValue([]);
+      vi.mocked(confirmCouponOaDraft).mockResolvedValue({
+        ...pilotOaDraft,
+        status: "Confirmed",
+        definitionHash: "definition-hash",
+      });
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_confirm"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(confirmCouponOaDraft).toHaveBeenCalledOnce();
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("确认提交正式优惠券 OA");
+      expect(result).toEqual({
+        kind: "handled",
+        message: `Confirmed coupon OA draft ${pilotOaDraft.draftId}`,
+      });
+    });
+
+    it("answers a confirm failure with an error card instead of a bare 500", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue(pilotOaDraft);
+      vi.mocked(missingCouponOaAttachments).mockReturnValue([]);
+      vi.mocked(confirmCouponOaDraft).mockRejectedValue(
+        new Error("无法唯一确定申请部门"),
+      );
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_confirm"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("无法唯一确定申请部门");
+      expect(result.kind).toBe("handled");
+    });
+
+    it("re-delivers the submit card on a repeated confirm click", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue({
+        ...pilotOaDraft,
+        status: "Confirmed",
+        definitionHash: "definition-hash",
+      });
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_confirm"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(confirmCouponOaDraft).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("确认提交正式优惠券 OA");
+      expect(result).toMatchObject({ kind: "handled" });
+    });
+
+    it("tells double submit clicks to wait for the in-flight result", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue({
+        ...pilotOaDraft,
+        status: "Submitting",
+      });
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_submit"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(submitConfirmedCouponOaDraft).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("正在提交");
+      expect(result).toMatchObject({ kind: "handled" });
+    });
+
+    it("rejects non-pilot OA drafts with an explicit card, not silence", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue(couponDraft);
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_confirm"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(confirmCouponOaDraft).not.toHaveBeenCalled();
+      expect(updateCouponOaDraft).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("当前入口仅支持三源提报交接的优惠券 OA 草稿");
+      expect(result).toMatchObject({ kind: "handled" });
+    });
+
+    it("lets the owner cancel a confirmed pilot draft from the P0 ingress", async () => {
+      vi.mocked(getCouponOaDraft).mockResolvedValue({
+        ...pilotOaDraft,
+        status: "Confirmed",
+        definitionHash: "definition-hash",
+      });
+      vi.mocked(updateCouponOaDraft).mockResolvedValue({
+        ...pilotOaDraft,
+        status: "Canceled",
+      });
+
+      const result = await handleFeishuPocEvent(
+        cardActionEvent("coupon_oa_cancel"),
+        {
+          trustedIngress: "bridge",
+          threeSourceOnly: true,
+        },
+      );
+
+      expect(updateCouponOaDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "Confirmed" }),
+        { status: "Canceled" },
+      );
+      expect(
+        JSON.stringify(vi.mocked(sendFeishuCard).mock.calls[0]?.[1]),
+      ).toContain("已结束");
+      expect(result).toMatchObject({ kind: "handled" });
+    });
+
+    it("still ignores unrelated card actions on the P0 ingress", async () => {
+      const result = await handleFeishuPocEvent(
+        {
+          header: { event_id: "event-unknown", token: "verify-me" },
+          operator: { open_id: "ou_submitter" },
+          action: {
+            value: { action: "coupon_oa_draft_save", draftRecordId: "rec-x" },
+          },
+        },
+        { trustedIngress: "bridge", threeSourceOnly: true },
+      );
+
+      expect(result).toEqual({
+        kind: "ignored",
+        reason: "Unsupported three-source P0 action",
+      });
+      expect(sendFeishuCard).not.toHaveBeenCalled();
+    });
   });
 });

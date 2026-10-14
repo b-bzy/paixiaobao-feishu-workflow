@@ -402,6 +402,8 @@ export function buildCouponOaSubmitCard(input: {
   draftRecordId: string;
   values: CouponOaDraftValues;
   attachments: CouponOaAttachment[];
+  /** Overrides the legacy-route step label (e.g. "第 6 步：…" for the pilot chain). */
+  stepLabel?: string;
 }): FeishuCard {
   const preview = buildCouponOaPreviewCard({
     draftRecordId: input.draftRecordId,
@@ -412,7 +414,7 @@ export function buildCouponOaSubmitCard(input: {
   const reviewElements = preview.body.elements.slice(0, -1);
   return baseCard(
     "确认提交正式优惠券 OA",
-    "第 3 步：此操作会创建真实 OA 并进入原生审批流",
+    input.stepLabel ?? "第 3 步：此操作会创建真实 OA 并进入原生审批流",
     "orange",
     "待提交",
     [
@@ -436,6 +438,37 @@ export function buildCouponOaSubmitCard(input: {
             },
           },
         ],
+      },
+      {
+        tag: "button",
+        text: plainText("放弃本次提交"),
+        type: "default",
+        width: "fill",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              action: "coupon_oa_cancel",
+              draftRecordId: input.draftRecordId,
+            },
+          },
+        ],
+      },
+    ],
+  );
+}
+
+export function buildCouponOaSubmissionInProgressCard(): FeishuCard {
+  return baseCard(
+    "正式 OA 正在提交",
+    "请耐心等待最新结果卡片",
+    "orange",
+    "提交中",
+    [
+      {
+        tag: "markdown",
+        content:
+          "系统正在创建正式审批并做创建后回读核对。**请勿重复点击提交**；结果卡片会显示创建结果或复核提示。",
       },
     ],
   );

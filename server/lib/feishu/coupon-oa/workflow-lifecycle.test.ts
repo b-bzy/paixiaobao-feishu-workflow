@@ -7,6 +7,7 @@ import {
   isCouponWorkflowIdle,
   isExpiredCouponExcelPilot,
   isExpiredCouponOaDraft,
+  isUserCancelableCouponOaDraft,
 } from "./workflow-lifecycle";
 
 const baseTime = Date.parse("2026-09-30T10:00:00.000Z");
@@ -78,6 +79,34 @@ describe("coupon workflow lifecycle", () => {
         { ...pilotDraft, status: "GeneratedConfirmed" },
         now,
       ),
+    ).toBe(false);
+  });
+
+  it("lets the owner abandon a confirmed draft but not in-flight or settled ones", () => {
+    expect(isUserCancelableCouponOaDraft(oaDraft)).toBe(true);
+    expect(
+      isUserCancelableCouponOaDraft({ ...oaDraft, status: "Failed" }),
+    ).toBe(true);
+    expect(
+      isUserCancelableCouponOaDraft({ ...oaDraft, status: "Confirmed" }),
+    ).toBe(true);
+    expect(
+      isUserCancelableCouponOaDraft({ ...oaDraft, status: "Submitting" }),
+    ).toBe(false);
+    expect(
+      isUserCancelableCouponOaDraft({ ...oaDraft, status: "Submitted" }),
+    ).toBe(false);
+    expect(
+      isUserCancelableCouponOaDraft({
+        ...oaDraft,
+        status: "SubmissionUnknown",
+      }),
+    ).toBe(false);
+    expect(
+      isUserCancelableCouponOaDraft({
+        ...oaDraft,
+        status: "CreatedNeedsReview",
+      }),
     ).toBe(false);
   });
 });

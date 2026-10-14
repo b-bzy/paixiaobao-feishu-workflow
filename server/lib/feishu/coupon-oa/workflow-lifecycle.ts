@@ -35,6 +35,15 @@ export function isCancelableCouponOaDraft(draft: CouponOaDraft): boolean {
   return ["Draft", "Validated", "Failed"].includes(draft.status);
 }
 
+/**
+ * Owner-initiated cancellation may also abandon a Confirmed snapshot before
+ * submission. Submitting and later states stay manual-reconciliation only:
+ * they may already reference a native instance.
+ */
+export function isUserCancelableCouponOaDraft(draft: CouponOaDraft): boolean {
+  return ["Draft", "Validated", "Failed", "Confirmed"].includes(draft.status);
+}
+
 export function isCancelableCouponExcelPilot(
   draft: CouponExcelPilotDraft,
 ): boolean {

@@ -3,12 +3,15 @@ import {
   normalizeCouponOwnerInputs,
 } from "../../../coupon-oa/three-source/owner-input";
 import type { CouponFieldKey } from "../../../coupon-oa/three-source/types";
-import { sendFeishuCard } from "../../client";
+import { sendFeishuCard, updateFeishuCard } from "../../client";
 import {
   downloadFeishuMessageResource,
   getFeishuMessageBody,
 } from "../../message-client";
-import { buildCouponOaPreviewCard } from "../cards";
+import {
+  buildCouponOaAttachmentRequestCard,
+  buildCouponOaSubmitCard,
+} from "../cards";
 import {
   assertCouponOaUserAllowed,
   isCouponOaDraftDemo,
@@ -16,13 +19,22 @@ import {
   isCouponOaEnabled,
 } from "../config";
 import { missingCouponOaAttachments } from "../draft-service";
-import { getCouponOaDraft, listActiveCouponOaDrafts } from "../draft-store";
+import {
+  COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
+  type CouponOaDraft,
+  getCouponOaDraft,
+  listActiveCouponOaDrafts,
+  updateCouponOaDraft,
+} from "../draft-store";
 import { isCouponExcelPilotEnabled } from "../excel-pilot-config";
 import { listActiveCouponExcelPilotDrafts } from "../excel-pilot-store";
+import { confirmCouponOaDraft } from "../submit-service";
+import { isUserCancelableCouponOaDraft } from "../workflow-lifecycle";
 import {
   buildCouponThreeSourceClearedCard,
   buildCouponThreeSourceCompletedCard,
   buildCouponThreeSourceErrorCard,
+  buildCouponThreeSourceGeneratingArtifactsCard,
   buildCouponThreeSourceIntakeCard,
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceOverlapCard,
@@ -81,7 +93,14 @@ export interface CouponThreeSourceDispatcherDependencies {
     idempotencyKey?: string,
   ): Promise<void>;
   deliverMappingCard: typeof deliverCouponThreeSourceMappingCard;
+  updateCard?: typeof updateFeishuCard;
   getOaDraft: typeof getCouponOaDraft;
+  /** Owner-scoped cancel of a pilot OA draft; used by the /clear cascade. */
+  cancelOaDraft?(
+    draft: CouponOaDraft,
+  ): Promise<Awaited<ReturnType<typeof updateCouponOaDraft>>>;
+  /** Freezes the pilot OA draft (definition hash + identity) before send. */
+  confirmOaDraft?: typeof confirmCouponOaDraft;
 }
 
 const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
@@ -107,6 +126,9 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   downloadFile: downloadFeishuMessageResource,
   sendCard: sendFeishuCard,
   deliverMappingCard: deliverCouponThreeSourceMappingCard,
+  updateCard: updateFeishuCard,
+  cancelOaDraft: (draft) => updateCouponOaDraft(draft, { status: "Canceled" }),
+  confirmOaDraft: confirmCouponOaDraft,
   getOaDraft: getCouponOaDraft,
 };
 
@@ -341,6 +363,145 @@ function mappingSelections(form: Record<string, unknown>) {
   };
 }
 
+const couponOwnerFieldLabels: Partial<Record<CouponFieldKey, string>> = {
+  businessMode: "业务模式",
+  activityName: "活动名称",
+  activityBackground: "活动背景",
+  activityStartAt: "活动开始日期",
+  activityEndAt: "活动结束日期",
+  overDeduction: "是否超扣",
+  overDeductionReason: "超扣原因",
+};
+
+/**
+ * Friendly, Chinese pre-validation that runs BEFORE any revision bump. A
+ * failed submit must leave the draft untouched so the owner can correct the
+ * same card instead of hitting a "revision changed" dead end. Only MISSING
+ * required fields are rejected here: malformed inputs (e.g. "9月30日") must
+ * still flow into the AI form-repair path, which can fix them.
+ */
+function assertMappingFormReady(
+  selections: { ownerFieldValues?: Partial<Record<CouponFieldKey, unknown>> },
+  draft: CouponThreeSourcePilotDraft,
+): { ownerFieldValues: Partial<Record<CouponFieldKey, unknown>> } {
+  const merged = {
+    ...(draft.selections.ownerFieldValues ?? {}),
+    ...(selections.ownerFieldValues ?? {}),
+  };
+  const requiredKeys: CouponFieldKey[] = [
+    "businessMode",
+    "activityName",
+    "activityBackground",
+    "activityStartAt",
+    "activityEndAt",
+    "overDeduction",
+  ];
+  const missing = requiredKeys.filter(
+    (key) => !String(merged[key] ?? "").trim(),
+  );
+  if (missing.length) {
+    throw new Error(
+      `请先完整填写：${missing.map((key) => couponOwnerFieldLabels[key] ?? key).join("、")}`,
+    );
+  }
+  if (
+    merged.overDeduction === "是" &&
+    !String(merged.overDeductionReason ?? "").trim()
+  ) {
+    throw new Error("选择「是，需要填写超扣原因」后，超扣原因为必填");
+  }
+  const ownerFieldValues = {
+    ...(selections.ownerFieldValues ?? {}),
+    ...(merged.overDeduction === "否" ? { overDeductionReason: "" } : {}),
+  };
+  return { ownerFieldValues };
+}
+
+/**
+ * Runs artifact generation; on failure, reverts the GeneratingArtifacts
+ * marker and re-delivers the second-round form so the owner can retry on a
+ * live card instead of a dead "generating" card. The original error still
+ * propagates so the caller's catch sends the failure card.
+ */
+async function runGenerationWithRecovery(input: {
+  service: CouponThreeSourcePilotService;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+  openId: string;
+  updated: CouponThreeSourcePilotDraft;
+  operationId: string;
+}): Promise<CouponThreeSourcePilotDraft> {
+  try {
+    return await input.service.confirmSourcesAndGenerate({
+      draft: input.updated,
+      ownerOpenId: input.openId,
+      expectedRevision: input.updated.task.revision,
+      operationId: input.operationId,
+    });
+  } catch (error) {
+    const recovered = await input.service
+      .recoverFailedGeneration({
+        draft: input.updated,
+        ownerOpenId: input.openId,
+        expectedRevision: input.updated.task.revision,
+      })
+      .catch(() => undefined);
+    if (recovered) {
+      await input.dependencies
+        .deliverMappingCard({ draft: recovered })
+        .catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Loads the handed-off OA draft, freezes it server-side (definition hash +
+ * identity snapshot — the owner's single human confirmation is the send
+ * click itself), and delivers the merged send card.
+ */
+async function deliverPilotSendCard(input: {
+  openId: string;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+  oaDraftRecordId: string;
+  idempotencyKey?: string;
+}): Promise<void> {
+  let oaDraft = await input.dependencies.getOaDraft(input.oaDraftRecordId);
+  if (
+    input.dependencies.confirmOaDraft &&
+    ["Draft", "Validated", "Failed"].includes(oaDraft.status)
+  ) {
+    oaDraft = await input.dependencies.confirmOaDraft(oaDraft);
+  }
+  await input.dependencies.sendCard(
+    input.openId,
+    pilotOaSubmitCard(oaDraft),
+    input.idempotencyKey,
+  );
+}
+
+/**
+ * The pilot chain collapses generation, handoff and submission into one
+ * human confirmation: after the second-round form the owner receives a
+ * single draft card whose button sends the formal OA.
+ */
+function pilotOaSubmitCard(
+  oaDraft: Awaited<ReturnType<typeof getCouponOaDraft>>,
+): ReturnType<typeof buildCouponOaSubmitCard> {
+  const missing = missingCouponOaAttachments(oaDraft);
+  if (missing.length) {
+    return buildCouponOaAttachmentRequestCard({
+      draftId: oaDraft.draftId,
+      missing,
+    });
+  }
+  return buildCouponOaSubmitCard({
+    draftRecordId: oaDraft.recordId,
+    values: oaDraft.values,
+    attachments: oaDraft.attachments,
+    stepLabel: "第 5 步：核对无误后点击确认，将创建并发送正式 OA",
+  });
+}
+
 export function createCouponThreeSourceDispatcher(
   dependencies: CouponThreeSourceDispatcherDependencies = defaultDependencies,
 ) {
@@ -370,10 +531,41 @@ export function createCouponThreeSourceDispatcher(
             expectedRevision: draft.task.revision,
           });
         }
+        // Cascade to the OA drafts the pilot handed off — otherwise a
+        // completed run leaves an active draft that blocks the next report.
+        // Only pilot-schema drafts in owner-cancelable states are closed;
+        // Submitting-and-later drafts may reference a live instance.
+        let closedOaDrafts = 0;
+        if (dependencies.cancelOaDraft) {
+          const activeOa = dependencies.shouldCheckActiveOa()
+            ? await dependencies.listActiveOa(input.openId)
+            : [];
+          for (const { recordId } of activeOa) {
+            const oaDraft = await dependencies
+              .getOaDraft(recordId)
+              .catch(() => undefined);
+            if (
+              !oaDraft ||
+              oaDraft.ownerOpenId !== input.openId ||
+              oaDraft.schemaVersion !==
+                COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION ||
+              !isUserCancelableCouponOaDraft(oaDraft)
+            ) {
+              continue;
+            }
+            try {
+              await dependencies.cancelOaDraft(oaDraft);
+              closedOaDrafts += 1;
+            } catch {
+              // A concurrent submit may have settled the draft; skip it.
+            }
+          }
+        }
         await dependencies.sendCard(
           input.openId,
           buildCouponThreeSourceClearedCard({
             clearedCount: active.length,
+            closedOaDraftCount: closedOaDrafts,
           }),
           input.idempotencyKey,
         );
@@ -613,6 +805,26 @@ export function createCouponThreeSourceDispatcher(
       if (draft.task.status === "GeneratingArtifacts") {
         throw new Error("三源标准产物正在生成，请等待最新卡片完成后再操作");
       }
+      // A retried delivery (e.g. a bridge timeout resend) of the two confirm
+      // actions converges by re-delivering the send card; the revision guard
+      // below must not turn a transport duplicate into an error card.
+      if (
+        (action === "coupon_three_source_mapping_confirm" ||
+          action === "coupon_three_source_final_confirm") &&
+        draft.task.status === "DraftOnlyConfirmed" &&
+        draft.oaDraftRecordId
+      ) {
+        await deliverPilotSendCard({
+          openId: input.openId,
+          dependencies,
+          oaDraftRecordId: draft.oaDraftRecordId,
+          idempotencyKey: input.idempotencyKey,
+        });
+        return {
+          handled: true,
+          message: `Coupon three-source pilot ${draft.pilotId} already completed; re-delivered the send card`,
+        };
+      }
       const expectedRevision =
         action === "coupon_three_source_recognition_start" ||
         action === "coupon_three_source_supplement_recognition_start"
@@ -701,29 +913,14 @@ export function createCouponThreeSourceDispatcher(
             operationId: id,
           });
           break;
-        case "coupon_three_source_over_deduction_select": {
-          const decision = stringValue(value.decision);
-          if (decision !== "是" && decision !== "否") {
-            throw new Error("请选择是否超扣");
-          }
-          next = await service.updateSelections({
-            draft,
-            ownerOpenId: input.openId,
-            expectedRevision,
-            selections: {
-              ownerFieldValues: {
-                overDeduction: decision,
-                ...(decision === "否" ? { overDeductionReason: "" } : {}),
-              },
-            },
-            operationId: id,
-          });
-          break;
-        }
         case "coupon_three_source_mapping_confirm": {
-          const { repairIssues, ...selections } = mappingSelections(
+          const { repairIssues, ...parsedSelections } = mappingSelections(
             input.form ?? {},
           );
+          const selections = {
+            ...parsedSelections,
+            ...assertMappingFormReady(parsedSelections, draft),
+          };
           let ready = draft;
           if (draft.task.blacklistStatus === "absent_pending_confirmation") {
             if (
@@ -737,6 +934,19 @@ export function createCouponThreeSourceDispatcher(
               expectedRevision,
               operationId: `${id}:no-blacklist`,
             });
+          }
+          if (ready.mappingCardDelivery?.messageId) {
+            // Best-effort: collapse the card to a no-button "generating"
+            // state so rapid repeat clicks cannot re-enter this branch. The
+            // GeneratingArtifacts gate remains the hard backstop.
+            try {
+              await dependencies.updateCard?.(
+                ready.mappingCardDelivery.messageId,
+                buildCouponThreeSourceGeneratingArtifactsCard(),
+              );
+            } catch {
+              // Ignore PATCH failures; generation proceeds either way.
+            }
           }
           const updated = await service.updateSelections({
             draft: ready,
@@ -759,12 +969,50 @@ export function createCouponThreeSourceDispatcher(
                     `输入校验[${item.key}]：${item.message}。当前输入：${item.input}`,
                 ),
               })
-            : await service.confirmSourcesAndGenerate({
-                draft: updated,
-                ownerOpenId: input.openId,
-                expectedRevision: updated.task.revision,
+            : await runGenerationWithRecovery({
+                service,
+                dependencies,
+                openId: input.openId,
+                updated,
                 operationId: `${id}:generate`,
               });
+          // Pilot chain: generation and the OA-draft handoff are one step.
+          // The owner sees exactly one card afterwards — the draft card with
+          // a single send confirmation. A handoff failure falls back to the
+          // classic step-5 card so the owner can retry the handoff.
+          if (
+            !repairIssues.length &&
+            next.task.status === "AwaitingFinalConfirmation"
+          ) {
+            try {
+              const confirmed = await service.confirmFinalPreview({
+                draft: next,
+                ownerOpenId: input.openId,
+                expectedRevision: next.task.revision,
+                operationId: `${id}:handoff`,
+              });
+              if (confirmed.oaDraftRecordId) {
+                await deliverPilotSendCard({
+                  openId: input.openId,
+                  dependencies,
+                  oaDraftRecordId: confirmed.oaDraftRecordId,
+                  idempotencyKey: input.idempotencyKey,
+                });
+                return {
+                  handled: true,
+                  message: "Coupon three-source pilot created OA draft",
+                };
+              }
+            } catch (error) {
+              await sendDraftState({
+                openId: input.openId,
+                draft: next,
+                dependencies,
+                idempotencyKey: input.idempotencyKey,
+              });
+              throw error;
+            }
+          }
           break;
         }
         case "coupon_three_source_overlap_decide": {
@@ -787,10 +1035,11 @@ export function createCouponThreeSourceDispatcher(
             selections: { overlapDecision: decision },
             operationId: id,
           });
-          next = await service.confirmSourcesAndGenerate({
-            draft: updated,
-            ownerOpenId: input.openId,
-            expectedRevision: updated.task.revision,
+          next = await runGenerationWithRecovery({
+            service,
+            dependencies,
+            openId: input.openId,
+            updated,
             operationId: `${id}:generate`,
           });
           break;
@@ -805,20 +1054,15 @@ export function createCouponThreeSourceDispatcher(
           if (!next.oaDraftRecordId) {
             throw new Error("OA 测试稿已创建但缺少草稿记录引用");
           }
-          const oaDraft = await dependencies.getOaDraft(next.oaDraftRecordId);
-          await dependencies.sendCard(
-            input.openId,
-            buildCouponOaPreviewCard({
-              draftRecordId: oaDraft.recordId,
-              values: oaDraft.values,
-              attachments: oaDraft.attachments,
-              missing: missingCouponOaAttachments(oaDraft),
-            }),
-            input.idempotencyKey,
-          );
+          await deliverPilotSendCard({
+            openId: input.openId,
+            dependencies,
+            oaDraftRecordId: next.oaDraftRecordId,
+            idempotencyKey: input.idempotencyKey,
+          });
           return {
             handled: true,
-            message: `Coupon three-source pilot created OA draft ${oaDraft.draftId}`,
+            message: "Coupon three-source pilot created OA draft",
           };
         }
         case "coupon_three_source_cancel":

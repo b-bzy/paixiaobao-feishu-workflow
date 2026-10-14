@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { promisify } from "node:util";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 import {
@@ -21,6 +22,80 @@ if (
 }
 
 const config = getBridgeRuntimeConfig(process.env);
+
+function stamp() {
+  return new Date().toISOString();
+}
+
+const log = (message) => console.log(`${stamp()} ${message}`);
+const logError = (message) => console.error(`${stamp()} ${message}`);
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The Feishu websocket lives in a shared `lark-cli event _bus` grandchild
+ * process. It can die while the consumer wrappers stay alive, silently
+ * dropping every event (observed 2026-10-14). This check catches the hard
+ * failure modes — bus process gone or no established TCP. A zombie websocket
+ * (socket alive, no events) is NOT detectable from outside lark-cli; the
+ * canary runbook still requires watching for stalled events.
+ */
+async function busConnectionHealthy() {
+  try {
+    const { stdout } = await execFileAsync("pgrep", [
+      "-f",
+      "lark-cli event _bus",
+    ]);
+    const pids = stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!pids.length) return false;
+    for (const pid of pids) {
+      try {
+        const { stdout: sockets } = await execFileAsync("lsof", [
+          "-a",
+          "-p",
+          pid,
+          "-i",
+          "tcp",
+        ]);
+        if (sockets.includes("ESTABLISHED")) return true;
+      } catch {
+        // lsof exits non-zero when the pid has no TCP sockets.
+      }
+    }
+    return false;
+  } catch {
+    // pgrep exits non-zero when no bus process exists.
+    return false;
+  }
+}
+
+function startBusWatchdog() {
+  let failures = 0;
+  const timer = setInterval(async () => {
+    if (shuttingDown) return;
+    const healthy = await busConnectionHealthy();
+    if (healthy) {
+      failures = 0;
+      return;
+    }
+    failures += 1;
+    if (failures === 1) {
+      logError(
+        "[bridge] Feishu event bus health check failed; re-checking before exit",
+      );
+      return;
+    }
+    logError(
+      "[bridge] Feishu event bus is gone (no bus process or TCP); exiting so the P0 runner status reflects reality",
+    );
+    clearInterval(timer);
+    shutdown(1);
+  }, 30_000);
+  timer.unref?.();
+}
 
 const availableConsumers = [
   {
@@ -69,7 +144,7 @@ async function forward({ key, event, toPayload }) {
   const body = JSON.stringify(payload);
   const result = await forwardBridgeRequestWithRetries({ body, config });
 
-  console.log(
+  log(
     `[bridge] forwarded ${key}: id=${payload.header?.event_id ?? "missing"} status=${result.status}`,
   );
 }
@@ -77,7 +152,7 @@ async function forward({ key, event, toPayload }) {
 const serialForwarder = createSerialForwarder({
   forward,
   onDrop: (item, error) => {
-    console.error(
+    logError(
       `[bridge] forward failed after ${config.forwardAttempts} attempts: event=${item.key} id=${eventId(item.event)} ${formatForwardFailure(error)}`,
     );
   },
@@ -105,26 +180,27 @@ function startConsumer({ key, toPayload }) {
     try {
       event = JSON.parse(line);
     } catch {
-      console.error(`[bridge] ${key} emitted malformed event data`);
+      logError(`[bridge] ${key} emitted malformed event data`);
       shutdown(1);
       return;
     }
 
-    console.log(`[bridge] received ${key}: id=${eventId(event)}`);
+    log(`[bridge] received ${key}: id=${eventId(event)}`);
     serialForwarder.enqueue({ key, event, toPayload });
   });
 
-  let stderrObserved = false;
   createInterface({ input: child.stderr }).on("line", () => {
-    if (!shuttingDown && !stderrObserved) {
-      stderrObserved = true;
-      console.error(`[bridge] ${key} consumer emitted diagnostic output (redacted)`);
+    // Consumer diagnostics (connect/disconnect notices) are the only external
+    // signal of bus reconnects, so log every occurrence — but redact the
+    // content: lark-cli stderr is unvetted and may include request details.
+    if (!shuttingDown) {
+      logError(`[bridge] ${key} consumer emitted diagnostic output (redacted)`);
     }
   });
 
   child.on("exit", (code, signal) => {
     if (!shuttingDown) {
-      console.error(
+      logError(
         `[bridge] ${key} stopped unexpectedly (code=${code}, signal=${signal})`,
       );
       shutdown(1);
@@ -142,7 +218,7 @@ function shutdown(exitCode = 0) {
 process.on("SIGINT", () => shutdown());
 process.on("SIGTERM", () => shutdown());
 
-console.log(
+log(
   `[bridge] forwarding Feishu events to ${displayBridgeTarget(config.target)}; event types=${config.eventTypes.join(",")}`,
 );
 if (config.p0Mode) {
@@ -154,14 +230,15 @@ if (config.p0Mode) {
         process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || undefined,
       timeoutMs: config.forwardTimeoutMs,
     });
-    console.log(
+    log(
       `[bridge] verified P0 deployment revision ${identity.gitCommitSha.slice(0, 7)}`,
     );
   } catch (error) {
-    console.error(
+    logError(
       `[bridge] P0 deployment identity check failed: code=${error?.code ?? "unexpected_error"}`,
     );
     process.exit(1);
   }
 }
 for (const consumer of consumers) startConsumer(consumer);
+startBusWatchdog();

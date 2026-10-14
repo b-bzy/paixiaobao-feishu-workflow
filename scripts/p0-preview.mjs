@@ -149,6 +149,10 @@ async function up() {
     FEISHU_BRIDGE_TARGET_URL: `${state.deploymentUrl}/api/feishu/poc-bridge`,
     FEISHU_P0_EXPECTED_GIT_SHA: state.gitCommitSha,
     FEISHU_BRIDGE_EVENT_TYPES: "im.message.receive_v1,card.action.trigger",
+    // Synchronous POC handlers (generation + handoff + card sends) can exceed
+    // the 10s default; a premature timeout makes the bridge re-send the event
+    // and duplicate server-side work. 30s keeps retries for real failures.
+    FEISHU_BRIDGE_FORWARD_TIMEOUT_MS: "60000",
   };
   let bridgePid;
   try {

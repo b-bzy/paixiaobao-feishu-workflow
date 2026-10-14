@@ -33,6 +33,7 @@ function dependencies(input: {
   activeThreeSource?: CouponThreeSourcePilotDraft[];
   activeOa?: Array<{ recordId: string }>;
   activeExcel?: Array<{ recordId: string }>;
+  getOaDraft?: CouponThreeSourceDispatcherDependencies["getOaDraft"];
 }) {
   const sendCard = vi.fn(
     async (_openId: string, _card: unknown, _idempotencyKey?: string) =>
@@ -63,12 +64,130 @@ function dependencies(input: {
     downloadFile: vi.fn(),
     sendCard,
     deliverMappingCard,
-    getOaDraft: vi.fn(),
+    getOaDraft: input.getOaDraft ?? vi.fn(),
   };
   return { values, sendCard, deliverMappingCard };
 }
 
 describe("three-source Bot dispatcher", () => {
+  it("goes straight from final confirmation to the merged send card", async () => {
+    const confirmed = {
+      ...draft(),
+      task: {
+        ...draft().task,
+        revision: 5,
+        status: "DraftOnlyConfirmed" as const,
+      },
+      oaDraftRecordId: "rec-oa-new",
+    };
+    const next = { ...confirmed, oaDraftRecordId: "rec-oa-new" };
+    const confirmFinalPreview: CouponThreeSourcePilotService["confirmFinalPreview"] =
+      vi.fn(async () => next);
+    const getOaDraft = vi.fn(async () => ({
+      recordId: "rec-oa-new",
+      draftId: "COA-new",
+      values: {
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道"],
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-01",
+        calcImageFileCodes: ["img"],
+        couponTableFileCodes: ["coupon"],
+        productWhitelistFileCodes: ["white"],
+      },
+      attachments: [],
+    })) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [
+        {
+          ...confirmed,
+          task: {
+            ...confirmed.task,
+            status: "AwaitingFinalConfirmation" as const,
+          },
+        },
+      ],
+      service: { confirmFinalPreview },
+      getOaDraft,
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_final_confirm",
+        value: { pilotRecordId: confirmed.recordId, revision: 5 },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source pilot created OA draft",
+    });
+
+    const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    expect(card).toContain("确认提交正式优惠券 OA");
+    expect(card).toContain("第 5 步");
+    expect(card).toContain("放弃本次提交");
+    expect(card).not.toContain("优惠券 OA 预填确认");
+  });
+
+  it("re-delivers the submit card when a completed pilot card is clicked again", async () => {
+    const completed = {
+      ...draft(),
+      task: {
+        ...draft().task,
+        revision: 6,
+        status: "DraftOnlyConfirmed" as const,
+      },
+      oaDraftRecordId: "rec-oa-settled",
+    };
+    const getOaDraft = vi.fn(async () => ({
+      recordId: "rec-oa-settled",
+      draftId: "COA-settled",
+      values: {
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道"],
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-01",
+        calcImageFileCodes: ["img"],
+        couponTableFileCodes: ["coupon"],
+        productWhitelistFileCodes: ["white"],
+      },
+      attachments: [],
+    })) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [completed],
+      getOaDraft,
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_final_confirm",
+        value: { pilotRecordId: completed.recordId, revision: 6 },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: expect.stringContaining("already completed"),
+    });
+
+    const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    expect(card).toContain("第 5 步");
+    expect(card).not.toContain("cannot be changed");
+  });
+
   it("rejects card actions while standard artifacts are generating", async () => {
     const generating = {
       ...draft(),
@@ -254,6 +373,77 @@ describe("three-source Bot dispatcher", () => {
     expect(values.listActiveExcel).not.toHaveBeenCalled();
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
       "当前三源提报已清空",
+    );
+  });
+
+  it("cascades /clear to pilot OA drafts but leaves other routes alone", async () => {
+    const cancel: CouponThreeSourcePilotService["cancel"] = vi.fn(
+      async (input) => ({
+        ...input.draft,
+        task: { ...input.draft.task, status: "Canceled" },
+      }),
+    );
+    const cancelOaDraft = vi.fn(
+      async (oaDraft: { recordId: string }) => oaDraft,
+    ) as unknown as NonNullable<
+      CouponThreeSourceDispatcherDependencies["cancelOaDraft"]
+    >;
+    const oaDrafts = new Map([
+      [
+        "rec-oa-pilot",
+        {
+          recordId: "rec-oa-pilot",
+          ownerOpenId: "ou_owner",
+          schemaVersion: "coupon-three-source-pilot-v1",
+          status: "Confirmed",
+        },
+      ],
+      [
+        "rec-oa-legacy",
+        {
+          recordId: "rec-oa-legacy",
+          ownerOpenId: "ou_owner",
+          schemaVersion: "coupon-oa-submit-schema-v1",
+          status: "Draft",
+        },
+      ],
+      [
+        "rec-oa-submitting",
+        {
+          recordId: "rec-oa-submitting",
+          ownerOpenId: "ou_owner",
+          schemaVersion: "coupon-three-source-pilot-v1",
+          status: "Submitting",
+        },
+      ],
+    ]);
+    const getOaDraft = vi.fn(async (recordId: string) =>
+      oaDrafts.get(recordId),
+    ) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [],
+      activeOa: [...oaDrafts.keys()].map((recordId) => ({ recordId })),
+      service: { cancel },
+      getOaDraft,
+    });
+    const dispatcher = createCouponThreeSourceDispatcher({
+      ...values,
+      cancelOaDraft,
+    });
+
+    await expect(
+      dispatcher.dispatchText({ openId: "ou_owner", text: "/clear" }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "No active coupon three-source pilot to clear",
+    });
+
+    expect(cancelOaDraft).toHaveBeenCalledTimes(1);
+    expect(cancelOaDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ recordId: "rec-oa-pilot" }),
+    );
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "同时关闭了 1 张本次试点交接的 OA 草稿",
     );
   });
 
@@ -643,6 +833,12 @@ describe("three-source Bot dispatcher", () => {
       form: {
         activityPointPercent: "6",
         blacklistDecision: "absent_confirmed",
+        owner_businessMode: "寄卖",
+        owner_activityName: "测试活动",
+        owner_activityBackground: "测试背景",
+        owner_activityStartAt: "2026-09-30",
+        owner_activityEndAt: "2026-10-10",
+        owner_overDeduction: "否",
       },
     });
 
@@ -654,6 +850,91 @@ describe("three-source Bot dispatcher", () => {
     );
     expect(confirmSourcesAndGenerate).toHaveBeenCalledWith(
       expect.objectContaining({ draft: updated, expectedRevision: 7 }),
+    );
+  });
+
+  it("reverts a failed generation and re-delivers the form instead of bricking the draft", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    const updated = {
+      ...current,
+      task: { ...current.task, revision: 6 },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async () => updated);
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn(async () => {
+        throw new Error(
+          "Feishu Drive file upload failed: parent node not exist",
+        );
+      });
+    const recovered = {
+      ...updated,
+      task: {
+        ...updated.task,
+        status: "AwaitingSourceConfirmation" as const,
+        revision: 7,
+      },
+    };
+    const recoverFailedGeneration: CouponThreeSourcePilotService["recoverFailedGeneration"] =
+      vi.fn(async () => recovered);
+    const { values, sendCard, deliverMappingCard } = dependencies({
+      activeThreeSource: [current],
+      service: {
+        updateSelections,
+        confirmSourcesAndGenerate,
+        recoverFailedGeneration,
+      },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
+        },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Feishu Drive file upload failed: parent node not exist",
+    });
+
+    expect(recoverFailedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 6 }),
+    );
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          task: expect.objectContaining({
+            status: "AwaitingSourceConfirmation",
+            revision: 7,
+          }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "parent node not exist",
     );
   });
 
@@ -682,14 +963,50 @@ describe("three-source Bot dispatcher", () => {
         task: { ...current.task, revision: 6 },
         selections: input.selections,
       }));
+    const generated = {
+      ...current,
+      task: {
+        ...current.task,
+        revision: 7,
+        status: "AwaitingFinalConfirmation" as const,
+      },
+    };
     const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
-      vi.fn(async (input) => ({
-        ...input.draft,
-        task: { ...input.draft.task, status: "AwaitingFinalConfirmation" },
+      vi.fn(async () => generated);
+    const confirmFinalPreview: CouponThreeSourcePilotService["confirmFinalPreview"] =
+      vi.fn(async () => ({
+        ...generated,
+        task: { ...generated.task, status: "DraftOnlyConfirmed" as const },
+        oaDraftRecordId: "rec-oa-merged",
       }));
+    const getOaDraft = vi.fn(async () => ({
+      recordId: "rec-oa-merged",
+      draftId: "COA-merged",
+      values: {
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道"],
+        activityStartAt: "2026-09-30",
+        activityEndAt: "2026-10-10",
+        calcImageFileCodes: ["img"],
+        couponTableFileCodes: ["coupon"],
+        productWhitelistFileCodes: ["white"],
+      },
+      attachments: [],
+    })) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
     const { values, sendCard } = dependencies({
       activeThreeSource: [current],
-      service: { updateSelections, confirmSourcesAndGenerate },
+      service: {
+        updateSelections,
+        confirmSourcesAndGenerate,
+        confirmFinalPreview,
+      },
+      getOaDraft,
     });
     const dispatcher = createCouponThreeSourceDispatcher(values);
 
@@ -697,12 +1014,19 @@ describe("three-source Bot dispatcher", () => {
       dispatcher.dispatchCallback({
         openId: "ou_owner",
         action: "coupon_three_source_mapping_confirm:rec-three-source:5",
-        form: { activityPointPercent: "6" },
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
+        },
       }),
     ).resolves.toMatchObject({
       handled: true,
-      message:
-        "Coupon three-source action coupon_three_source_mapping_confirm completed",
+      message: "Coupon three-source pilot created OA draft",
     });
 
     expect(updateSelections).toHaveBeenCalledWith(
@@ -714,9 +1038,18 @@ describe("three-source Bot dispatcher", () => {
     expect(confirmSourcesAndGenerate).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRevision: 6 }),
     );
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
-      "标准附件已生成",
+    expect(confirmFinalPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRevision: 7,
+        operationId: expect.stringContaining(":handoff"),
+      }),
     );
+    // Exactly one card: the merged draft card with the send button.
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    expect(card).toContain("确认提交正式优惠券 OA");
+    expect(card).toContain("第 5 步");
+    expect(card).not.toContain("标准附件已生成");
   });
 
   it("queues AI repair instead of generating when owner input remains invalid", async () => {
@@ -766,7 +1099,12 @@ describe("three-source Bot dispatcher", () => {
         action: "coupon_three_source_mapping_confirm:rec-three-source:5",
         form: {
           activityPointPercent: "6%",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
           owner_activityStartAt: "9月30日",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
         },
       }),
     ).resolves.toMatchObject({ handled: true });
@@ -784,7 +1122,7 @@ describe("three-source Bot dispatcher", () => {
     expect(confirmSourcesAndGenerate).not.toHaveBeenCalled();
   });
 
-  it("persists the over-deduction choice and redraws the conditional reason field", async () => {
+  it("answers an incomplete mapping form with a friendly card and no revision bump", async () => {
     const current = draft();
     current.task.revision = 5;
     current.task.status = "AwaitingSourceConfirmation";
@@ -800,18 +1138,55 @@ describe("three-source Bot dispatcher", () => {
       whitelist: { role: "whitelist", ...source },
     };
     const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
-      vi.fn(async (input) => ({
-        ...current,
-        selections: {
-          ...current.selections,
-          ...input.selections,
-          ownerFieldValues: {
-            ...current.selections.ownerFieldValues,
-            ...input.selections.ownerFieldValues,
-          },
+      vi.fn();
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn();
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections, confirmSourcesAndGenerate },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_activityName: "测试活动",
+          owner_overDeduction: "否",
         },
-      }));
-    const { values, deliverMappingCard } = dependencies({
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: expect.stringContaining("请先完整填写"),
+    });
+
+    expect(updateSelections).not.toHaveBeenCalled();
+    expect(confirmSourcesAndGenerate).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "请先完整填写",
+    );
+  });
+
+  it("requires the over-deduction reason when the owner chooses yes", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn();
+    const { values } = dependencies({
       activeThreeSource: [current],
       service: { updateSelections },
     });
@@ -820,33 +1195,23 @@ describe("three-source Bot dispatcher", () => {
     await expect(
       dispatcher.dispatchCallback({
         openId: "ou_owner",
-        action: "coupon_three_source_over_deduction_select",
-        value: {
-          pilotRecordId: current.recordId,
-          revision: 5,
-          decision: "是",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "是",
         },
       }),
     ).resolves.toMatchObject({
       handled: true,
-      message:
-        "Coupon three-source action coupon_three_source_over_deduction_select completed",
+      message: expect.stringContaining("超扣原因为必填"),
     });
 
-    expect(updateSelections).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedRevision: 5,
-        selections: { ownerFieldValues: { overDeduction: "是" } },
-      }),
-    );
-    expect(deliverMappingCard).toHaveBeenCalledWith({
-      draft: expect.objectContaining({
-        selections: expect.objectContaining({
-          ownerFieldValues: { overDeduction: "是" },
-        }),
-      }),
-      idempotencyKey: undefined,
-    });
+    expect(updateSelections).not.toHaveBeenCalled();
   });
 
   it("rejects a three-source start when another coupon workflow remains active", async () => {

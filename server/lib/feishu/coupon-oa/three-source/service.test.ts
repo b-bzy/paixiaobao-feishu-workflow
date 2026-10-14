@@ -3,6 +3,7 @@ import { join } from "node:path";
 import ExcelJS from "exceljs";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
+import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
   type CouponThreeSourcePilotDependencies,
   CouponThreeSourcePilotService,
@@ -120,6 +121,77 @@ async function loadTemplates() {
 }
 
 describe("CouponThreeSourcePilotService", () => {
+  it("reverts a GeneratingArtifacts draft after failed generation", async () => {
+    let stored: CouponThreeSourcePilotDraft = {
+      recordId: "rec-stuck",
+      pilotId: "CTS-stuck",
+      ownerOpenId: "ou_owner",
+      task: {
+        ...createCouponThreeSourceTask({
+          taskId: "CTS-task",
+          ownerOpenId: "ou_owner",
+        }),
+        revision: 6,
+        status: "GeneratingArtifacts",
+      },
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {},
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+      failureReason: "Feishu Drive file upload failed: parent node not exist",
+    };
+    const updateDraft = vi.fn(
+      async (
+        current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+        expectedRevision?: number,
+      ) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        stored = {
+          ...stored,
+          ...updates,
+          task: {
+            ...stored.task,
+            ...((updates.task as CouponThreeSourcePilotDraft["task"]) ?? {}),
+            revision: (expectedRevision ?? stored.task.revision) + 1,
+          },
+        };
+        return stored;
+      },
+    );
+    const service = new CouponThreeSourcePilotService({
+      updateDraft,
+    } as unknown as CouponThreeSourcePilotDependencies);
+
+    const recovered = await service.recoverFailedGeneration({
+      draft: stored,
+      ownerOpenId: "ou_owner",
+      expectedRevision: 6,
+    });
+
+    expect(recovered?.task.status).toBe("AwaitingSourceConfirmation");
+    expect(recovered?.task.revision).toBe(7);
+    expect(recovered?.failureReason).toBeUndefined();
+
+    // A draft that already moved on must stay untouched.
+    const settled = {
+      ...stored,
+      task: { ...stored.task, status: "AwaitingFinalConfirmation" as const },
+    };
+    await expect(
+      service.recoverFailedGeneration({
+        draft: settled,
+        ownerOpenId: "ou_owner",
+        expectedRevision: settled.task.revision,
+      }),
+    ).resolves.toBeUndefined();
+    expect(updateDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
     const coupon = await strictCouponBytes({ overDeduction: "" });
     const whitelist = await whitelistBytes();
@@ -375,7 +447,9 @@ describe("CouponThreeSourcePilotService", () => {
       updateDraft.mock.invocationCallOrder[
         updateDraft.mock.calls.findIndex((call) => call === markerCall)
       ];
-    expect(markerOrder).toBeLessThan(uploadArtifact.mock.invocationCallOrder[0]);
+    expect(markerOrder).toBeLessThan(
+      uploadArtifact.mock.invocationCallOrder[0],
+    );
     // The final persisted state must stay small enough for the Base cell
     // limit: heavy parsed datasets are cleared, only frozen artifacts and
     // the OA prefill snapshot survive.

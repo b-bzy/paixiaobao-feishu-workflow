@@ -993,6 +993,32 @@ export class CouponThreeSourcePilotService {
     );
   }
 
+  /**
+   * Reverts a draft stuck in GeneratingArtifacts after a failed generation
+   * (e.g. transient Drive failure) back to the source-confirmation step.
+   * The store's read-before-write guard makes this a no-op when another
+   * attempt already completed or moved the draft on.
+   */
+  async recoverFailedGeneration(input: {
+    draft: CouponThreeSourcePilotDraft;
+    ownerOpenId: string;
+    expectedRevision: number;
+  }): Promise<CouponThreeSourcePilotDraft | undefined> {
+    assertOwnerAndRevision(input);
+    if (input.draft.task.status !== "GeneratingArtifacts") {
+      return undefined;
+    }
+    const task = {
+      ...input.draft.task,
+      status: "AwaitingSourceConfirmation" as const,
+    };
+    return this.dependencies.updateDraft(
+      input.draft,
+      { task, failureReason: undefined },
+      input.expectedRevision,
+    );
+  }
+
   private async assignSource(input: {
     draft: CouponThreeSourcePilotDraft;
     ownerOpenId: string;

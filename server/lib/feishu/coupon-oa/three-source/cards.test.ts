@@ -224,30 +224,48 @@ describe("three-source Bot cards", () => {
     expect(rendered).not.toContain("2026-10-10 23:59");
   });
 
-  it("shows the over-deduction reason only after the owner chooses yes", () => {
+  it("renders over-deduction as an in-form select with an always-visible optional reason", () => {
     const current = draft();
 
     const undecided = JSON.stringify(
       buildCouponThreeSourceMappingCard(current),
     );
-    expect(undecided).toContain("coupon_three_source_over_deduction_select");
-    expect(undecided).not.toContain('"name":"owner_overDeduction"');
-    expect(undecided).not.toContain('"name":"owner_overDeductionReason"');
+    expect(undecided).not.toContain(
+      "coupon_three_source_over_deduction_select",
+    );
+    expect(undecided).toContain('"name":"owner_overDeduction"');
+    expect(undecided).toContain('"name":"owner_overDeductionReason"');
+    expect(undecided).toContain("请选择是否超扣");
 
     current.selections.ownerFieldValues = { overDeduction: "否" };
     const noDeduction = JSON.stringify(
       buildCouponThreeSourceMappingCard(current),
     );
-    expect(noDeduction).not.toContain('"name":"owner_overDeductionReason"');
+    expect(noDeduction).toContain('"default_value":"否"');
+    expect(noDeduction).toContain('"name":"owner_overDeductionReason"');
+    expect(noDeduction).not.toContain(
+      '"content":"超扣原因（选“是”时必填）"},"input_type":"multiline_text","rows":3,"required":true',
+    );
 
     current.selections.ownerFieldValues = { overDeduction: "是" };
     const withDeduction = JSON.stringify(
       buildCouponThreeSourceMappingCard(current),
     );
-    expect(withDeduction).toContain('"name":"owner_overDeductionReason"');
-    expect(withDeduction).toContain(
-      '"name":"owner_overDeductionReason","label":{"tag":"plain_text","content":"超扣原因"},"input_type":"multiline_text","rows":3,"required":true',
-    );
+    expect(withDeduction).toContain('"default_value":"是"');
+    expect(withDeduction).toContain("超扣原因（选“是”时必填）");
+  });
+
+  it("always renders required date inputs with stored defaults", () => {
+    const current = draft();
+    current.selections.ownerFieldValues = {
+      activityStartAt: "2026-09-30",
+      activityEndAt: "2026-10-10",
+    };
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain('"name":"owner_activityStartAt"');
+    expect(rendered).toContain('"name":"owner_activityEndAt"');
+    expect(rendered).toContain("活动开始日期（YYYY-MM-DD）");
   });
 
   it("shows ordered image counts and append/replace controls", () => {

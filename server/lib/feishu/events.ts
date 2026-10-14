@@ -21,6 +21,7 @@ import {
   buildCouponOaEntryCard,
   buildCouponOaPreviewCard,
   buildCouponOaSubmissionFailureCard,
+  buildCouponOaSubmissionInProgressCard,
   buildCouponOaSubmissionResultCard,
   buildCouponOaSubmissionUnknownCard,
   buildCouponOaSubmitCard,
@@ -42,6 +43,7 @@ import {
   validateCouponApplicationDraft,
 } from "./coupon-oa/draft-service";
 import {
+  COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
   type CouponOaDraft,
   getCouponOaDraft,
   listActiveCouponOaDrafts,
@@ -98,9 +100,9 @@ import { isCouponThreeSourcePilotEnabled } from "./coupon-oa/three-source/pilot-
 import { listActiveCouponThreeSourcePilotDrafts } from "./coupon-oa/three-source/store";
 import {
   isCancelableCouponExcelPilot,
-  isCancelableCouponOaDraft,
   isExpiredCouponExcelPilot,
   isExpiredCouponOaDraft,
+  isUserCancelableCouponOaDraft,
 } from "./coupon-oa/workflow-lifecycle";
 import {
   buildExpenseApprovalCard,
@@ -792,7 +794,22 @@ export async function handleFeishuPocEvent(
   if (threeSourceResult.handled) {
     return { kind: "handled", message: threeSourceResult.message };
   }
-  if (options.threeSourceOnly) {
+  // The three-source handoff chains into the coupon OA draft route: its final
+  // card carries coupon_oa_confirm / coupon_oa_submit / coupon_oa_cancel for
+  // the OA test draft the pilot created. Only those three actions pass the
+  // P0 gate, and only for three-source pilot drafts (schemaVersion guard at
+  // the draft lookup).
+  const couponOaDraftAction =
+    callbackValue && typeof callbackValue.action === "string"
+      ? callbackValue.action
+      : "";
+  const couponOaDraftActionPassthrough =
+    couponOaDraftAction !== "" &&
+    ["coupon_oa_confirm", "coupon_oa_submit", "coupon_oa_cancel"].includes(
+      couponOaDraftAction,
+    ) &&
+    String(callbackValue?.draftRecordId ?? "") !== "";
+  if (options.threeSourceOnly && !couponOaDraftActionPassthrough) {
     return { kind: "ignored", reason: "Unsupported three-source P0 action" };
   }
   const name = payload.action?.name ?? "";
@@ -1045,6 +1062,23 @@ export async function handleFeishuPocEvent(
     }
     try {
       const draft = await getCouponOaDraft(couponDraftRecordId);
+      if (
+        options.threeSourceOnly &&
+        draft.schemaVersion !== COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION
+      ) {
+        await sendFeishuCard(
+          openId,
+          buildCouponThreeSourceErrorCard({
+            message:
+              "当前入口仅支持三源提报交接的优惠券 OA 草稿；请在原流程的卡片中操作。",
+          }),
+          eventId(payload),
+        );
+        return {
+          kind: "handled",
+          message: "Coupon OA draft is not owned by the three-source pilot",
+        };
+      }
       if (draft.ownerOpenId !== openId) {
         throw new Error("只有优惠券 OA 草稿创建人可以结束流程");
       }
@@ -1058,19 +1092,21 @@ export async function handleFeishuPocEvent(
         await sendFeishuCard(
           openId,
           buildCouponOaWorkflowCanceledCard({ draftId: draft.draftId }),
+          eventId(payload),
         );
         return {
           kind: "handled",
           message: `Coupon OA draft ${draft.draftId} was already canceled`,
         };
       }
-      if (!isCancelableCouponOaDraft(draft)) {
+      if (!isUserCancelableCouponOaDraft(draft)) {
         throw new Error("当前优惠券 OA 草稿状态不能结束");
       }
       const canceled = await updateCouponOaDraft(draft, { status: "Canceled" });
       await sendFeishuCard(
         openId,
         buildCouponOaWorkflowCanceledCard({ draftId: canceled.draftId }),
+        eventId(payload),
       );
       return {
         kind: "handled",
@@ -1194,6 +1230,23 @@ export async function handleFeishuPocEvent(
       };
     }
     const draft = await getCouponOaDraft(couponDraftRecordId);
+    if (
+      options.threeSourceOnly &&
+      draft.schemaVersion !== COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION
+    ) {
+      await sendFeishuCard(
+        openId,
+        buildCouponThreeSourceErrorCard({
+          message:
+            "当前入口仅支持三源提报交接的优惠券 OA 草稿；请在原流程的卡片中操作。",
+        }),
+        eventId(payload),
+      );
+      return {
+        kind: "handled",
+        message: "Coupon OA draft is not owned by the three-source pilot",
+      };
+    }
     if (draft.ownerOpenId !== openId) {
       throw new Error(
         "Only the coupon OA draft owner can confirm or submit it",
@@ -1203,6 +1256,17 @@ export async function handleFeishuPocEvent(
       return {
         kind: "handled",
         message: `Coupon OA draft ${draft.draftId} expired`,
+      };
+    }
+    if (action === "coupon_oa_submit" && draft.status === "Submitting") {
+      await sendFeishuCard(
+        openId,
+        buildCouponOaSubmissionInProgressCard(),
+        eventId(payload),
+      );
+      return {
+        kind: "handled",
+        message: `Coupon OA draft ${draft.draftId} is already submitting`,
       };
     }
     if (
@@ -1215,6 +1279,7 @@ export async function handleFeishuPocEvent(
           instanceLink: draft.approvalInstanceLink,
           verificationIssues: draft.validationIssues,
         }),
+        eventId(payload),
       );
       return {
         kind: "handled",
@@ -1229,6 +1294,7 @@ export async function handleFeishuPocEvent(
             draft.failureReason ??
             "当前提交是否已创建原生 OA 无法确认，请人工对账。",
         }),
+        eventId(payload),
       );
       return {
         kind: "handled",
@@ -1242,6 +1308,7 @@ export async function handleFeishuPocEvent(
           instanceLink: draft.approvalInstanceLink,
           verificationIssues: [],
         }),
+        eventId(payload),
       );
       return {
         kind: "handled",
@@ -1249,6 +1316,34 @@ export async function handleFeishuPocEvent(
       };
     }
     if (action === "coupon_oa_confirm") {
+      if (draft.status === "Confirmed") {
+        // A repeated confirm click must converge instead of failing silently:
+        // re-deliver the current step-3 submit card.
+        await sendFeishuCard(
+          openId,
+          buildCouponOaSubmitCard({
+            draftRecordId: draft.recordId,
+            values: draft.values,
+            attachments: draft.attachments,
+          }),
+          eventId(payload),
+        );
+        return {
+          kind: "handled",
+          message: `Coupon OA draft ${draft.draftId} was already confirmed`,
+        };
+      }
+      if (draft.status === "Submitting") {
+        await sendFeishuCard(
+          openId,
+          buildCouponOaSubmissionInProgressCard(),
+          eventId(payload),
+        );
+        return {
+          kind: "handled",
+          message: `Coupon OA draft ${draft.draftId} is already submitting`,
+        };
+      }
       const missing = missingCouponOaAttachments(draft);
       if (missing.length) {
         await sendFeishuCard(
@@ -1257,25 +1352,41 @@ export async function handleFeishuPocEvent(
             draftId: draft.draftId,
             missing,
           }),
+          eventId(payload),
         );
         return {
           kind: "handled",
           message: "Coupon OA draft is missing attachments",
         };
       }
-      const confirmed = await confirmCouponOaDraft(draft);
-      await sendFeishuCard(
-        openId,
-        buildCouponOaSubmitCard({
-          draftRecordId: confirmed.recordId,
-          values: confirmed.values,
-          attachments: confirmed.attachments,
-        }),
-      );
-      return {
-        kind: "handled",
-        message: `Confirmed coupon OA draft ${confirmed.draftId}`,
-      };
+      try {
+        const confirmed = await confirmCouponOaDraft(draft);
+        await sendFeishuCard(
+          openId,
+          buildCouponOaSubmitCard({
+            draftRecordId: confirmed.recordId,
+            values: confirmed.values,
+            attachments: confirmed.attachments,
+          }),
+          eventId(payload),
+        );
+        return {
+          kind: "handled",
+          message: `Confirmed coupon OA draft ${confirmed.draftId}`,
+        };
+      } catch (error) {
+        const detail =
+          error instanceof Error ? error.message : "无法确认优惠券 OA 草稿";
+        await sendFeishuCard(
+          openId,
+          buildCouponOaDraftErrorCard({ message: detail }),
+          eventId(payload),
+        );
+        return {
+          kind: "handled",
+          message: `Coupon OA draft confirmation failed: ${detail}`,
+        };
+      }
     }
 
     let result: Awaited<ReturnType<typeof submitConfirmedCouponOaDraft>>;
@@ -1291,6 +1402,7 @@ export async function handleFeishuPocEvent(
         await sendFeishuCard(
           openId,
           buildCouponOaSubmissionUnknownCard({ message }),
+          eventId(payload),
         );
         return {
           kind: "handled",
@@ -1300,6 +1412,7 @@ export async function handleFeishuPocEvent(
       await sendFeishuCard(
         openId,
         buildCouponOaSubmissionFailureCard({ message }),
+        eventId(payload),
       );
       return {
         kind: "handled",
@@ -1312,6 +1425,7 @@ export async function handleFeishuPocEvent(
         instanceLink: result.draft.approvalInstanceLink,
         verificationIssues: result.verificationIssues,
       }),
+      eventId(payload),
     );
     return {
       kind: "handled",

@@ -125,8 +125,21 @@ export function buildCouponThreeSourceRuntimeBlockedCard(): FeishuCard {
   });
 }
 
+export function buildCouponThreeSourceGeneratingArtifactsCard(): FeishuCard {
+  return card({
+    title: "标准附件生成中",
+    subtitle: "已确认信息，请等待最新卡片",
+    template: "orange",
+    content: [
+      "正在冻结当前版本并生成标准配券表与白名单，通常需要几秒到十几秒。",
+      "本卡片的确认按钮已收起以防止重复点击；完成后会自动发出最新卡片。",
+    ].join("\n"),
+  });
+}
+
 export function buildCouponThreeSourceClearedCard(input: {
   clearedCount: number;
+  closedOaDraftCount?: number;
 }): FeishuCard {
   const cleared = input.clearedCount > 0;
   return card({
@@ -137,6 +150,9 @@ export function buildCouponThreeSourceClearedCard(input: {
       cleared
         ? `已结束 ${input.clearedCount} 笔未完成的三源提报。`
         : "没有检测到未完成的三源提报。",
+      ...(input.closedOaDraftCount
+        ? [`同时关闭了 ${input.closedOaDraftCount} 张本次试点交接的 OA 草稿。`]
+        : []),
       "原始记录和文件仅保留用于审计，不会被下一次提报复用。",
       "请重新发送 `/OA优惠券提报`，并重新上传本次材料。",
     ].join("\n"),
@@ -570,7 +586,7 @@ export function buildCouponThreeSourceMappingCard(
           label: plainText("语音或文字补充说明"),
           input_type: "multiline_text",
           rows: 4,
-          required: true,
+          required: false,
           width: "fill",
           ...(draft.supplementRecognition?.text &&
           draft.supplementRecognition.kind !== "form_repair"
@@ -588,26 +604,24 @@ export function buildCouponThreeSourceMappingCard(
       ],
     },
     {
-      tag: "markdown",
-      content: `**是否超扣：** ${selectedOverDeduction ?? "待确认"}\n选择“是”后才会显示并要求填写超扣原因。`,
-    },
-    button(draft, {
-      action: "coupon_three_source_over_deduction_select",
-      text: "否，不超扣",
-      type: selectedOverDeduction === "否" ? "primary_filled" : "default",
-      extra: { decision: "否" },
-    }),
-    button(draft, {
-      action: "coupon_three_source_over_deduction_select",
-      text: "是，需要填写超扣原因",
-      type: selectedOverDeduction === "是" ? "primary_filled" : "default",
-      extra: { decision: "是" },
-    }),
-    {
       tag: "form",
       name: "coupon_three_source_mapping_submit",
       vertical_spacing: "12px",
       elements: [
+        {
+          tag: "select_static",
+          name: "owner_overDeduction",
+          placeholder: plainText("请选择是否超扣"),
+          required: true,
+          width: "fill",
+          ...(selectedOverDeduction
+            ? { default_value: selectedOverDeduction }
+            : {}),
+          options: [
+            { text: plainText("否，不超扣"), value: "否" },
+            { text: plainText("是，需要填写超扣原因"), value: "是" },
+          ],
+        },
         ...(coupons.length === 0 || hasUnknownCoupon
           ? [
               {
@@ -670,6 +684,28 @@ export function buildCouponThreeSourceMappingCard(
           required: true,
           width: "fill",
         },
+        {
+          tag: "input",
+          name: "owner_activityStartAt",
+          label: plainText("活动开始日期（YYYY-MM-DD）"),
+          input_type: "text",
+          ...(ownerDefaultValue(draft, "activityStartAt")
+            ? { default_value: ownerDefaultValue(draft, "activityStartAt") }
+            : {}),
+          required: true,
+          width: "fill",
+        },
+        {
+          tag: "input",
+          name: "owner_activityEndAt",
+          label: plainText("活动结束日期（YYYY-MM-DD）"),
+          input_type: "text",
+          ...(ownerDefaultValue(draft, "activityEndAt")
+            ? { default_value: ownerDefaultValue(draft, "activityEndAt") }
+            : {}),
+          required: true,
+          width: "fill",
+        },
         ...(draft.task.blacklistStatus === "absent_pending_confirmation"
           ? [
               {
@@ -694,6 +730,8 @@ export function buildCouponThreeSourceMappingCard(
                 "businessMode",
                 "activityName",
                 "activityBackground",
+                "activityStartAt",
+                "activityEndAt",
                 "overDeduction",
               ].includes(key),
           )
@@ -725,27 +763,20 @@ export function buildCouponThreeSourceMappingCard(
                   width: "fill",
                 }),
           })),
-        ...(selectedOverDeduction === "是"
-          ? [
-              {
-                tag: "input",
-                name: "owner_overDeductionReason",
-                label: plainText("超扣原因"),
-                input_type: "multiline_text",
-                rows: 3,
-                required: true,
-                width: "fill",
-                ...(ownerDefaultValue(draft, "overDeductionReason")
-                  ? {
-                      default_value: ownerDefaultValue(
-                        draft,
-                        "overDeductionReason",
-                      ),
-                    }
-                  : {}),
-              },
-            ]
-          : []),
+        {
+          tag: "input",
+          name: "owner_overDeductionReason",
+          label: plainText("超扣原因（选“是”时必填）"),
+          input_type: "multiline_text",
+          rows: 3,
+          required: false,
+          width: "fill",
+          ...(ownerDefaultValue(draft, "overDeductionReason")
+            ? {
+                default_value: ownerDefaultValue(draft, "overDeductionReason"),
+              }
+            : {}),
+        },
         ...optionalOwnerSupplementKeys
           .filter(
             (key) =>

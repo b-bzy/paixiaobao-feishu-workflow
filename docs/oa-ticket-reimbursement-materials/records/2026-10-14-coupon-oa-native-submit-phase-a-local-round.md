@@ -96,3 +96,9 @@ npx biome check server/lib/feishu/ # 改动文件无告警(存量 2 条不属于
 
 - **"重复点击"实为桥接超时重发**:bridge 日志证实 13:57-14:00 的三次点击转发延迟 14-18 秒(超过 10s 默认超时被重发),服务端各处理两次,第二次被状态/版本守卫拦截——用户单次点击无误。修复:转发超时提至 30s(本地与 p0-preview 部署脚本均已设 `FEISHU_BRIDGE_FORWARD_TIMEOUT_MS=30000`),并在 mapping_confirm 入口对已完成提报加重发收敛(重发→重送发送卡,不再报版本冲突)。
 - **链路按用户授权收敛为全程一次确认**:第二轮确认后自动 生成→交接 OA 测试稿→直达唯一的「第 5 步:核对后确认发送」草稿卡(含放弃出口);链路=上传→解析→补充字段→草稿卡→确认即发送。handoff 失败自动回退第 5 步经典卡可重试。PRD/ADR-0013/rollout 已同步。
+
+## Native-submit canary 授权与执行记录(2026-10-14 15:4x)
+
+- **授权**:试点用户(鲍泽英,open_id ou_2c44…)明确指令"开 Gate"。范围:Vercel Preview、单用户专用 allowlist、值守窗口(本 session 实时盯日志)、单笔创建;回滚=关闭 kill switch 并重部署。对应 rollout R3 canary 形态;ADR-0013 状态行的 Owner 追认仍待补。
+- **canary 观察项**:①飞书对省略的必填「部门/申请人」控件行为(自动填充或干净拒绝;拒绝则补通讯录 scope 后重试);②uuid 幂等语义在真实创建中的表现(防线分层:Submitting 守卫+60s 超时+收敛路径,uuid 为最后兜底);③创建后回读 diff 与审计字段(definitionHash/confirmedAt/instanceCode)。
+- **前置状态**:Preview 复测已通过(识别→生成→合并卡→kill switch 拦截,全链一致);kill switch 此前全程关闭。

@@ -4,7 +4,7 @@
 - 日期：2026-09-29
 - 变更：创建/回读实例使用应用 tenant access token，并以申请人 `open_id` 标记实例发起人；用户 OAuth 不再是自动填单前置依赖
 - 变更：以单一提交 schema 取代独立映射表；字段业务语义、飞书控件绑定、编码/解码规则同源维护
-- 关联：[优惠券 OA 智能提单 MVP PRD v1.3](../oa-ticket-reimbursement-materials/current/product/coupon-oa-mvp-prd-v1.3.md) · [机器人端自动填报实施方案 v1.4](../oa-ticket-reimbursement-materials/current/implementation/coupon-oa-bot-autofill-plan-v1.4.md) · [内网试点 rollout](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
+- 关联：[优惠券 OA 智能提单 MVP PRD v1.4](../oa-ticket-reimbursement-materials/current/product/coupon-oa-mvp-prd-v1.4.md) · [机器人端自动填报实施方案 v1.4](../oa-ticket-reimbursement-materials/current/implementation/coupon-oa-bot-autofill-plan-v1.4.md) · [内网试点 rollout](../oa-ticket-reimbursement-materials/current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md)
 
 ## 背景
 

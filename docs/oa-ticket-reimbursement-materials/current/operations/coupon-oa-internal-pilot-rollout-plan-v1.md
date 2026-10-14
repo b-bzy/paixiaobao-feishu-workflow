@@ -1,7 +1,7 @@
 # 优惠券 OA 内网试点 rollout 计划 v1
 
 > **状态**：上线治理基线；不是部署完成证明。
-> **日期**：2026-10-08
+> **日期**：2026-10-08；最近更新：2026-10-14（新增 3.2 ADR-0013 路由放行 canary 节）
 > **适用架构**：[ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md)；P0 本机长连接例外见 [ADR-0010](../../../adr/0010-timebox-local-long-connection-three-source-poc.md)。
 
 ## 1. 目标
@@ -13,7 +13,7 @@
 | `OA优惠券审批` | 仅导航到既有 OA；服务端不创建草稿或原生实例。 |
 | `OA优惠券填报` | 系统草稿与确认流程；在允许 native-submit 前仅可操作草稿。 |
 | `优惠券Excel试点` | 生成并冻结两份受控 Excel 后交接系统草稿；自身永不自动创建原生 OA。 |
-| `/OA优惠券提报`（仅 `local-long-connection-draft-poc`） | 单用户严选三源材料 → 标准附件 → OA 测试稿；不是 R1/R2/R3 路线，不创建原生 OA。 |
+| `/OA优惠券提报`（仅 `local-long-connection-draft-poc`） | 单用户严选三源材料 → 标准附件 → OA 测试稿，交接后可进入 OA 草稿确认页（[ADR-0013](../../../adr/0013-p0-bridge-coupon-oa-draft-action-passthrough.md) 放行，提交仍 fail-closed）；不是 R1/R2/R3 路线，不创建原生 OA。 |
 
 ## 2. 角色与原则
 
@@ -41,6 +41,16 @@
 它**不是** `FEISHU_RUNTIME_STAGE`、本表中的 release ring、R1/R2/R3 Gate 通过证明或 native-submit 授权。运行时仍处于 `local` legacy POC 边界：没有 durable receipt/outbox、异步 worker、可恢复重放或原生 OA 提交资格，且 CLI 可在 Vercel 成功前 ACK。完成该 POC 的唯一正向结论是“受限 Bot 子集能创建 OA 测试稿且没有创建原生实例”。
 
 本机长连接 POC 的配置、测试、停止和证据要求见[运行手册](coupon-three-source-local-long-connection-poc-runbook-v1.md)。出现 forward failure/超时、重复、runner/Vercel 重启、Base/Drive/消息回读故障、双 consumer 或任何原生实例迹象时，立即关闭三源 pilot flag 并停止 runner；不得按 R1/R2 的 bridge/outbox 流程假定可恢复。
+
+### 3.2 `p0-draft-action-passthrough` 路由放行 canary（2026-10-14）
+
+[ADR-0013](../../../adr/0013-p0-bridge-coupon-oa-draft-action-passthrough.md) 在 ADR-0010 同一测试窗口内，对同一唯一 allowlist 用户放行恰好三个卡片 action（`coupon_oa_confirm` / `coupon_oa_submit` / `coupon_oa_cancel`，仅限 `schemaVersion=coupon-three-source-pilot-v1` 的交接草稿），使三源第二轮确认后自动生成并交接 OA 测试稿，直达「第 5 步：核对后确认发送」草稿卡（全程仅一次人工确认）：
+
+- **仍是 draft-only**：`FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED=false` 全程保持；`coupon_oa_submit` 在 kill switch 处 fail-closed 回明确失败卡，草稿保持 Confirmed。它不是 R3 的进入证明，也不计入 R3 的"一笔原生 OA"。
+- **不改变 3.1 的结论边界**：该 POC 的正向结论仍是不创建原生实例；本节只把"点击无响应"的实现缺陷修复为有守卫、有反馈的路由。
+- **前置证据**（2026-10-14 阶段 A）：store 写前回读守卫、SubmissionUnknown 不抹实例 code、提交时冻结产物重验重传、confirm 全路径卡片反馈、Confirmed owner 取消出口、bridge bus 看门狗，均有自动化用例（650 例全过）与本地轮记录（见[阶段 A 本地测试轮](../../records/2026-10-14-coupon-oa-native-submit-phase-a-local-round.md)）。
+- **停止/回滚**：回滚部署即回到 ADR-0010 的原始入口行为；出现一例重复创建迹象、越权、对账失败、kill switch 被打开或 schemaVersion 守卫被绕过立即停止。
+- **R3 的关系**：真实创建原生 OA 仍走本表 R3 canary（G4 证据、值守、单笔），与本节相互独立；本节产生的入口路由与 fail-closed 演练证据可作为 G3/G5 的部分输入。
 
 ### G0 — 文档与责任
 

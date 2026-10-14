@@ -1,8 +1,8 @@
 # 优惠券 OA 当前功能结构与重构基线 v1
 
 > **状态**：持续维护的技术基线；用于指导后续迭代与重构拆分
-> **版本**：v1.1
-> **建立日期**：2026-10-08；最近更新：2026-10-10
+> **版本**：v1.10（与第 12 节变更记录轨道对齐）
+> **建立日期**：2026-10-08；最近更新：2026-10-14（补记 ADR-0013 路由放行、OA 草稿存储守卫与已声明取舍）
 > **代码快照**：当前工作区中默认关闭的三源 POC 实现；不代表已部署或已获 Gate 批准
 > **适用范围**：飞书 Bot、优惠券 Excel 试点、系统 OA 草稿、飞书原生审批提交，以及它们之间的文件与状态交接
 > **不替代**：[P1 Excel 试点 PRD v1.5](../product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 的产品范围，也不将[对话式一轮确认改造 PRD](../../proposals/conversational-single-confirm/coupon-oa-conversational-single-confirm-prd-v1.3.md)视为已获批实现。
@@ -46,6 +46,10 @@
 三源适配器入口位于 `server/lib/feishu/coupon-oa/three-source/dispatcher.ts`，领域生成在 `server/lib/coupon-oa/three-source/`，而 OA 测试稿交接在 `server/lib/feishu/coupon-oa/three-source/handoff.ts`。它重用既有 OA 草稿与原生提交 Guard，而不重写 native-submit。
 
 作为临时 `local-long-connection-draft-poc`，飞书事件经唯一的本机 `lark-cli` runner 以 HMAC 到达 `server/api/feishu/poc-bridge.post.ts`，再以 `threeSourceOnly` 进入 `handleFeishuPocEvent()`。这仍是同步 legacy POC：文件下载、Excel 解析、标准产物上传与草稿创建都可能发生在同一请求中；本机 runner 甚至可能在 Vercel 成功前 ACK。它没有 durable receipt/outbox、对象存储 canonical bytes、worker、DLQ 或可靠 submission lock，不能替代 [ADR-0007](../../../adr/0007-adopt-durable-control-plane-for-coupon-pilot.md)。
+
+**P0 入口路由放行（2026-10-14，[ADR-0013](../../../adr/0013-p0-bridge-coupon-oa-draft-action-passthrough.md)）**：`threeSourceOnly` 对携带 `draftRecordId` 的恰好三个卡片 action（`coupon_oa_confirm` / `coupon_oa_submit` / `coupon_oa_cancel`）放行至既有 OA 草稿处理链；读取草稿后首先校验 `schemaVersion === COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION`（`coupon-three-source-pilot-v1`），非三源交接草稿回明确提示卡且零写入。kill switch 保持关闭：提交在 `assertCouponOaNativeSubmitAllowed` 处 fail-closed 回失败卡。第 3 步卡含「放弃本次提交」按钮，`Confirmed` 草稿可由 owner 取消（`isUserCancelableCouponOaDraft`）；`Submitting` 及之后状态仍只能人工对账。
+
+**OA 草稿存储守卫与已声明取舍（2026-10-14）**：`coupon-oa/draft-store.ts` 的 `updateCouponOaDraft` 在每次写入前重读存储记录，校验状态与调用方快照一致且非终态，写入后校验状态落盘；`persistCouponOaSubmissionOutcome` 保证并发方的终态结果不被覆盖，`SubmissionUnknown` 写入前先回读已持久化的 `approvalInstanceCode`（存在则转 `CreatedNeedsReview`，不抹 code）。Base 无 CAS，守卫把并发双提交窗口收窄到单次 Base 往返，残余窗口依赖飞书 `uuid` 幂等性（外部事实，R3 前必须验证）。提交时 `refreshFrozenCouponOaAttachments` 从 Drive 重下载冻结产物、校验 bytes/SHA-256 并重传审批附件库换取新 file code（草稿附件持久化 Drive `fileToken`；无 `fileToken` 的旧路线草稿跳过刷新）。附件 file code 因此在 handoff 与提交时各生成一次，以提交时为准。
 
 功能范围仍刻意受限于常规满减券和 SKU 名单，但本地代码现支持 `严选`、`寄卖`、`pop`。严选不冻结 `calcImage`；寄卖/POP 优先冻结 owner 确认的有序用户图片，没有用户图片时从最终标准配券工作簿显示值生成分页 PNG。图片和 Excel 都需在交接前从 Drive 回读并校验 bytes/hash。完整边界与运行步骤见[本机长连接 draft-only POC 运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
 
@@ -110,7 +114,7 @@ flowchart TB
 - HTTP 入口位于 [`server/api/feishu/process.post.ts`](../../../../server/api/feishu/process.post.ts)。
 - 事件总路由位于 [`server/lib/feishu/events.ts`](../../../../server/lib/feishu/events.ts)。
 - 飞书 API 调用统一通过应用身份的 `tenant_access_token`；凭证只应保存在服务器环境变量中。
-- `local-long-connection-draft-poc` 例外保持飞书长连接，经本机唯一 runner 的 HMAC 请求进入 `/api/feishu/poc-bridge`。该入口只在 `local` stage 接受验证请求，并以 `threeSourceOnly` 限制到 P0 adapter；它不能证明 ACK、retry 或恢复，详见[运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
+- `local-long-connection-draft-poc` 例外保持飞书长连接，经本机唯一 runner 的 HMAC 请求进入 `/api/feishu/poc-bridge`。该入口只在 `local` stage 接受验证请求，并以 `threeSourceOnly` 限制到 P0 adapter（[ADR-0013](../../../adr/0013-p0-bridge-coupon-oa-draft-action-passthrough.md) 放行的三个 OA 草稿 action 除外）；它不能证明 ACK、retry 或恢复，详见[运行手册](../operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)。
 
 > 本地长连接进程只能用于开发诊断。R1 证据必须绑定企业托管宿主、固定 Git revision/artifact、受签名 ingress、持久接收和运行证据；Vercel 服务健康不等于 Bot WebSocket 消费正常，也不等于企业 bridge 已就绪。
 
@@ -123,7 +127,7 @@ flowchart TB
 | `OA优惠券审批` | 手工兜底入口，仅打开配置的原生 OA 发起链接 | 否 | 用户在飞书页面手工提交 | 保留为兜底，不作为自动化主线 |
 | `OA优惠券填报` / `优惠券提单草稿` | 较早的 Bot 表单 + 系统 OA 草稿流程 | 是 | 草稿确认后可提交 | 逐步吸收为统一任务的“手工材料路径” |
 | `优惠券Excel试点` | 当前 P1-1 主线：生成标准 Excel 后交接到 OA 草稿 | 是，先经 Excel 试点草稿 | 通过系统 OA 草稿链路提交 | 保持当前基线，作为后续统一任务的“Excel 生成路径” |
-| `/OA优惠券提报` | 默认关闭的三业务模式三源适配器 | 是，专用三源 Base 投影后交接 OA 测试稿 | `local-long-connection-draft-poc` 中禁止原生 OA | 仅限单用户测试；三业务模式和测算图需另行部署与真实环境验收 |
+| `/OA优惠券提报` | 默认关闭的三业务模式三源适配器 | 是，专用三源 Base 投影后交接 OA 测试稿；交接后可进入 OA 草稿确认页（ADR-0013 路由放行） | `local-long-connection-draft-poc` 中禁止原生 OA（kill switch 关闭，提交 fail-closed） | 仅限单用户测试；三业务模式和测算图需另行部署与真实环境验收 |
 | `/clear` | P0 三源失败恢复口令 | 不创建新草稿；把 owner 的活动三源任务标记为 `Canceled` | 否 | 保留 Base/Drive 审计记录，清空后必须重新上传材料 |
 
 每位业务员同一时刻不允许同时存在活动的 Excel 试点、系统 OA 草稿和三源任务；三源试点只查询已启用且存储配置完整的既有路线来执行冲突检查，避免未启用路线因缺少 Base 配置而阻断 P0。已配置路线仍保持互斥，以避免文件被错误归属到另一条流程。
@@ -399,6 +403,8 @@ Feishu transport
 
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-14 | v1.10 | 本地测试轮驱动的第二轮卡 UX 与链路收敛：超扣改表单内下拉（去 PATCH 刷新）、补充说明改选填、生成确认后卡片立即变"生成中"防连点、提交先中文预校验再推版本（缺项原地可重试，格式错误仍走 AI 修复）、日期输入常驻表单；生成失败自动回退 GeneratingArtifacts 并重发表单（`recoverFailedGeneration`）；试点链第 5 步确认后直达「第 6 步提交确认卡」（去掉中间预填确认），已完成提报旧卡重击幂等重发该卡；**确认身份降级为尽力而为**（空壳通讯录档案/部门歧义 → openId-only 快照，表单省略身份控件，实例申请人仍由 create 请求的 open_id 指定） | 代码在工作区、自动化用例全过；尚未部署。**canary 前验证项**：目标定义的「部门」「申请人」控件为 required=true——开 Gate 后需验证飞书对省略的必填身份控件是自动填充还是拒绝；若拒绝则补 `contact:user.base:readonly` + `contact:user.department:readonly` 并发布应用版本（代码将自动恢复全量身份快照），失败为干净拒绝无副作用 |
+| 2026-10-14 | v1.9 | 补记 [ADR-0013](../../../adr/0013-p0-bridge-coupon-oa-draft-action-passthrough.md) P0 入口路由放行（三个 OA 草稿 action + schemaVersion 守卫）；OA 草稿 store 写前回读守卫、`persistCouponOaSubmissionOutcome` 终态不被并发覆盖、SubmissionUnknown 不抹已持久化实例 code、提交时冻结产物重验重传换新 file code 与已声明取舍 | 代码在工作区、自动化用例全过；尚未部署，待 ADR-0013 Owner 追认与本地/Preview 测试轮 |
 | 2026-10-12 | v1.8 | AI-primary 工作簿合同升级为 v5、活动文案合同升级为 v3；补齐多渠道和日期标准化、同 Sheet 分段 SKU 区域、错误尾行收敛与不支持券型结构化阻断 | 已通过本地单元、集成和 6 组脱敏 Excel + DeepSeek 预检；仍须在单用户 Preview 完成飞书 E2E，不表示生产上线 |
 | 2026-10-12 | v1.7 | 第二轮卡片改为单消息原位更新；修复补充说明空白字段回填，并启用 AI-primary v2 活动文案候选合同 | 当前仅代码与本地测试；部署后仍需单用户 Preview E2E，不表示能力已上线 |
 | 2026-10-12 | v1.6 | 增加默认关闭的 AI-primary 证据合同、活动文案校验、无年份推测和公共日历软证据 | 当前仅代码与本地测试；不表示 Preview 已配置、飞书 E2E 已通过或能力已上线 |

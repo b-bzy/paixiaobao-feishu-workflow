@@ -34,7 +34,29 @@ function validateValues(draft: CouponOaDraft) {
     draft.values.applicationType === "优惠券申请"
       ? couponApplicationValuesSchema
       : couponModificationValuesSchema;
-  return schema.parse(draft.values);
+  const parsed = schema.parse(draft.values);
+  if (parsed.applicationType === "优惠券申请") {
+    const today = new Date().toISOString().slice(0, 10);
+    if (parsed.activityStartAt && parsed.activityStartAt < today) {
+      throw new Error(
+        `活动开始日期不能早于今天（${today}）；请在第二轮表单中修正日期后重新提交`,
+      );
+    }
+  }
+  return parsed;
+}
+
+/** A 4xx rejection from the create endpoint means nothing was created. */
+function isDefinitiveCreateRejection(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number" &&
+    (error as { status: number }).status >= 400 &&
+    (error as { status: number }).status < 500 &&
+    (error as { status: number }).status !== 429
+  );
 }
 
 /**
@@ -245,6 +267,20 @@ export async function submitConfirmedCouponOaDraft(
         validationIssues: [message],
       });
       return { draft: reviewDraft, verificationIssues: [message] };
+    }
+    // A synchronous 4xx parameter rejection is definitive: nothing was
+    // created, so the draft goes back to Confirmed with the reason instead
+    // of being locked into SubmissionUnknown.
+    if (isDefinitiveCreateRejection(error)) {
+      const rejected = await persistCouponOaSubmissionOutcome(submitting, {
+        status: "Confirmed",
+        failureReason: `Coupon OA submission rejected: ${message}`,
+        validationIssues: [message],
+      });
+      throw Object.assign(
+        error instanceof Error ? error : new Error(message),
+        { draft: rejected },
+      );
     }
     // The create outcome is unknown here, but a concurrent attempt may have
     // already created and persisted an instance. Re-read first so its

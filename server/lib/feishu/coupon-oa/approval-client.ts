@@ -61,7 +61,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const result = (await response.json()) as FeishuResponse<T>;
   if (!response.ok || Number(result.code) !== 0 || !result.data) {
-    throw new Error(`Feishu approval request failed: ${result.msg}`);
+    // The HTTP status lets callers distinguish a synchronous parameter
+    // rejection (nothing was created, safe to surface and fix) from a
+    // transport/unknown failure that requires reconciliation.
+    throw Object.assign(
+      new Error(`Feishu approval request failed: ${result.msg}`),
+      { status: response.status },
+    );
   }
   return result.data;
 }

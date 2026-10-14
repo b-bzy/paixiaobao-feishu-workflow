@@ -5,6 +5,7 @@ import {
 } from "../approval-schema";
 import { assertCouponOaDraftStoreConfigured } from "../config";
 import {
+  COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
   type CouponOaDraft,
   createCouponOaDraft,
   getCouponOaDraft,
@@ -129,7 +130,7 @@ export async function handoffThreeSourcePilotToOaDraft(input: {
   }
   return createCouponOaDraft({
     ownerOpenId: input.ownerOpenId,
-    schemaVersion: "coupon-three-source-pilot-v1",
+    schemaVersion: COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
     values: mapThreeSourcePrefillToOaValues({
       prefill: input.prefill,
       attachments,

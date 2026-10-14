@@ -43,8 +43,9 @@ interface RawFeishuUser {
 
 export interface CouponOaApplicantProfile {
   openId: string;
-  userId: string;
-  displayName: string;
+  /** Absent when the app lacks contact read scopes (degraded identity). */
+  userId?: string;
+  displayName?: string;
   departmentOpenIds: string[];
   primaryDepartmentOpenId?: string;
 }
@@ -74,23 +75,25 @@ export async function getCouponOaApplicantProfile(
     `/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id&department_id_type=open_department_id`,
   );
   const user = data.user;
-  if (!user?.user_id || !user.open_id || !user.name) {
-    throw new Error(
-      "Feishu user profile did not include a stable applicant identity",
-    );
+  if (!user?.open_id) {
+    throw new Error("Feishu user profile did not include the confirmer");
   }
   if (user.open_id !== openId) {
     throw new Error(
       "Feishu user profile did not match the coupon OA confirmer",
     );
   }
+  // Without the contact read scopes the API returns a hollow profile that
+  // only echoes the open ID. The instance applicant is already bound by the
+  // create-request open_id and the native form auto-fills department and
+  // applicant, so an open-ID-only profile is a valid degraded identity.
   const departmentOpenIds = [...new Set(user.department_ids ?? [])].filter(
     Boolean,
   );
   return {
     openId: user.open_id,
-    userId: user.user_id,
-    displayName: user.name,
+    ...(user.user_id ? { userId: user.user_id } : {}),
+    ...(user.name ? { displayName: user.name } : {}),
     departmentOpenIds,
     ...(user.primary_department_id
       ? { primaryDepartmentOpenId: user.primary_department_id }

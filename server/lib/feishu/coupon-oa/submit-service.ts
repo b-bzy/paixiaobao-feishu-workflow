@@ -7,6 +7,7 @@ import {
 } from "./approval-client";
 import {
   bindCouponApprovalSchema,
+  type CouponOaDraftValues,
   couponApplicationValuesSchema,
   couponModificationValuesSchema,
   diffSubmittedApprovalForm,
@@ -17,7 +18,16 @@ import {
   assertCouponOaNativeSubmitAllowed,
   getCouponOaApprovalCode,
 } from "./config";
-import { type CouponOaDraft, updateCouponOaDraft } from "./draft-store";
+import {
+  type CouponOaDraft,
+  getCouponOaDraft,
+  persistCouponOaSubmissionOutcome,
+  updateCouponOaDraft,
+} from "./draft-store";
+import {
+  type FrozenCouponOaArtifact,
+  uploadVerifiedCouponOaArtifacts,
+} from "./frozen-artifact-handoff";
 
 function validateValues(draft: CouponOaDraft) {
   const schema =
@@ -27,6 +37,14 @@ function validateValues(draft: CouponOaDraft) {
   return schema.parse(draft.values);
 }
 
+/**
+ * Best-effort identity snapshot. The open ID alone is the stable confirmer
+ * identity required for audit; userId / display name / department only
+ * enrich the preview card and are omitted when the app lacks contact read
+ * scopes (the native approval form auto-fills them from the instance's
+ * open_id anyway). An ambiguous multi-department profile degrades the same
+ * way instead of blocking confirmation.
+ */
 async function resolveFinalConfirmerIdentity(draft: CouponOaDraft) {
   const profile = await getCouponOaApplicantProfile(draft.ownerOpenId);
   const departmentOpenId = profile.primaryDepartmentOpenId
@@ -36,16 +54,13 @@ async function resolveFinalConfirmerIdentity(draft: CouponOaDraft) {
     : profile.departmentOpenIds.length === 1
       ? profile.departmentOpenIds[0]
       : undefined;
-  if (!departmentOpenId) {
-    throw new Error(
-      "无法唯一确定申请部门；请在飞书中确认主部门后重新发起优惠券 OA",
-    );
-  }
   return {
     openId: profile.openId,
-    userId: profile.userId,
-    displayName: profile.displayName,
-    departmentOpenId,
+    ...(profile.userId ? { userId: profile.userId } : {}),
+    ...(profile.displayName
+      ? { displayName: profile.displayName }
+      : {}),
+    ...(departmentOpenId ? { departmentOpenId } : {}),
     resolvedAt: new Date().toISOString(),
   };
 }
@@ -85,6 +100,68 @@ export interface CouponOaSubmissionResult {
   verificationIssues: string[];
 }
 
+function fileCodesByRole(
+  attachments: CouponOaDraft["attachments"],
+  role: CouponOaDraft["attachments"][number]["role"],
+): string[] {
+  return attachments
+    .filter((attachment) => attachment.role === role)
+    .map((attachment) => attachment.fileCode);
+}
+
+/**
+ * Re-downloads the frozen Drive artifacts, verifies their bytes and SHA-256,
+ * and re-uploads them to obtain fresh approval file codes. Approval file
+ * codes minted at handoff time may go stale before the user submits, and a
+ * stale code would otherwise only surface as an irrecoverable create
+ * failure. Drafts without persisted Drive tokens (legacy message uploads)
+ * keep their existing codes.
+ */
+function toFrozenCouponOaArtifact(
+  attachment: CouponOaDraft["attachments"][number],
+): FrozenCouponOaArtifact | undefined {
+  if (!attachment.fileToken) return undefined;
+  switch (attachment.role) {
+    case "couponTable":
+    case "productWhitelist":
+    case "productBlacklist":
+    case "calcImage":
+      return {
+        artifactId: attachment.artifactId,
+        order: attachment.order,
+        role: attachment.role,
+        fileName: attachment.fileName,
+        fileToken: attachment.fileToken,
+        bytes: attachment.bytes,
+        sha256: attachment.sha256,
+        contentType: attachment.contentType,
+      };
+    default:
+      return undefined;
+  }
+}
+
+async function refreshFrozenCouponOaAttachments(
+  draft: CouponOaDraft,
+): Promise<CouponOaDraft> {
+  if (!draft.attachments.length) return draft;
+  const artifacts = draft.attachments.map(toFrozenCouponOaArtifact);
+  if (artifacts.some((artifact) => !artifact)) return draft;
+  const attachments = await uploadVerifiedCouponOaArtifacts({
+    artifacts: artifacts.map((artifact) => artifact as FrozenCouponOaArtifact),
+  });
+  const blacklist = fileCodesByRole(attachments, "productBlacklist");
+  const calcImages = fileCodesByRole(attachments, "calcImage");
+  const values: CouponOaDraftValues = {
+    ...draft.values,
+    couponTableFileCodes: fileCodesByRole(attachments, "couponTable"),
+    productWhitelistFileCodes: fileCodesByRole(attachments, "productWhitelist"),
+    productBlacklistFileCodes: blacklist.length ? blacklist : undefined,
+    calcImageFileCodes: calcImages.length ? calcImages : undefined,
+  };
+  return updateCouponOaDraft(draft, { values, attachments });
+}
+
 /**
  * Creates a native approval only from a frozen confirmation snapshot. The
  * approval definition is fetched again immediately before the write; any
@@ -110,18 +187,21 @@ export async function submitConfirmedCouponOaDraft(
     );
   }
 
-  const values = validateValues(draft);
+  validateValues(draft);
   const identity = confirmedIdentity(draft);
-  const form = encodeCouponOaForm(schema, values, identity);
+  // The guarded Submitting claim narrows the double-submit window to one
+  // Base round trip: a concurrent click re-reads a draft that is no longer
+  // Confirmed and stops before touching the approval API.
   const submitting = await updateCouponOaDraft(draft, {
     status: "Submitting",
     validationIssues: [],
   });
+  const formSource = await refreshFrozenCouponOaAttachments(submitting);
+  const form = encodeCouponOaForm(schema, validateValues(formSource), identity);
 
   let created:
     | Awaited<ReturnType<typeof createCouponApprovalInstance>>
     | undefined;
-  let createdDraft: CouponOaDraft | undefined;
   try {
     created = await createCouponApprovalInstance({
       approvalCode,
@@ -132,7 +212,7 @@ export async function submitConfirmedCouponOaDraft(
     // Persist the native instance before any best-effort GET verification. If
     // the readback fails, the draft must not become retryable and create a
     // duplicate approval.
-    createdDraft = await updateCouponOaDraft(submitting, {
+    const persisted = await persistCouponOaSubmissionOutcome(submitting, {
       status: "Submitting",
       approvalInstanceCode: created.instanceCode,
       approvalInstanceLink: created.instanceLink,
@@ -145,7 +225,7 @@ export async function submitConfirmedCouponOaDraft(
       ...verification.needsReview,
     ];
     const needsReview = verificationIssues.length > 0;
-    const next = await updateCouponOaDraft(createdDraft, {
+    const next = await persistCouponOaSubmissionOutcome(persisted, {
       status: needsReview ? "CreatedNeedsReview" : "Submitted",
       failureReason: needsReview
         ? `Created approval requires review: ${verificationIssues.join("; ")}`
@@ -157,19 +237,28 @@ export async function submitConfirmedCouponOaDraft(
     const message =
       error instanceof Error ? error.message : "Unknown submission error";
     if (created) {
-      const reviewDraft = await updateCouponOaDraft(
-        createdDraft ?? submitting,
-        {
-          status: "CreatedNeedsReview",
-          approvalInstanceCode: created.instanceCode,
-          approvalInstanceLink: created.instanceLink,
-          failureReason: `Created approval requires review: ${message}`,
-          validationIssues: [message],
-        },
-      );
+      const reviewDraft = await persistCouponOaSubmissionOutcome(submitting, {
+        status: "CreatedNeedsReview",
+        approvalInstanceCode: created.instanceCode,
+        approvalInstanceLink: created.instanceLink,
+        failureReason: `Created approval requires review: ${message}`,
+        validationIssues: [message],
+      });
       return { draft: reviewDraft, verificationIssues: [message] };
     }
-    const unknown = await updateCouponOaDraft(submitting, {
+    // The create outcome is unknown here, but a concurrent attempt may have
+    // already created and persisted an instance. Re-read first so its
+    // instance code survives instead of being blanked by SubmissionUnknown.
+    const reconciled = await getCouponOaDraft(submitting.recordId);
+    if (reconciled.approvalInstanceCode) {
+      const settled = await persistCouponOaSubmissionOutcome(reconciled, {
+        status: "CreatedNeedsReview",
+        failureReason: `Concurrent submission created an approval; review required: ${message}`,
+        validationIssues: [message],
+      });
+      return { draft: settled, verificationIssues: [message] };
+    }
+    const unknown = await persistCouponOaSubmissionOutcome(submitting, {
       status: "SubmissionUnknown",
       failureReason: `Coupon OA create outcome requires reconciliation: ${message}`,
       validationIssues: [message],

@@ -78,6 +78,7 @@ export async function uploadVerifiedCouponOaArtifacts(input: {
         role: artifact.role,
         fileName: artifact.fileName,
         fileCode,
+        fileToken: artifact.fileToken,
         sha256: artifact.sha256,
         bytes: artifact.bytes,
         contentType: artifact.contentType,

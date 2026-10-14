@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../draft-store", () => ({
+  COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION: "coupon-three-source-pilot-v1",
   createCouponOaDraft: vi.fn(),
   getCouponOaDraft: vi.fn(),
   listActiveCouponOaDrafts: vi.fn(),

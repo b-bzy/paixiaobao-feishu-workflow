@@ -150,11 +150,12 @@ export type CouponOaValues = CouponApplicationValues | CouponModificationValues;
 export interface CouponOaIdentitySnapshot {
   /** The owner that completed the final confirmation. */
   openId: string;
-  /** Feishu's immutable user ID required by the contact control. */
-  userId: string;
-  displayName: string;
-  /** The approved department selected from the confirmers' directory profile. */
-  departmentOpenId: string;
+  /** Feishu's immutable user ID; absent without contact read scopes. */
+  userId?: string;
+  /** Absent without contact read scopes; the preview card falls back. */
+  displayName?: string;
+  /** Absent when the confirmer's department could not be resolved. */
+  departmentOpenId?: string;
   departmentName?: string;
   resolvedAt: string;
 }

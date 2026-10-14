@@ -19,6 +19,17 @@ export const couponOaDraftStatuses = [
 ] as const;
 export type CouponOaDraftStatus = (typeof couponOaDraftStatuses)[number];
 
+const terminalCouponOaDraftStatuses: readonly CouponOaDraftStatus[] = [
+  "Submitted",
+  "CreatedNeedsReview",
+  "SubmissionUnknown",
+  "Canceled",
+];
+
+/** Schema version stamped on OA drafts created by the three-source handoff. */
+export const COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION =
+  "coupon-three-source-pilot-v1";
+
 export interface CouponOaAttachment {
   artifactId?: string;
   order?: number;
@@ -31,6 +42,8 @@ export interface CouponOaAttachment {
     | "removeItems";
   fileName: string;
   fileCode: string;
+  /** Frozen Drive file token; present on three-source handoff attachments. */
+  fileToken?: string;
   sha256: string;
   bytes: number;
   contentType?: "image/png" | "image/jpeg";
@@ -270,16 +283,23 @@ export async function updateCouponOaDraft(
     >
   >,
 ): Promise<CouponOaDraft> {
-  if (
-    [
-      "Submitted",
-      "CreatedNeedsReview",
-      "SubmissionUnknown",
-      "Canceled",
-    ].includes(draft.status)
-  ) {
+  if (terminalCouponOaDraftStatuses.includes(draft.status)) {
     throw new Error(
       "Submitted, review-required, submission-unknown, or canceled coupon OA drafts cannot be changed",
+    );
+  }
+  // Base has no compare-and-swap, so re-read the stored record before every
+  // write: a status drift means another handler moved the draft concurrently
+  // and this stale snapshot must not overwrite it.
+  const stored = await getCouponOaDraft(draft.recordId);
+  if (terminalCouponOaDraftStatuses.includes(stored.status)) {
+    throw new Error(
+      `Coupon OA draft is already ${stored.status}; reload it before changing`,
+    );
+  }
+  if (stored.status !== draft.status) {
+    throw new Error(
+      `Coupon OA draft status changed concurrently (${draft.status} → ${stored.status}); reload it before changing`,
     );
   }
   const tableId = getCouponOaDraftTableId();
@@ -288,5 +308,32 @@ export async function updateCouponOaDraft(
     `/bitable/v1/apps/${process.env.FEISHU_BASE_APP_TOKEN}/tables/${tableId}/records/${draft.recordId}`,
     { method: "PUT", body: JSON.stringify({ fields: fields(next) }) },
   );
-  return parseRecord(record);
+  const persisted = parseRecord(record);
+  if (updates.status && persisted.status !== updates.status) {
+    throw new Error(
+      `Coupon OA draft write was not persisted as ${updates.status}`,
+    );
+  }
+  return persisted;
+}
+
+/**
+ * Persists a submission outcome from a FRESH stored snapshot. If a concurrent
+ * attempt already settled the draft into a terminal state, that outcome wins
+ * and is returned untouched — reconciliation must never overwrite it.
+ */
+export async function persistCouponOaSubmissionOutcome(
+  draft: CouponOaDraft,
+  updates: Partial<
+    Omit<
+      CouponOaDraft,
+      "recordId" | "draftId" | "ownerOpenId" | "createdAt" | "updatedAt"
+    >
+  >,
+): Promise<CouponOaDraft> {
+  const stored = await getCouponOaDraft(draft.recordId);
+  if (terminalCouponOaDraftStatuses.includes(stored.status)) {
+    return stored;
+  }
+  return updateCouponOaDraft(stored, updates);
 }

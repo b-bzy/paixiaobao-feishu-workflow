@@ -73,6 +73,36 @@ describe("coupon OA approval client", () => {
     );
   });
 
+  it("degrades a hollow profile to an open-ID-only identity", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(response({ user: { open_id: "ou_submitter" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCouponOaApplicantProfile("ou_submitter")).resolves.toEqual({
+      openId: "ou_submitter",
+      departmentOpenIds: [],
+    });
+  });
+
+  it("rejects a profile that answers for a different user", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response({
+        user: {
+          user_id: "user_else",
+          open_id: "ou_someone_else",
+          name: "别人",
+          department_ids: ["od_one"],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCouponOaApplicantProfile("ou_submitter")).rejects.toThrow(
+      "did not match the coupon OA confirmer",
+    );
+  });
+
   it("creates an instance without node approver or cc overrides", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       response({

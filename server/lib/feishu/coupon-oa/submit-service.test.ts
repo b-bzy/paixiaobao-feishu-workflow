@@ -10,7 +10,14 @@ vi.mock("./config", () => ({
   assertCouponOaNativeSubmitAllowed: vi.fn(),
   getCouponOaApprovalCode: vi.fn(() => "approval-code"),
 }));
-vi.mock("./draft-store", () => ({ updateCouponOaDraft: vi.fn() }));
+vi.mock("./draft-store", () => ({
+  getCouponOaDraft: vi.fn(),
+  persistCouponOaSubmissionOutcome: vi.fn(),
+  updateCouponOaDraft: vi.fn(),
+}));
+vi.mock("./frozen-artifact-handoff", () => ({
+  uploadVerifiedCouponOaArtifacts: vi.fn(),
+}));
 
 import {
   createCouponApprovalInstance,
@@ -26,7 +33,12 @@ import {
   assertCouponOaNativeSubmitAllowed,
   getCouponOaApprovalCode,
 } from "./config";
-import { updateCouponOaDraft } from "./draft-store";
+import {
+  getCouponOaDraft,
+  persistCouponOaSubmissionOutcome,
+  updateCouponOaDraft,
+} from "./draft-store";
+import { uploadVerifiedCouponOaArtifacts } from "./frozen-artifact-handoff";
 import {
   confirmCouponOaDraft,
   submitConfirmedCouponOaDraft,
@@ -165,6 +177,19 @@ describe("coupon OA submit service", () => {
         ...updates,
       }),
     );
+    vi.mocked(persistCouponOaSubmissionOutcome).mockImplementation(
+      async (value, updates) => ({
+        ...value,
+        ...updates,
+      }),
+    );
+    vi.mocked(getCouponOaDraft).mockImplementation(async (recordId) => ({
+      ...draft("Confirmed"),
+      recordId,
+      status: "Submitting",
+      approvalInstanceCode: undefined,
+      approvalInstanceLink: undefined,
+    }));
   });
 
   it("freezes the current definition hash before confirmation", async () => {
@@ -181,7 +206,24 @@ describe("coupon OA submit service", () => {
     });
   });
 
-  it("blocks confirmation when the confirmer has no unambiguous department", async () => {
+  it("confirms with an open-ID-only identity when the directory profile is hollow", async () => {
+    vi.mocked(getCouponOaApplicantProfile).mockResolvedValue({
+      openId: "ou_submitter",
+      departmentOpenIds: [],
+    });
+
+    await expect(confirmCouponOaDraft(draft())).resolves.toMatchObject({
+      status: "Confirmed",
+      values: {
+        identitySnapshot: {
+          openId: "ou_submitter",
+          resolvedAt: expect.any(String),
+        },
+      },
+    });
+  });
+
+  it("degrades instead of blocking when the department is ambiguous", async () => {
     vi.mocked(getCouponOaApplicantProfile).mockResolvedValue({
       openId: "ou_submitter",
       userId: "user_submitter",
@@ -189,10 +231,43 @@ describe("coupon OA submit service", () => {
       departmentOpenIds: ["od_one", "od_two"],
     });
 
-    await expect(confirmCouponOaDraft(draft())).rejects.toThrow(
-      "无法唯一确定申请部门",
-    );
-    expect(updateCouponOaDraft).not.toHaveBeenCalled();
+    await expect(confirmCouponOaDraft(draft())).resolves.toMatchObject({
+      status: "Confirmed",
+      values: {
+        identitySnapshot: {
+          openId: "ou_submitter",
+          userId: "user_submitter",
+        },
+      },
+    });
+    const snapshot = vi.mocked(updateCouponOaDraft).mock.calls[0]?.[1];
+    expect(JSON.stringify(snapshot)).not.toContain("departmentOpenId");
+  });
+
+  it("encodes no department or applicant controls for an open-ID-only identity", async () => {
+    // Covered indirectly: confirm with a hollow profile, then submit and
+    // assert the encoded form carries neither identity control.
+    vi.mocked(getCouponOaApplicantProfile).mockResolvedValue({
+      openId: "ou_submitter",
+      departmentOpenIds: [],
+    });
+    const confirmed = await confirmCouponOaDraft(draft());
+    vi.mocked(createCouponApprovalInstance).mockResolvedValue({
+      instanceCode: "instance-code",
+      instanceLink: "https://example.test/instance",
+    });
+    vi.mocked(getCouponApprovalInstance).mockImplementation(async () => ({
+      form: JSON.stringify(
+        vi.mocked(createCouponApprovalInstance).mock.calls[0]?.[0].form ?? [],
+      ),
+    }));
+
+    await submitConfirmedCouponOaDraft(confirmed);
+
+    const form = vi.mocked(createCouponApprovalInstance).mock.calls[0]?.[0]
+      .form;
+    expect(JSON.stringify(form)).not.toContain('"type":"department"');
+    expect(JSON.stringify(form)).not.toContain('"type":"contact"');
   });
 
   it("fails closed when the native definition changed after confirmation", async () => {
@@ -293,7 +368,7 @@ describe("coupon OA submit service", () => {
       },
       verificationIssues: ["approval readback unavailable"],
     });
-    expect(updateCouponOaDraft).toHaveBeenCalledWith(
+    expect(persistCouponOaSubmissionOutcome).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         status: "Submitting",
@@ -318,9 +393,183 @@ describe("coupon OA submit service", () => {
       },
     });
     expect(getCouponApprovalInstance).not.toHaveBeenCalled();
-    expect(updateCouponOaDraft).toHaveBeenCalledWith(
+    expect(persistCouponOaSubmissionOutcome).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ status: "SubmissionUnknown" }),
     );
+  });
+
+  it("does not blank an instance code a concurrent attempt already persisted", async () => {
+    vi.mocked(createCouponApprovalInstance).mockRejectedValue(
+      new Error("approval create timed out"),
+    );
+    vi.mocked(getCouponOaDraft).mockResolvedValue({
+      ...draft("Confirmed"),
+      status: "Submitting",
+      approvalInstanceCode: "instance-code-from-peer",
+      approvalInstanceLink: "https://example.test/peer-instance",
+    });
+
+    await expect(
+      submitConfirmedCouponOaDraft(draft("Confirmed")),
+    ).resolves.toMatchObject({
+      draft: {
+        status: "CreatedNeedsReview",
+        approvalInstanceCode: "instance-code-from-peer",
+        failureReason: expect.stringContaining("Concurrent submission"),
+      },
+      verificationIssues: ["approval create timed out"],
+    });
+    expect(persistCouponOaSubmissionOutcome).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: "SubmissionUnknown" }),
+    );
+  });
+
+  it("stops before creating when the Submitting claim detects a concurrent move", async () => {
+    vi.mocked(updateCouponOaDraft).mockRejectedValue(
+      new Error(
+        "Coupon OA draft status changed concurrently (Confirmed → Submitting); reload it before changing",
+      ),
+    );
+
+    await expect(
+      submitConfirmedCouponOaDraft(draft("Confirmed")),
+    ).rejects.toThrow("status changed concurrently");
+    expect(createCouponApprovalInstance).not.toHaveBeenCalled();
+  });
+
+  it("re-verifies frozen Drive artifacts and refreshes file codes at submit", async () => {
+    vi.mocked(uploadVerifiedCouponOaArtifacts).mockResolvedValue([
+      {
+        role: "couponTable",
+        fileName: "配券信息表.xlsx",
+        fileCode: "fresh-coupon-code",
+        fileToken: "drive-coupon",
+        sha256: "hash-coupon",
+        bytes: 100,
+      },
+      {
+        role: "productWhitelist",
+        fileName: "白名单.xlsx",
+        fileCode: "fresh-whitelist-code",
+        fileToken: "drive-whitelist",
+        sha256: "hash-whitelist",
+        bytes: 100,
+      },
+      {
+        artifactId: "img-0",
+        order: 0,
+        role: "calcImage",
+        fileName: "测算图.png",
+        fileCode: "fresh-image-code",
+        fileToken: "drive-image",
+        sha256: "hash-image",
+        bytes: 100,
+        contentType: "image/png" as const,
+      },
+    ]);
+    vi.mocked(createCouponApprovalInstance).mockResolvedValue({
+      instanceCode: "instance-code",
+      instanceLink: "https://example.test/instance",
+    });
+    // Echo the submitted form back as the readback so the field-by-field
+    // diff sees a clean instance; the fresh file codes are asserted below.
+    vi.mocked(getCouponApprovalInstance).mockImplementation(async () => ({
+      form: JSON.stringify(
+        vi.mocked(createCouponApprovalInstance).mock.calls[0]?.[0].form ?? [],
+      ),
+    }));
+
+    const frozenDraft = {
+      ...draft("Confirmed"),
+      values: {
+        ...values,
+        identitySnapshot: {
+          openId: "ou_submitter",
+          userId: "user_submitter",
+          displayName: "测试提报人",
+          departmentOpenId: "od_primary",
+          resolvedAt: "2030-01-01T00:00:00.000Z",
+        },
+      },
+      attachments: [
+        {
+          role: "couponTable" as const,
+          fileName: "配券信息表.xlsx",
+          fileCode: "stale-coupon-code",
+          fileToken: "drive-coupon",
+          sha256: "hash-coupon",
+          bytes: 100,
+        },
+        {
+          role: "productWhitelist" as const,
+          fileName: "白名单.xlsx",
+          fileCode: "stale-whitelist-code",
+          fileToken: "drive-whitelist",
+          sha256: "hash-whitelist",
+          bytes: 100,
+        },
+        {
+          artifactId: "img-0",
+          order: 0,
+          role: "calcImage" as const,
+          fileName: "测算图.png",
+          fileCode: "stale-image-code",
+          fileToken: "drive-image",
+          sha256: "hash-image",
+          bytes: 100,
+          contentType: "image/png" as const,
+        },
+      ],
+    };
+
+    await expect(
+      submitConfirmedCouponOaDraft(frozenDraft),
+    ).resolves.toMatchObject({ draft: { status: "Submitted" } });
+
+    expect(uploadVerifiedCouponOaArtifacts).toHaveBeenCalledTimes(1);
+    expect(createCouponApprovalInstance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        form: expect.arrayContaining([
+          expect.objectContaining({ value: ["fresh-coupon-code"] }),
+          expect.objectContaining({ value: ["fresh-whitelist-code"] }),
+          expect.objectContaining({ value: ["fresh-image-code"] }),
+        ]),
+      }),
+    );
+    expect(updateCouponOaDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        values: expect.objectContaining({
+          couponTableFileCodes: ["fresh-coupon-code"],
+          productWhitelistFileCodes: ["fresh-whitelist-code"],
+          calcImageFileCodes: ["fresh-image-code"],
+        }),
+      }),
+    );
+  });
+
+  it("keeps existing file codes when attachments have no Drive tokens", async () => {
+    vi.mocked(createCouponApprovalInstance).mockResolvedValue({
+      instanceCode: "instance-code",
+      instanceLink: "https://example.test/instance",
+    });
+    vi.mocked(getCouponApprovalInstance).mockResolvedValue({ form: "[]" });
+
+    await submitConfirmedCouponOaDraft({
+      ...draft("Confirmed"),
+      attachments: [
+        {
+          role: "couponTable",
+          fileName: "配券信息表.xlsx",
+          fileCode: "legacy-code",
+          sha256: "hash",
+          bytes: 100,
+        },
+      ],
+    });
+
+    expect(uploadVerifiedCouponOaArtifacts).not.toHaveBeenCalled();
   });
 });

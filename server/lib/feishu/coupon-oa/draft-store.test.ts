@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../client", () => ({ getTenantAccessToken: vi.fn() }));
 
 import { getTenantAccessToken } from "../client";
-import { saveCouponOaDraft } from "./draft-store";
+import {
+  type CouponOaDraft,
+  type CouponOaDraftStatus,
+  persistCouponOaSubmissionOutcome,
+  saveCouponOaDraft,
+  updateCouponOaDraft,
+} from "./draft-store";
 
 const values = {
   applicationType: "优惠券申请" as const,
@@ -28,7 +34,7 @@ function record(fields: Record<string, unknown>) {
 
 function fields(
   input = values,
-  status: "Draft" | "Confirmed" | "Submitting" | "SubmissionUnknown" = "Draft",
+  status: CouponOaDraftStatus = "Draft",
 ): Record<string, unknown> {
   return {
     "Draft ID": "COA-existing",
@@ -86,7 +92,12 @@ describe("saveCouponOaDraft", () => {
   it("updates the active draft instead of creating a duplicate record", async () => {
     fetchMock
       .mockResolvedValueOnce(success({ items: [record(fields())] }))
-      .mockResolvedValueOnce(success({ record: record(fields()) }));
+      .mockResolvedValueOnce(success({ record: record(fields()) }))
+      .mockResolvedValueOnce(
+        success({
+          record: record(fields({ ...values, activityName: "更新后的活动" })),
+        }),
+      );
 
     await saveCouponOaDraft({
       ownerOpenId: "ou_submitter",
@@ -94,11 +105,12 @@ describe("saveCouponOaDraft", () => {
       values: { ...values, activityName: "更新后的活动" },
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("/records/rec-draft");
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
-    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain("更新后的活动");
-    expect(fetchMock.mock.calls[1]?.[1]?.body).toContain(
+    // list (GET) + storage guard (GET) + update (PUT)
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2]?.[0]).toContain("/records/rec-draft");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "PUT" });
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toContain("更新后的活动");
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toContain(
       '"Attachments JSON":"[]"',
     );
   });
@@ -121,4 +133,134 @@ describe("saveCouponOaDraft", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+function draftSnapshot(
+  status: "Confirmed" | "Submitting" | "Submitted" = "Confirmed",
+): CouponOaDraft {
+  const parsed = JSON.parse(fields(values, status)["Fields JSON"] as string);
+  return {
+    recordId: "rec-draft",
+    draftId: "COA-existing",
+    ownerOpenId: "ou_submitter",
+    status,
+    schemaVersion: "coupon-three-source-pilot-v1",
+    values: parsed,
+    attachments: [],
+    validationIssues: [],
+  };
+}
+
+describe("updateCouponOaDraft storage guard", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    process.env.FEISHU_BASE_APP_TOKEN = "appCouponDraft";
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    delete process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
+  });
+
+  it("rejects a stale snapshot when the stored status drifted", async () => {
+    fetchMock.mockResolvedValueOnce(
+      success({ record: record(fields(values, "Submitting")) }),
+    );
+
+    await expect(
+      updateCouponOaDraft(draftSnapshot("Confirmed"), { status: "Submitting" }),
+    ).rejects.toThrow("status changed concurrently");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a write when the stored draft already reached a terminal state", async () => {
+    fetchMock.mockResolvedValueOnce(
+      success({ record: record(fields(values, "Submitted")) }),
+    );
+
+    await expect(
+      updateCouponOaDraft(draftSnapshot("Submitting"), {
+        status: "SubmissionUnknown",
+      }),
+    ).rejects.toThrow("already Submitted");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("verifies the intended status was persisted and returns it", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        success({ record: record(fields(values, "Confirmed")) }),
+      )
+      .mockResolvedValueOnce(
+        success({ record: record(fields(values, "Confirmed")) }),
+      );
+
+    await expect(
+      updateCouponOaDraft(draftSnapshot(), { status: "Confirmed" }),
+    ).resolves.toMatchObject({ status: "Confirmed" });
+
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+  });
+});
+
+describe("persistCouponOaSubmissionOutcome", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    process.env.FEISHU_BASE_APP_TOKEN = "appCouponDraft";
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    delete process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
+  });
+
+  it("never overwrites an outcome a concurrent attempt already settled", async () => {
+    fetchMock.mockResolvedValueOnce(
+      success({ record: record(fields(values, "Submitted")) }),
+    );
+
+    await expect(
+      persistCouponOaSubmissionOutcome(draftSnapshot("Submitting"), {
+        status: "SubmissionUnknown",
+      }),
+    ).resolves.toMatchObject({ status: "Submitted" });
+
+    // Only the re-read GET happened; no PUT may follow.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes the outcome from the fresh stored snapshot otherwise", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        success({ record: record(fields(values, "Submitting")) }),
+      )
+      .mockResolvedValueOnce(
+        success({ record: record(fields(values, "Submitting")) }),
+      )
+      .mockResolvedValueOnce(
+        success({ record: record(fields(values, "CreatedNeedsReview")) }),
+      );
+
+    await expect(
+      persistCouponOaSubmissionOutcome(draftSnapshot("Submitting"), {
+        status: "CreatedNeedsReview",
+      }),
+    ).resolves.toMatchObject({ status: "CreatedNeedsReview" });
+
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "PUT" });
+  });
 });

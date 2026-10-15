@@ -248,6 +248,94 @@ describe("coupon OA approval schema", () => {
     expect(result.needsReview).toHaveLength(1);
   });
 
+  it("verifies display-URL attachment readback by file name", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const attachmentFileNames = new Map([
+      ["code-a", "配券信息表_v5.xlsx"],
+      ["code-b", "商品明细白名单_v5.xlsx"],
+    ]);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["code-a", "code-b"],
+        },
+      ],
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: [
+            "https://lf6-approval-sign.feishucdn.com/1.xlsx?x-expires=1",
+            "https://lf6-approval-sign.feishucdn.com/2.xlsx?x-expires=1",
+          ],
+          ext: "商品明细白名单_v5.xlsx,配券信息表_v5.xlsx",
+        },
+      ],
+      { attachmentFileNames },
+    );
+
+    expect(result).toEqual({ issues: [], needsReview: [] });
+  });
+
+  it("requires review when display-URL file names cannot be matched", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["code-a"],
+        },
+      ],
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["https://example.test/signed-file"],
+          ext: "另一个文件.xlsx",
+        },
+      ],
+      {
+        attachmentFileNames: new Map([["code-a", "配券信息表_v5.xlsx"]]),
+      },
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(result.needsReview).toHaveLength(1);
+  });
+
+  it("flags a definitive issue when display-URL counts differ", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["code-a"],
+        },
+      ],
+      [
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: ["https://example.test/1", "https://example.test/2"],
+          ext: "a.xlsx,b.xlsx",
+        },
+      ],
+      {
+        attachmentFileNames: new Map([["code-a", "配券信息表_v5.xlsx"]]),
+      },
+    );
+
+    expect(result.issues).toHaveLength(1);
+    expect(result.needsReview).toEqual([]);
+  });
+
   it("rejects genuinely changed native values and duplicate controls", () => {
     const schema = bindCouponApprovalSchema(definition);
     const result = diffSubmittedApprovalForm(

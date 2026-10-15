@@ -349,6 +349,101 @@ describe("coupon OA submit service", () => {
     );
   });
 
+  it("marks submitted when display-URL readback matches frozen artifact file names", async () => {
+    vi.mocked(createCouponApprovalInstance).mockResolvedValue({
+      instanceCode: "instance-code",
+      instanceLink: "https://example.test/instance",
+    });
+    const draftWithArtifacts = {
+      ...draft("Confirmed"),
+      attachments: [
+        {
+          role: "calcImage" as const,
+          order: 0,
+          fileName: "满减测算图片.png",
+          fileCode: "image",
+          sha256: "hash-image",
+          bytes: 100,
+          contentType: "image/png" as const,
+        },
+        {
+          role: "couponTable" as const,
+          fileName: "配券信息表_v5.xlsx",
+          fileCode: "coupon",
+          sha256: "hash-coupon",
+          bytes: 100,
+        },
+        {
+          role: "productWhitelist" as const,
+          fileName: "商品明细白名单_v5.xlsx",
+          fileCode: "white",
+          sha256: "hash-white",
+          bytes: 100,
+        },
+      ],
+    };
+    const signedUrl = (name: string) =>
+      `https://lf6-approval-sign.feishucdn.com/${name}?x-expires=1792070130&x-signature=sig`;
+    vi.mocked(getCouponApprovalInstance).mockResolvedValue({
+      form: JSON.stringify([
+        {
+          id: "department",
+          type: "department",
+          value: [{ open_id: "od_primary" }],
+        },
+        {
+          id: "applicant",
+          type: "contact",
+          value: ["user_submitter"],
+          open_ids: ["ou_submitter"],
+        },
+        { id: "applicationType", type: "radioV2", value: "option:优惠券申请" },
+        { id: "businessMode", type: "radioV2", value: "option:寄卖" },
+        { id: "activityName", type: "input", value: "测试活动" },
+        { id: "activityBackground", type: "textarea", value: "测试背景" },
+        { id: "overDeduction", type: "radioV2", value: "option:否" },
+        { id: "gmv", type: "amount", value: 10000, currency: "CNY" },
+        { id: "cost", type: "amount", value: 100, currency: "CNY" },
+        { id: "channels", type: "checkboxV2", value: ["option:京东渠道"] },
+        {
+          id: "period",
+          type: "dateInterval",
+          value: {
+            start: "2030-01-01T00:00:00+08:00",
+            end: "2030-01-01T23:59:59+08:00",
+            interval: 1,
+          },
+        },
+        {
+          id: "image",
+          type: "image",
+          value: [signedUrl("image.png")],
+          ext: "满减测算图片.png",
+        },
+        {
+          id: "couponTable",
+          type: "attachmentV2",
+          value: [signedUrl("coupon.xlsx")],
+          ext: "配券信息表_v5.xlsx",
+        },
+        {
+          id: "whitelist",
+          type: "attachmentV2",
+          value: [signedUrl("white.xlsx")],
+          ext: "商品明细白名单_v5.xlsx",
+        },
+      ]),
+    });
+
+    await expect(
+      submitConfirmedCouponOaDraft(draftWithArtifacts),
+    ).resolves.toMatchObject({
+      draft: { status: "Submitted", approvalInstanceCode: "instance-code" },
+      verificationIssues: [],
+    });
+    expect(uploadVerifiedCouponOaArtifacts).not.toHaveBeenCalled();
+  });
+
   it("preserves the created native instance when readback fails", async () => {
     vi.mocked(createCouponApprovalInstance).mockResolvedValue({
       instanceCode: "instance-code",

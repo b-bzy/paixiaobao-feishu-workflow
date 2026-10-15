@@ -102,3 +102,11 @@ npx biome check server/lib/feishu/ # 改动文件无告警(存量 2 条不属于
 - **授权**:试点用户(鲍泽英,open_id ou_2c44…)明确指令"开 Gate"。范围:Vercel Preview、单用户专用 allowlist、值守窗口(本 session 实时盯日志)、单笔创建;回滚=关闭 kill switch 并重部署。对应 rollout R3 canary 形态;ADR-0013 状态行的 Owner 追认仍待补。
 - **canary 观察项**:①飞书对省略的必填「部门/申请人」控件行为(自动填充或干净拒绝;拒绝则补通讯录 scope 后重试);②uuid 幂等语义在真实创建中的表现(防线分层:Submitting 守卫+60s 超时+收敛路径,uuid 为最后兜底);③创建后回读 diff 与审计字段(definitionHash/confirmedAt/instanceCode)。
 - **前置状态**:Preview 复测已通过(识别→生成→合并卡→kill switch 拦截,全链一致);kill switch 此前全程关闭。
+
+### canary 执行结果与回读误报修复(2026-10-14 17:47 创建 / 2026-10-15 排障)
+
+- **创建本身成功**:实例 `C3447477-512A-42C0-B5AA-DCFA70ABFCE0`(Base 记录 `COA-f137e274`,Confirmed 17:47:45),用户可打开正式 OA;uuid 幂等未受考验(单次点击未重发)。必填「部门/申请人」控件被省略后**未触发干净拒绝**,实例正常创建。
+- **观察项③结论——attachmentV2 回读无稳定身份**:拉取实例 detail 实证,附件控件回读 `value` 为 `lf6-approval-sign.feishucdn.com` 的**签名 CDN URL**(带 `x-expires`/`x-signature`,路径为内部 UUID,与提交的 file_code 无对应),无法按 code 比对;但控件 `ext` 字段携带**原始文件名**(与冻结产物的 fileName 一致)。
+- **误报**:旧 diff 把"提交 codes vs 回读 URLs 且数量相等"一律标 `needsReview`,导致两个附件 widget 报 `Feishu returned display URLs instead of stable file identity`,整单被标 `CreatedNeedsReview` 并给用户发「已创建但需立即复核」卡——即用户上报的 bug。**修复**(2026-10-15,本仓库):`diffSubmittedApprovalForm` 增加可选 `attachmentFileNames`(fileCode→fileName 映射,submit-service 从刷新后的附件构造),URLs 回读时按 `ext` 文件名集合比对;数量不等仍为 issues,无法解析时保留 needsReview 兜底。健康提交现在落 `Submitted` 并显示「优惠券 OA 已创建并核对」。
+- **待下次 canary 验证**:多文件控件(寄卖模式测算图片×5)的 `ext` 格式未实测,当前按逗号分隔解析,不匹配则退回 needsReview。
+- **遗留**:①`COA-f137e274` 保持 CreatedNeedsReview 原样留存作证据;②记录 `COA-c0aa0b25`(Status=Draft,17:5x 交接后未提交)会经互斥检查阻塞下一轮三源提报,清理需用户授权的运维 upsert。

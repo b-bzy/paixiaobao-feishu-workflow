@@ -28,6 +28,8 @@ export interface ApprovalFormValue {
   value: unknown;
   currency?: string;
   open_ids?: string[];
+  /** Feishu display metadata; attachment widgets carry file names here. */
+  ext?: unknown;
 }
 
 export const couponApplicationValuesSchema = z
@@ -462,6 +464,7 @@ export function parseApprovalFormValues(value: string): ApprovalFormValue[] {
         value: z.unknown(),
         currency: z.string().optional(),
         open_ids: z.array(z.string()).optional(),
+        ext: z.unknown().optional(),
       })
       .safeParse(item);
     return result.success ? [result.data] : [];
@@ -640,13 +643,56 @@ function sameSet(expected: string[], actual: string[]): boolean {
 }
 
 /**
+ * Feishu readback for attachment widgets returns signed, expiring CDN URLs
+ * instead of the submitted file codes (verified on the 2026-10-14 canary:
+ * the URLs embed no stable identity, but `ext` carries the original file
+ * names). Multi-file widgets have not been observed yet; a comma-joined
+ * `ext` is assumed and anything unparseable still fails into needsReview.
+ */
+function attachmentDisplayNames(
+  control: ApprovalFormValue,
+  count: number,
+): string[] | undefined {
+  if (typeof control.ext !== "string" || !control.ext.trim()) return undefined;
+  const names = control.ext
+    .split(/[,，]/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return names.length === count ? names : undefined;
+}
+
+function verifiedByAttachmentNames(
+  submittedIdentity: { values: string[] },
+  received: ApprovalFormValue,
+  receivedIdentity: { values: string[] },
+  fileNames: ReadonlyMap<string, string> | undefined,
+): boolean {
+  if (!fileNames) return false;
+  const receivedNames = attachmentDisplayNames(
+    received,
+    receivedIdentity.values.length,
+  );
+  if (!receivedNames) return false;
+  const submittedNames = submittedIdentity.values.map((code) =>
+    fileNames.get(code),
+  );
+  if (submittedNames.some((name) => !name)) return false;
+  return sameSet(submittedNames as string[], receivedNames);
+}
+
+/**
  * Compares only controls we submitted. Formula/default controls are excluded,
  * while Feishu's documented display-level normalization is handled per type.
+ * `attachmentFileNames` maps submitted file codes to their frozen artifact
+ * file names, which is the only stable identity attachment readback allows.
  */
 export function diffSubmittedApprovalForm(
   schema: BoundCouponApprovalSchema,
   expected: ApprovalFormValue[],
   actual: ApprovalFormValue[],
+  options?: {
+    attachmentFileNames?: ReadonlyMap<string, string>;
+  },
 ): ApprovalFormVerification {
   const actualById = new Map<string, ApprovalFormValue[]>();
   for (const control of actual) {
@@ -770,7 +816,14 @@ export function diffSubmittedApprovalForm(
         issues.push(
           `${submitted.id}: submitted attachment count differs from created approval`,
         );
-      } else {
+      } else if (
+        !verifiedByAttachmentNames(
+          submittedIdentity,
+          received,
+          receivedIdentity,
+          options?.attachmentFileNames,
+        )
+      ) {
         needsReview.push(
           `${submitted.id}: Feishu returned display URLs instead of stable file identity`,
         );

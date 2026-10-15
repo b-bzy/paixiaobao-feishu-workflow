@@ -39,7 +39,7 @@ function validateValues(draft: CouponOaDraft) {
     const today = new Date().toISOString().slice(0, 10);
     if (parsed.activityStartAt && parsed.activityStartAt < today) {
       throw new Error(
-        `活动开始日期不能早于今天（${today}）；请在第二轮表单中修正日期后重新提交`,
+        `活动开始日期不能早于今天（${today}）；请在「检查并补充活动信息」表单中修正日期后重新提交`,
       );
     }
   }
@@ -79,9 +79,7 @@ async function resolveFinalConfirmerIdentity(draft: CouponOaDraft) {
   return {
     openId: profile.openId,
     ...(profile.userId ? { userId: profile.userId } : {}),
-    ...(profile.displayName
-      ? { displayName: profile.displayName }
-      : {}),
+    ...(profile.displayName ? { displayName: profile.displayName } : {}),
     ...(departmentOpenId ? { departmentOpenId } : {}),
     resolvedAt: new Date().toISOString(),
   };
@@ -241,7 +239,14 @@ export async function submitConfirmedCouponOaDraft(
     });
     const instance = await getCouponApprovalInstance(created.instanceCode);
     const actual = parseApprovalFormValues(instance.form ?? "[]");
-    const verification = diffSubmittedApprovalForm(schema, form, actual);
+    const verification = diffSubmittedApprovalForm(schema, form, actual, {
+      attachmentFileNames: new Map(
+        formSource.attachments.map((attachment) => [
+          attachment.fileCode,
+          attachment.fileName,
+        ]),
+      ),
+    });
     const verificationIssues = [
       ...verification.issues,
       ...verification.needsReview,
@@ -277,10 +282,9 @@ export async function submitConfirmedCouponOaDraft(
         failureReason: `Coupon OA submission rejected: ${message}`,
         validationIssues: [message],
       });
-      throw Object.assign(
-        error instanceof Error ? error : new Error(message),
-        { draft: rejected },
-      );
+      throw Object.assign(error instanceof Error ? error : new Error(message), {
+        draft: rejected,
+      });
     }
     // The create outcome is unknown here, but a concurrent attempt may have
     // already created and persisted an instance. Re-read first so its

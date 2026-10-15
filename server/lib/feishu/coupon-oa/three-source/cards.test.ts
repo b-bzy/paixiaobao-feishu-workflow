@@ -237,7 +237,10 @@ describe("three-source Bot cards", () => {
     expect(undecided).toContain('"name":"owner_overDeduction"');
     expect(undecided).toContain('"name":"owner_overDeductionReason"');
     expect(undecided).toContain("请选择是否超扣");
-    expect(undecided).toContain(
+    // select_static rejects a label property (Feishu 200621), so field
+    // titles for selects are markdown lines above the component.
+    expect(undecided).toContain('"content":"**是否超扣**"');
+    expect(undecided).not.toContain(
       '"label":{"tag":"plain_text","content":"是否超扣"}',
     );
     expect(undecided.indexOf('"name":"owner_overDeduction"')).toBeLessThan(
@@ -246,9 +249,7 @@ describe("three-source Bot cards", () => {
     expect(
       undecided.indexOf('"name":"owner_overDeductionReason"'),
     ).toBeLessThan(undecided.indexOf('"name":"owner_businessMode"'));
-    expect(undecided).toContain(
-      '"label":{"tag":"plain_text","content":"业务模式"}',
-    );
+    expect(undecided).toContain('"content":"**业务模式**"');
 
     current.selections.ownerFieldValues = { overDeduction: "否" };
     const noDeduction = JSON.stringify(
@@ -303,7 +304,7 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("请检查配券表对应列的表头和数据行是否已填写");
   });
 
-  it("gives the recognizing card an owner escape hatch to manual fill", () => {
+  it("tells the owner that AI degradation to manual fill is automatic", () => {
     const current = draft();
     const recognition = current.recognitions.couponTable as NonNullable<
       typeof current.recognitions.couponTable
@@ -317,9 +318,8 @@ describe("three-source Bot cards", () => {
     const rendered = JSON.stringify(
       buildCouponThreeSourceRecognizingCard(current),
     );
-    expect(rendered).toContain("coupon_three_source_skip_ai_recognition");
-    expect(rendered).toContain("跳过 AI 识别，改为人工填写");
-    expect(rendered).toContain("长时间无响应时也可以直接跳过");
+    expect(rendered).not.toContain("coupon_three_source_skip_ai_recognition");
+    expect(rendered).toContain("识别失败或超时会自动转为人工填写");
   });
 
   it("gives the failure card a rollback entry only when the draft is known", () => {

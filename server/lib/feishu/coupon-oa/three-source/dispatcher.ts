@@ -908,13 +908,12 @@ export function createCouponThreeSourceDispatcher(
           message: `Coupon three-source pilot ${draft.pilotId} already completed; re-delivered the send card`,
         };
       }
-      // Reopen and skip are current-state actions: their buttons may live on
-      // older cards, and both converge on the persisted draft state.
+      // Reopen is a current-state action: its buttons may live on older
+      // cards and it converges on the persisted draft state.
       const statelessAction =
         action === "coupon_three_source_recognition_start" ||
         action === "coupon_three_source_supplement_recognition_start" ||
-        action === "coupon_three_source_reopen" ||
-        action === "coupon_three_source_skip_ai_recognition";
+        action === "coupon_three_source_reopen";
       const expectedRevision = statelessAction ? draft.task.revision : revision;
       if (!statelessAction && draft.task.revision !== revision) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
@@ -1182,14 +1181,6 @@ export function createCouponThreeSourceDispatcher(
             }`,
           };
         }
-        case "coupon_three_source_skip_ai_recognition":
-          next = await service.skipAiRecognition({
-            draft,
-            ownerOpenId: input.openId,
-            expectedRevision,
-            operationId: id,
-          });
-          break;
         case "coupon_three_source_reopen":
           // Read-only: re-render whichever card matches the persisted state.
           next = draft;

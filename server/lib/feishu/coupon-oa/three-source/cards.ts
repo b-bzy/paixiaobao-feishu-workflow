@@ -261,14 +261,9 @@ export function buildCouponThreeSourceRecognizingCard(
           "DeepSeek 当前只识别候选，不会生成表格或创建 OA。",
           ...pending,
           "识别完成后进入第 3 步：核对并补充活动信息。",
-          "识别失败会自动降级为人工填写；长时间无响应时也可以直接跳过。",
+          "识别失败或超时会自动转为人工填写（通常一分钟内），无需操作，请等待最新卡片。",
         ].join("\n"),
       },
-      button(draft, {
-        action: "coupon_three_source_skip_ai_recognition",
-        text: "跳过 AI 识别，改为人工填写",
-        type: "default",
-      }),
       cancelButton(draft),
     ],
   });
@@ -641,10 +636,13 @@ export function buildCouponThreeSourceMappingCard(
       name: "coupon_three_source_mapping_submit",
       vertical_spacing: "12px",
       elements: [
+        // select_static has no label property in the Feishu card schema
+        // (a label makes the whole card fail to parse), so field titles for
+        // selects are separate markdown lines above the component.
+        { tag: "markdown", content: "**是否超扣**" },
         {
           tag: "select_static",
           name: "owner_overDeduction",
-          label: plainText("是否超扣"),
           placeholder: plainText("请选择是否超扣"),
           required: true,
           width: "fill",
@@ -695,10 +693,10 @@ export function buildCouponThreeSourceMappingCard(
           required: true,
           width: "fill",
         },
+        { tag: "markdown", content: "**业务模式**" },
         {
           tag: "select_static",
           name: "owner_businessMode",
-          label: plainText("业务模式"),
           placeholder: plainText("请选择业务模式"),
           required: true,
           width: "fill",

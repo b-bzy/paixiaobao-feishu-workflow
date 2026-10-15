@@ -1103,48 +1103,6 @@ describe("three-source Bot dispatcher", () => {
     expect(errorCard).toContain('"pilotRecordId":"rec-three-source"');
   });
 
-  it("delivers the manual mapping card when the owner skips a stuck AI recognition", async () => {
-    const current = draft();
-    current.task.revision = 5;
-    current.task.status = "AwaitingSourceConfirmation";
-    const source = {
-      messageId: "om-source",
-      fileKey: "file-source",
-      fileName: "source.xlsx",
-      bytes: 10,
-      sha256: "a".repeat(64),
-    };
-    current.task.sources = {
-      couponTable: { role: "couponTable", ...source },
-      whitelist: { role: "whitelist", ...source },
-    };
-    current.task.blacklistStatus = "absent_confirmed";
-    const skipAiRecognition: CouponThreeSourcePilotService["skipAiRecognition"] =
-      vi.fn(async (input) => input.draft);
-    const { values, deliverMappingCard } = dependencies({
-      activeThreeSource: [current],
-      service: { skipAiRecognition },
-    });
-    const dispatcher = createCouponThreeSourceDispatcher(values);
-
-    // The skip button may carry a stale revision from an older card; the
-    // action must still converge on the persisted draft state.
-    await expect(
-      dispatcher.dispatchCallback({
-        openId: "ou_owner",
-        action: "coupon_three_source_skip_ai_recognition",
-        value: { pilotRecordId: current.recordId, revision: 3 },
-      }),
-    ).resolves.toMatchObject({ handled: true });
-
-    expect(skipAiRecognition).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedRevision: 5 }),
-    );
-    expect(deliverMappingCard).toHaveBeenCalledWith(
-      expect.objectContaining({ draft: current }),
-    );
-  });
-
   it("freezes the mapping card on submit and restores it when validation fails", async () => {
     const current = draft();
     current.task.revision = 5;

@@ -100,12 +100,6 @@ export interface CouponThreeSourcePilotDependencies {
     source: CouponThreeSourceSourceReference;
   }): Promise<StoredWorkbookRecognition["ai"] | undefined>;
   activateAiRecognition?(runId: string): Promise<void>;
-  /**
-   * Marks a still-pending AI run terminally failed (owner skipped the wait).
-   * Stops the worker from burning another provider call whose late result
-   * could no longer be projected.
-   */
-  abandonAiRecognition?(runId: string): Promise<void>;
   prepareAiText?(input: {
     draft: CouponThreeSourcePilotDraft;
     text: string;
@@ -216,29 +210,6 @@ export const defaultCouponThreeSourcePilotDependencies: CouponThreeSourcePilotDe
       const run = await repository.get(runId);
       if (!run) throw new Error("AI recognition run was not found");
       await repository.activate(run);
-    },
-    async abandonAiRecognition(runId) {
-      const repository = new PostgresCouponAiRecognitionRepository(
-        getControlPlaneDatabase(),
-      );
-      const run = await repository.get(runId);
-      if (!run || run.status !== "pending") return;
-      const now = new Date().toISOString();
-      await repository.saveTerminalResult({
-        runId,
-        status: "failed",
-        audit: {
-          provider: "deepseek",
-          model: run.model,
-          promptVersion: run.promptVersion,
-          status: "failed",
-          startedAt: now,
-          completedAt: now,
-          durationMs: 0,
-          fallbackReason: "owner_skipped",
-        },
-        fallbackCode: "owner_skipped",
-      });
     },
     async prepareAiText(input) {
       if (!isCouponThreeSourceAiRecognitionEnabled()) {
@@ -1074,58 +1045,6 @@ export class CouponThreeSourcePilotService {
       },
       input.expectedRevision,
     );
-  }
-
-  /**
-   * Owner escape hatch while DeepSeek is unresponsive: flips every pending
-   * workbook AI slot to a terminal "failed/owner_skipped" state so the flow
-   * degrades immediately to the manual mapping form, and marks the durable
-   * runs terminal so no late worker result can overwrite the decision.
-   */
-  async skipAiRecognition(input: {
-    draft: CouponThreeSourcePilotDraft;
-    ownerOpenId: string;
-    expectedRevision: number;
-    operationId: string;
-  }): Promise<CouponThreeSourcePilotDraft> {
-    assertOwnerAndRevision(input);
-    if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
-    const recognitions = { ...input.draft.recognitions };
-    const abandonedRunIds: string[] = [];
-    for (const [role, recognition] of Object.entries(recognitions)) {
-      if (recognition?.ai?.status !== "pending") continue;
-      recognitions[role as SourceRole] = {
-        ...recognition,
-        ai: {
-          ...recognition.ai,
-          status: "failed",
-          fallbackCode: "owner_skipped",
-        },
-      };
-      abandonedRunIds.push(recognition.ai.runId);
-    }
-    if (!abandonedRunIds.length) return input.draft;
-    const updated = await this.dependencies.updateDraft(
-      input.draft,
-      {
-        recognitions,
-        validationIssues: [
-          ...input.draft.validationIssues.filter(
-            (issue) => !issue.startsWith("AI 识别已降级"),
-          ),
-          "AI 识别已降级：owner_skipped；已按你的要求跳过，请人工确认缺失字段",
-        ],
-      },
-      input.expectedRevision,
-    );
-    if (this.dependencies.abandonAiRecognition) {
-      await Promise.allSettled(
-        abandonedRunIds.map((runId) =>
-          this.dependencies.abandonAiRecognition?.(runId),
-        ),
-      );
-    }
-    return updated;
   }
 
   private async assignSource(input: {

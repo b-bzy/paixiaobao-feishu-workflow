@@ -110,3 +110,12 @@ npx biome check server/lib/feishu/ # 改动文件无告警(存量 2 条不属于
 - **误报**:旧 diff 把"提交 codes vs 回读 URLs 且数量相等"一律标 `needsReview`,导致两个附件 widget 报 `Feishu returned display URLs instead of stable file identity`,整单被标 `CreatedNeedsReview` 并给用户发「已创建但需立即复核」卡——即用户上报的 bug。**修复**(2026-10-15,本仓库):`diffSubmittedApprovalForm` 增加可选 `attachmentFileNames`(fileCode→fileName 映射,submit-service 从刷新后的附件构造),URLs 回读时按 `ext` 文件名集合比对;数量不等仍为 issues,无法解析时保留 needsReview 兜底。健康提交现在落 `Submitted` 并显示「优惠券 OA 已创建并核对」。
 - **待下次 canary 验证**:多文件控件(寄卖模式测算图片×5)的 `ext` 格式未实测,当前按逗号分隔解析,不匹配则退回 needsReview。
 - **遗留**:①`COA-f137e274` 保持 CreatedNeedsReview 原样留存作证据;②记录 `COA-c0aa0b25`(Status=Draft,17:5x 交接后未提交)会经互斥检查阻塞下一轮三源提报,清理需用户授权的运维 upsert。
+
+## 阶段 C 续行:修复部署与阻塞清理(2026-10-15 10:0x)
+
+用户指令"执行C阶段"。回读修复与骨架卡编号修复提交:`a5a03f4`(attachment readback 按 `ext` 文件名集合比对 + 追平 2de801a 引入的 biome 格式漂移)、`a60bd4f`(仅骨架卡带 1–4 连续编号,条件分支卡去编号,revision 改称提报版本);自动化 665 例、typecheck、biome 全过。
+
+- **全新部署**:Preview `2u183ubw0`@`a60bd4f`(identity 端点返回 SHA 与本地 HEAD 全串一致,`readiness.couponOaDraftStoreConfigured=true`);bridge 两个 consumer 与 worker 在线,worker 校验后 tick 静默无失败(日志尾部 "giving up" 属上一会话进程,非本次)。
+- **kill switch 姿态**:Vercel Preview env `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED`(2026-10-14 开 Gate 时加入,Secret 不可读;17:47 canary 创建成功是其开启的旁证)被本次部署继承,当前为 canary 姿态,符合 C 阶段授权。
+- **阻塞清理**:经授权的运维 upsert 将 `COA-c0aa0b25`(`recvy1afnCVNAx`)置 Canceled,独立回读验证生效;OA 草稿 store 的状态权威是 `Status` 列(`draft-store.ts` 从 `record.fields.Status` 解析),互斥检查只拦非终态,`COA-f137e274`(CreatedNeedsReview,终态)不阻塞。
+- **运维缺陷待办**:①`scripts/p0-preview.mjs` 的 `down` 对"状态文件记录的 PID 已死"场景直接拒绝,状态文件永远无法经 `down` 清理,本次在 ps 证实 11863/11908 均已死后手工删除状态文件解锁;②`lark-cli base +record-upsert` 首次调用静默失败(无输出、回读未变,疑本机代理抖动),重试成功——**对 Base 写入后必须独立 GET 验证的既有教训再次成立**。

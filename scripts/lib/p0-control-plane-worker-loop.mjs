@@ -27,35 +27,49 @@ export function nextTickBackoffMs({ baseMs, capMs, consecutiveFailures }) {
 }
 
 async function tickOnce({ fetchImpl, tickUrl, headers, tickTimeoutMs }) {
-  let response;
+  const controller = new AbortController();
+  let deadline;
   try {
-    response = await fetchImpl(tickUrl, {
-      method: "POST",
-      headers,
-      body: "{}",
-      signal: AbortSignal.timeout(tickTimeoutMs),
-    });
+    return await Promise.race([
+      (async () => {
+        const response = await fetchImpl(tickUrl, {
+          method: "POST",
+          headers,
+          body: "{}",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          return { failure: `http_${response.status}` };
+        }
+        let body;
+        try {
+          body = await response.json();
+        } catch {
+          return { failure: "invalid_json" };
+        }
+        if (body?.code !== 0) {
+          return { failure: "unsuccessful_result" };
+        }
+        return {
+          claimed:
+            (body.result?.jobs?.claimed ?? 0) +
+            (body.result?.effects?.claimed ?? 0),
+          jobsSucceeded: body.result?.jobs?.succeeded ?? 0,
+          effectsSucceeded: body.result?.effects?.succeeded ?? 0,
+        };
+      })(),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => {
+          controller.abort();
+          reject(new Error("tick deadline exceeded"));
+        }, tickTimeoutMs);
+      }),
+    ]);
   } catch {
     return { failure: "no_response" };
+  } finally {
+    clearTimeout(deadline);
   }
-  if (!response.ok) {
-    return { failure: `http_${response.status}` };
-  }
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    return { failure: "invalid_json" };
-  }
-  if (body?.code !== 0) {
-    return { failure: "unsuccessful_result" };
-  }
-  return {
-    claimed:
-      (body.result?.jobs?.claimed ?? 0) + (body.result?.effects?.claimed ?? 0),
-    jobsSucceeded: body.result?.jobs?.succeeded ?? 0,
-    effectsSucceeded: body.result?.effects?.succeeded ?? 0,
-  };
 }
 
 export async function runP0WorkerLoop(options) {

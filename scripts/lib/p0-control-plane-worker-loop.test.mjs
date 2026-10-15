@@ -116,6 +116,32 @@ describe("p0 control plane worker loop", () => {
     expect(sleeps).toEqual([1_000, 2_000]);
   });
 
+  it("enforces the tick deadline when fetch ignores the abort signal", async () => {
+    let calls = 0;
+    const outcome = await runP0WorkerLoop({
+      fetchImpl: async () => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return successResponse();
+      },
+      sleepImpl: async () => {},
+      tickUrl,
+      headers: {},
+      tickTimeoutMs: 5,
+      tickIntervalMs: 3,
+      maxConsecutiveFailures: 1,
+      isStopping: () => calls > 1,
+      log: () => {},
+    });
+
+    expect(outcome).toEqual({
+      gaveUp: true,
+      reason: "no_response",
+      consecutiveFailures: 1,
+    });
+    expect(calls).toBe(1);
+  });
+
   it.each([
     [
       "http_500",

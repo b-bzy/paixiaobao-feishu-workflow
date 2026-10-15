@@ -125,6 +125,7 @@ describe("three-source pilot Base store", () => {
     });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("/apps/app-three-source/tables/tblThreeSource/");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
     const fields = JSON.parse(String(init.body)).fields;
     expect(fields["Task ID"]).toBe("CTS-test");
     expect(fields["State JSON"]).not.toContain("source bytes");

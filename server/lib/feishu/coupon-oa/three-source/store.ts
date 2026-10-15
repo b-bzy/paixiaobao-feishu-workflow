@@ -33,6 +33,8 @@ import {
 export const couponThreeSourcePilotSchemaVersion =
   "coupon-three-source-pilot-v2";
 
+const THREE_SOURCE_PILOT_REQUEST_TIMEOUT_MS = 20_000;
+
 export interface CouponThreeSourceSourceReference {
   messageId: string;
   fileKey: string;
@@ -218,6 +220,7 @@ async function request(
       "Content-Type": "application/json",
       ...init.headers,
     },
+    signal: AbortSignal.timeout(THREE_SOURCE_PILOT_REQUEST_TIMEOUT_MS),
   });
   const result = (await response.json()) as BaseResponse;
   if (!response.ok || result.code !== 0) {

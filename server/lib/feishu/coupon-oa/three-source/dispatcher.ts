@@ -1219,7 +1219,34 @@ export function createCouponThreeSourceDispatcher(
         message: `Coupon three-source action ${action} completed`,
       };
     } catch (error) {
-      const detail = toCouponThreeSourceUserFailure(error).message;
+      const failure = toCouponThreeSourceUserFailure(error);
+      if (failure.code === "UNEXPECTED_FAILURE") {
+        let diagnosticError = error;
+        while (
+          diagnosticError instanceof Error &&
+          diagnosticError.cause instanceof Error
+        ) {
+          diagnosticError = diagnosticError.cause;
+        }
+        const technicalMessage =
+          diagnosticError instanceof Error &&
+          /cannot read propert|cannot destructure|is not a function|undefined|exceljs/iu.test(
+            diagnosticError.message,
+          )
+            ? diagnosticError.message.slice(0, 500)
+            : "redacted";
+        console.error("Coupon three-source callback failed unexpectedly", {
+          action,
+          recordId,
+          revision,
+          errorName:
+            diagnosticError instanceof Error
+              ? diagnosticError.name
+              : typeof diagnosticError,
+          technicalMessage,
+        });
+      }
+      const detail = failure.message;
       if (!(error as { reportedToOwner?: boolean }).reportedToOwner) {
         await dependencies.sendCard(
           input.openId,

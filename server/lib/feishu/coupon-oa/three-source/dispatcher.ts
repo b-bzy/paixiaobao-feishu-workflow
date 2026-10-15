@@ -498,7 +498,7 @@ function pilotOaSubmitCard(
     draftRecordId: oaDraft.recordId,
     values: oaDraft.values,
     attachments: oaDraft.attachments,
-    stepLabel: "第 5 步：核对无误后点击确认，将创建并发送正式 OA",
+    stepLabel: "第 4 步：核对无误后点击确认，将创建并发送正式 OA",
   });
 }
 

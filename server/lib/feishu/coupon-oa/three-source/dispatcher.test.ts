@@ -131,7 +131,7 @@ describe("three-source Bot dispatcher", () => {
 
     const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
     expect(card).toContain("确认提交正式优惠券 OA");
-    expect(card).toContain("第 5 步");
+    expect(card).toContain("第 4 步");
     expect(card).toContain("放弃本次提交");
     expect(card).not.toContain("优惠券 OA 预填确认");
   });
@@ -184,7 +184,7 @@ describe("three-source Bot dispatcher", () => {
     });
 
     const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
-    expect(card).toContain("第 5 步");
+    expect(card).toContain("第 4 步");
     expect(card).not.toContain("cannot be changed");
   });
 
@@ -1048,7 +1048,7 @@ describe("three-source Bot dispatcher", () => {
     expect(sendCard).toHaveBeenCalledTimes(1);
     const card = JSON.stringify(sendCard.mock.calls[0]?.[1]);
     expect(card).toContain("确认提交正式优惠券 OA");
-    expect(card).toContain("第 5 步");
+    expect(card).toContain("第 4 步");
     expect(card).not.toContain("标准附件已生成");
   });
 

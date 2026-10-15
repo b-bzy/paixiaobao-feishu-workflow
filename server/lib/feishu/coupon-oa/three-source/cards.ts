@@ -223,7 +223,7 @@ export function buildCouponThreeSourceNoBlacklistCard(
 ): FeishuCard {
   return card({
     title: "请确认是否有黑名单",
-    subtitle: "第 2 步：不能把未上传误当作无黑名单",
+    subtitle: "需要你确认：未上传不等于没有黑名单",
     template: "orange",
     elements: [
       {
@@ -252,7 +252,7 @@ export function buildCouponThreeSourceRecognizingCard(
     .map(([role, recognition]) => `- ${role}：${recognition?.source.fileName}`);
   return card({
     title: "AI 识别中",
-    subtitle: "候选识别完成后再进行第二轮确认",
+    subtitle: "第 2 步：系统识别中，无需操作",
     template: "blue",
     elements: [
       {
@@ -260,6 +260,7 @@ export function buildCouponThreeSourceRecognizingCard(
         content: [
           "DeepSeek 当前只识别候选，不会生成表格或创建 OA。",
           ...pending,
+          "识别完成后进入第 3 步：核对并补充活动信息。",
           "请等待最新卡片；失败时系统会回退到人工补充。",
         ].join("\n"),
       },
@@ -480,7 +481,7 @@ export function buildCouponThreeSourceMappingCard(
     {
       tag: "markdown",
       content: [
-        "第二轮：请检查系统识别结果，并一次性补充或修改信息。",
+        "第 3 步：请检查系统识别结果，并一次性补充或修改信息。",
         "可使用手机或电脑自带语音输入，把转写文字放入补充说明后先识别并回填；提交前仍可逐项修改。",
         ...(onlyUnsupported
           ? [
@@ -834,7 +835,7 @@ export function buildCouponThreeSourceMappingCard(
   ];
   return card({
     title: "检查并补充活动信息",
-    subtitle: "第二轮：系统识别结果与业务确认",
+    subtitle: "第 3 步：核对识别结果并补充活动信息",
     template: "orange",
     elements,
   });
@@ -846,7 +847,7 @@ export function buildCouponThreeSourceOverlapCard(input: {
 }): FeishuCard {
   return card({
     title: "白黑名单存在重叠 SKU",
-    subtitle: "第 4 步：必须明确冲突处理规则",
+    subtitle: "需要你先明确冲突处理规则，再生成标准附件",
     template: "orange",
     elements: [
       {
@@ -934,13 +935,13 @@ export function buildCouponThreeSourcePreviewCard(
   const previewRow = previewEntryRow(draft);
   return card({
     title: "标准附件已生成，待创建 OA 测试稿",
-    subtitle: "第 5 步：确认当前 revision",
+    subtitle: "请核对提报内容；确认后进入最后的发送确认",
     template: "green",
     elements: [
       {
         tag: "markdown",
         content: [
-          `**版本：** revision ${draft.task.revision}`,
+          `**提报版本：** ${draft.task.revision}`,
           `**业务模式：** ${prefill?.values.businessMode ?? "—"}`,
           `**活动名称：** ${prefill?.values.activityName ?? "—"}`,
           `**活动点位：** ${prefill?.values.activityPointPercent ?? "—"}%`,

@@ -31,8 +31,8 @@ describe("durable worker tick configuration", () => {
       jobLimit: 10,
       effectLimit: 10,
       jobLeaseMs: 60_000,
-      effectLeaseMs: 60_000,
-      schedulerLeaseMs: 90_000,
+      effectLeaseMs: 150_000,
+      schedulerLeaseMs: 180_000,
     });
   });
 

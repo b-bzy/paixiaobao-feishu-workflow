@@ -1,9 +1,23 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-export const defaultTickTimeoutMs = 20_000;
+export const defaultTickTimeoutMs = 120_000;
 export const defaultTickMaxConsecutiveFailures = 8;
 export const defaultTickRetryBackoffBaseMs = 1_000;
 export const maxTickRetryBackoffCapMs = 15_000;
+
+export function parseTickTimeoutMs(raw) {
+  const value = raw?.trim() || String(defaultTickTimeoutMs);
+  if (!/^\d+$/u.test(value)) {
+    throw new Error("CONTROL_PLANE_TICK_TIMEOUT_MS must be an integer");
+  }
+  const parsed = Number(value);
+  if (parsed < 1_000 || parsed > 300_000) {
+    throw new Error(
+      "CONTROL_PLANE_TICK_TIMEOUT_MS must be between 1000 and 300000",
+    );
+  }
+  return parsed;
+}
 
 export function nextTickBackoffMs({ baseMs, capMs, consecutiveFailures }) {
   return Math.min(

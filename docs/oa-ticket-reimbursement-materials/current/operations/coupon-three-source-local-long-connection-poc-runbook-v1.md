@@ -61,10 +61,12 @@
 | `FEISHU_COUPON_THREE_SOURCE_P0_ACTIVITY_COPY_ENABLED` | 默认 `false`。开启后才把通过事实校验的活动名称/背景候选回填第二轮卡。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENABLED` | 默认 `false`。只用于缺年份日期和公开活动主题的软证据，不是通用互联网搜索。 |
 | `FEISHU_COUPON_THREE_SOURCE_P0_PUBLIC_CALENDAR_ENDPOINT`、`..._TIMEOUT_MS` | 仅日历 Gate 开启时配置受控 HTTPS JSON endpoint；请求不得包含工作簿、员工、SKU 或券额。 |
-| `FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS` | 默认 `45000`，允许范围 1000–120000。 |
+| `FEISHU_COUPON_THREE_SOURCE_P0_AI_TIMEOUT_MS` | 默认 `35000`，允许范围 1000–120000；超时后必须降级到规则结果与人工确认。 |
 | `FEISHU_WEB_BASE_URL` | 可选。测试租户的 HTTPS 网页域名（如 `https://example.feishu.cn`），仅用于拼三源确认卡的 `👁` 冻结产物预览链接。未配置或非法时按钮自动隐藏，流程不受影响；启用预览还需应用已发布 Drive 协作者授权与读取权限（见 2.3），且只能给唯一测试用户授 `view`。 |
 | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` | 只在 AI Gate 开启时需要；base URL 必须是官方 HTTPS endpoint。实际值不得进入聊天、日志或文档。 |
 | `DATABASE_URL`、`FEISHU_WORKER_ID`、`CONTROL_PLANE_TICK_TOKEN` | AI Gate 开启时必须配置；用于 migration 0005、durable effect 与受保护 tick。 |
+| `CONTROL_PLANE_TICK_TIMEOUT_MS` | Mac worker 等待一次 tick 的上限，默认 `120000`，允许范围 1000–300000；必须长于单次 AI 超时。 |
+| `CONTROL_PLANE_WORKER_EFFECT_LEASE_MS`、`..._SCHEDULER_LEASE_MS` | 默认分别为 `150000`、`180000`；scheduler lease 必须覆盖 effect lease，避免旧 tick 尚未结束时重复领取。 |
 
 `FEISHU_VERIFICATION_TOKEN` 不参与 P0 bridge 的 HMAC 合同，也不需要配置 URL challenge；保留已有值不会授权此路径。
 

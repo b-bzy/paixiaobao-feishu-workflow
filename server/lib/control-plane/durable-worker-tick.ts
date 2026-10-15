@@ -71,13 +71,13 @@ export function getDurableCouponWorkerRunOptions(): DurableCouponWorkerRunOption
     }),
     effectLeaseMs: boundedInteger({
       name: "CONTROL_PLANE_WORKER_EFFECT_LEASE_MS",
-      fallback: 60_000,
+      fallback: 150_000,
       minimum: 1_000,
       maximum: 15 * 60_000,
     }),
     schedulerLeaseMs: boundedInteger({
       name: "CONTROL_PLANE_WORKER_SCHEDULER_LEASE_MS",
-      fallback: 90_000,
+      fallback: 180_000,
       minimum: 1_000,
       maximum: 20 * 60_000,
     }),

@@ -7,6 +7,7 @@ import {
   defaultTickMaxConsecutiveFailures,
   defaultTickRetryBackoffBaseMs,
   maxTickRetryBackoffCapMs,
+  parseTickTimeoutMs,
   runP0WorkerLoop,
 } from "./lib/p0-control-plane-worker-loop.mjs";
 
@@ -68,6 +69,9 @@ const tickToken = requiredEnvironment("CONTROL_PLANE_TICK_TOKEN");
 const vercelAutomationBypassSecret =
   process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || undefined;
 const tickUrl = new URL("/api/internal/control-plane/tick", target.origin);
+const tickTimeoutMs = parseTickTimeoutMs(
+  process.env.CONTROL_PLANE_TICK_TIMEOUT_MS,
+);
 const tickIntervalMs = boundedIntegerEnvironment(
   "CONTROL_PLANE_TICK_INTERVAL_MS",
   { minimum: 1_000, maximum: 60_000, fallback: 3_000 },
@@ -111,6 +115,7 @@ const outcome = await runP0WorkerLoop({
       ? { "x-vercel-protection-bypass": vercelAutomationBypassSecret }
       : {}),
   },
+  tickTimeoutMs,
   tickIntervalMs,
   maxConsecutiveFailures,
   retryBackoffBaseMs,

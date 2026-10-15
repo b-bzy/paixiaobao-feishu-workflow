@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { nextTickBackoffMs, runP0WorkerLoop } from "./p0-control-plane-worker-loop.mjs";
+import {
+  defaultTickTimeoutMs,
+  nextTickBackoffMs,
+  parseTickTimeoutMs,
+  runP0WorkerLoop,
+} from "./p0-control-plane-worker-loop.mjs";
 
 const tickUrl =
   "https://preview.example.com/api/internal/control-plane/tick";
@@ -33,6 +38,16 @@ function countingFetch(responses) {
 }
 
 describe("p0 control plane worker loop", () => {
+  it("allows one AI batch to finish before the local scheduler aborts", () => {
+    expect(defaultTickTimeoutMs).toBe(120_000);
+    expect(parseTickTimeoutMs(undefined)).toBe(120_000);
+    expect(parseTickTimeoutMs("150000")).toBe(150_000);
+    expect(() => parseTickTimeoutMs("999")).toThrow(
+      "must be between 1000 and 300000",
+    );
+    expect(() => parseTickTimeoutMs("slow")).toThrow("must be an integer");
+  });
+
   it("grows the backoff exponentially and caps it", () => {
     expect(
       [1, 2, 3, 4, 5, 6].map((consecutiveFailures) =>

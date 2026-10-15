@@ -16,7 +16,7 @@ export interface CouponPublicCalendarConfig {
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com" as const;
 const DEFAULT_MODEL = "deepseek-chat";
-const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_TIMEOUT_MS = 35_000;
 const DEFAULT_CALENDAR_TIMEOUT_MS = 5_000;
 
 function enabled(name: string): boolean {

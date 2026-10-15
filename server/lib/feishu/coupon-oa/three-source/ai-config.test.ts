@@ -43,7 +43,7 @@ describe("coupon three-source AI config", () => {
       enabled: false,
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-chat",
-      timeoutMs: 45_000,
+      timeoutMs: 35_000,
       maxResponseBytes: 1_048_576,
     });
     expect(isCouponThreeSourceAiPrimaryEnabled()).toBe(false);

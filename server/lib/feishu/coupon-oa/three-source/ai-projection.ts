@@ -55,57 +55,66 @@ export function createCouponThreeSourceAiProjector(
       ) {
         return;
       }
-      // The slot already holds a terminal state (owner skipped the wait, or a
-      // duplicate projection after a partial failure): a late result must not
-      // overwrite the owner's manual-fill decision or reset their card.
-      if (recognition.ai?.status !== "pending") {
-        return;
-      }
-      const updated = await dependencies.updateDraft(
-        draft,
-        {
-          recognitions: {
-            ...draft.recognitions,
-            [role]: {
-              ...recognition,
-              ai: {
-                runId: run.id,
-                revision: run.revision,
-                sourceSha256: run.sourceSha256,
-                status: run.status,
-                result: run.result,
-                audit: run.audit,
-                fallbackCode: run.fallbackCode,
-                primary: recognition.ai?.primary,
-                activityCopyEnabled: recognition.ai?.activityCopyEnabled,
+      // A terminal slot means this run's result was already written — either
+      // the owner skipped the wait (ai failed/owner_skipped) or an earlier
+      // attempt persisted the result but died before delivering the card
+      // (e.g. an interrupted tick). Never overwrite it; a retry must still
+      // complete the delivery half below or the owner is stranded on the
+      // recognizing card with everything else already settled.
+      const alreadyWritten = recognition.ai?.status !== "pending";
+      const updated = alreadyWritten
+        ? draft
+        : await dependencies.updateDraft(
+            draft,
+            {
+              recognitions: {
+                ...draft.recognitions,
+                [role]: {
+                  ...recognition,
+                  ai: {
+                    runId: run.id,
+                    revision: run.revision,
+                    sourceSha256: run.sourceSha256,
+                    status: run.status,
+                    result: run.result,
+                    audit: run.audit,
+                    fallbackCode: run.fallbackCode,
+                    primary: recognition.ai?.primary,
+                    activityCopyEnabled: recognition.ai?.activityCopyEnabled,
+                  },
+                },
               },
+              validationIssues:
+                run.status === "succeeded"
+                  ? draft.validationIssues
+                  : [
+                      ...draft.validationIssues.filter(
+                        (issue) => !issue.startsWith("AI 识别已降级"),
+                      ),
+                      `AI 识别已降级：${run.fallbackCode ?? run.status}；请人工确认缺失字段`,
+                    ],
             },
-          },
-          validationIssues:
-            run.status === "succeeded"
-              ? draft.validationIssues
-              : [
-                  ...draft.validationIssues.filter(
-                    (issue) => !issue.startsWith("AI 识别已降级"),
-                  ),
-                  `AI 识别已降级：${run.fallbackCode ?? run.status}；请人工确认缺失字段`,
-                ],
-        },
-        run.revision,
-      );
+            run.revision,
+          );
+      // Delivery is idempotent per revision: skip when this revision's
+      // mapping card already went out (a duplicate delivery would PATCH the
+      // live form and reset the owner's in-progress typing).
+      const deliveredForRevision =
+        draft.mappingCardDelivery?.messageId !== undefined &&
+        draft.mappingCardDelivery.revision === draft.task.revision;
       // Several source roles can be recognized for the same revision. Do not
       // append another progress card for each terminal run; the last run sends
       // the single latest card after the whole recognition batch has settled.
-      if (!hasPendingAiRecognition(updated)) {
-        if (
-          updated.task.sources.couponTable &&
-          updated.task.sources.whitelist
-        ) {
-          await dependencies.deliverMappingCard({
-            draft: updated,
-            idempotencyKey,
-          });
-        }
+      if (
+        !deliveredForRevision &&
+        !hasPendingAiRecognition(updated) &&
+        updated.task.sources.couponTable &&
+        updated.task.sources.whitelist
+      ) {
+        await dependencies.deliverMappingCard({
+          draft: updated,
+          idempotencyKey,
+        });
       }
     },
   };

@@ -197,6 +197,49 @@ describe("coupon three-source AI projection", () => {
       current.recognitions.couponTable.ai.status = "failed";
       current.recognitions.couponTable.ai.fallbackCode = "owner_skipped";
     }
+    // Skipping already delivered the mapping card for this revision; a late
+    // result must neither overwrite the slot nor reset the owner's card.
+    current.mappingCardDelivery = { messageId: "om-map", revision: 2 };
+    const deliverMappingCard = vi.fn();
+    const updateDraft = vi.fn();
+    const projector = createCouponThreeSourceAiProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: updateDraft as never,
+      deliverMappingCard,
+    });
+    await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
+    expect(updateDraft).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
+  });
+
+  it("redelivers the mapping card when a settled result never got delivered", async () => {
+    // An interrupted tick can persist the terminal AI result but die before
+    // the card delivery; the effect retry must complete that half instead of
+    // discarding it, or the owner stays stranded on the recognizing card.
+    const current = draft();
+    if (current.recognitions.couponTable?.ai) {
+      current.recognitions.couponTable.ai.status = "succeeded";
+    }
+    const deliverMappingCard = vi.fn(async ({ draft }) => draft);
+    const updateDraft = vi.fn();
+    const projector = createCouponThreeSourceAiProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: updateDraft as never,
+      deliverMappingCard,
+    });
+    await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
+    expect(updateDraft).not.toHaveBeenCalled();
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: current }),
+    );
+  });
+
+  it("does not redeliver a card the current revision already sent", async () => {
+    const current = draft();
+    if (current.recognitions.couponTable?.ai) {
+      current.recognitions.couponTable.ai.status = "succeeded";
+    }
+    current.mappingCardDelivery = { messageId: "om-map", revision: 2 };
     const deliverMappingCard = vi.fn();
     const updateDraft = vi.fn();
     const projector = createCouponThreeSourceAiProjector({

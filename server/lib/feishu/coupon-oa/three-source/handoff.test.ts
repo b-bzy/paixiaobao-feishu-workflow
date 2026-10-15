@@ -12,9 +12,14 @@ vi.mock("../frozen-artifact-handoff", () => ({
 }));
 
 import type { OaPrefillSnapshot } from "../../../coupon-oa/three-source/types";
-import { createCouponOaDraft, listActiveCouponOaDrafts } from "../draft-store";
+import {
+  createCouponOaDraft,
+  getCouponOaDraft,
+  listActiveCouponOaDrafts,
+} from "../draft-store";
 import { uploadVerifiedCouponOaArtifacts } from "../frozen-artifact-handoff";
 import {
+  buildThreeSourceOaDraftIdentity,
   handoffThreeSourcePilotToOaDraft,
   mapThreeSourcePrefillToOaValues,
 } from "./handoff";
@@ -104,7 +109,7 @@ describe("three-source OA draft handoff", () => {
     );
     vi.mocked(createCouponOaDraft).mockImplementation(async (input) => ({
       recordId: "rec-draft",
-      draftId: "COA-three-source",
+      draftId: input.draftId ?? "COA-three-source",
       ownerOpenId: input.ownerOpenId,
       status: "Draft",
       schemaVersion: input.schemaVersion,
@@ -114,11 +119,28 @@ describe("three-source OA draft handoff", () => {
     }));
   });
 
+  it("builds the OA test-draft identity from the exact task revision and snapshot", () => {
+    const identity = buildThreeSourceOaDraftIdentity({
+      taskId: "CTS-test",
+      revision: 4,
+      confirmationSnapshotHash: prefill.snapshotHash,
+    });
+    expect(identity).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      buildThreeSourceOaDraftIdentity({
+        taskId: "CTS-test",
+        revision: 5,
+        confirmationSnapshotHash: prefill.snapshotHash,
+      }),
+    ).not.toBe(identity);
+  });
+
   it("fails before uploading artifacts when the OA test-draft Base is incomplete", async () => {
     delete process.env.FEISHU_BASE_APP_TOKEN;
     await expect(
       handoffThreeSourcePilotToOaDraft({
         ownerOpenId: "ou_test",
+        taskId: "CTS-test",
         prefill,
         artifacts: frozenArtifacts,
       }),
@@ -180,6 +202,7 @@ describe("three-source OA draft handoff", () => {
     await expect(
       handoffThreeSourcePilotToOaDraft({
         ownerOpenId: "ou_test",
+        taskId: "CTS-test",
         prefill,
         artifacts: frozenArtifacts,
       }),
@@ -190,9 +213,41 @@ describe("three-source OA draft handoff", () => {
     expect(createCouponOaDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerOpenId: "ou_test",
+        draftId: expect.stringMatching(/^COA-3S-[a-f0-9]{64}$/),
         attachments: approvalAttachments,
       }),
     );
+  });
+
+  it("reconciles an exact identity after a create response is lost without uploading again", async () => {
+    const identity = buildThreeSourceOaDraftIdentity({
+      taskId: "CTS-test",
+      revision: prefill.revision,
+      confirmationSnapshotHash: prefill.snapshotHash,
+    });
+    const existing = {
+      recordId: "rec-existing",
+      draftId: `COA-3S-${identity}`,
+      ownerOpenId: "ou_test",
+      status: "Draft" as const,
+      schemaVersion: "coupon-three-source-pilot-v1",
+      values: {} as never,
+      attachments: [],
+      validationIssues: [],
+    };
+    vi.mocked(listActiveCouponOaDrafts).mockResolvedValue([existing]);
+    vi.mocked(getCouponOaDraft).mockResolvedValue(existing);
+
+    await expect(
+      handoffThreeSourcePilotToOaDraft({
+        ownerOpenId: "ou_test",
+        taskId: "CTS-test",
+        prefill,
+        artifacts: frozenArtifacts,
+      }),
+    ).resolves.toBe(existing);
+    expect(uploadVerifiedCouponOaArtifacts).not.toHaveBeenCalled();
+    expect(createCouponOaDraft).not.toHaveBeenCalled();
   });
 
   it("rejects non-strict modes without images and existing unrelated drafts before a handoff", async () => {
@@ -212,6 +267,7 @@ describe("three-source OA draft handoff", () => {
     await expect(
       handoffThreeSourcePilotToOaDraft({
         ownerOpenId: "ou_test",
+        taskId: "CTS-test",
         prefill,
         artifacts: frozenArtifacts,
       }),

@@ -54,6 +54,45 @@ describe("second-round mapping card delivery", () => {
     expect(current.mappingCardDelivery).toEqual({
       messageId: "om-second-round",
       revision: 1,
+      contextHash: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
+  });
+
+  it("patches the active card when the same revision has a different source context", async () => {
+    let current = draft();
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "om-old" })
+      .mockResolvedValueOnce({ messageId: "om-new" });
+    const updateCard = vi.fn(async () => undefined);
+    const updateDraft = vi.fn(async (_draft, updates) => {
+      current = { ...current, ...updates };
+      return current;
+    });
+    const dependencies = {
+      createCard,
+      updateCard,
+      updateDraft: updateDraft as never,
+    };
+
+    current = await deliverCouponThreeSourceMappingCard(
+      { draft: current },
+      dependencies,
+    );
+    current = {
+      ...current,
+      task: {
+        ...current.task,
+        blacklistStatus: "absent_confirmed",
+      },
+    };
+    current = await deliverCouponThreeSourceMappingCard(
+      { draft: current },
+      dependencies,
+    );
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(updateCard).toHaveBeenCalledOnce();
+    expect(current.mappingCardDelivery?.messageId).toBe("om-old");
   });
 });

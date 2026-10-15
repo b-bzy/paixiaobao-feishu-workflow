@@ -23,7 +23,7 @@ import type {
 } from "./types";
 
 export const couponThreeSourceAiPromptVersion =
-  "coupon-three-source-p0-ai-primary-v5";
+  "coupon-three-source-p0-ai-primary-v6";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -313,7 +313,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
     .array(
       z.object({
         role: z.enum(["whitelist", "blacklist", "unknown"]),
-        dimension: z.enum(["SKU", "SPU", "MERCHANT_ID"]),
+        dimension: z.enum(["SKU", "SPU", "MERCHANT_ID", "UNKNOWN"]),
         sheetName: z.string().min(1),
         headerCell: cellAddressSchema,
         confidence: z.number().min(0).max(1),
@@ -326,7 +326,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
     .array(
       z.object({
         role: z.enum(["whitelist", "blacklist", "unknown"]),
-        dimension: z.enum(["SKU", "SPU", "MERCHANT_ID"]),
+        dimension: z.enum(["SKU", "SPU", "MERCHANT_ID", "UNKNOWN"]),
         tierDisplayName: z.string().trim().min(1).max(200).optional(),
         sheetName: z.string().min(1),
         headerCell: cellAddressSchema,
@@ -1020,8 +1020,10 @@ export function buildCouponThreeSourceAiRequest(
       "fieldCandidates.key 只能使用 user.allowedFieldKeys 中的英文 key；优惠券名称可以额外使用 couponName，活动主题可以额外使用 activityTheme。禁止自造 threshold、faceValue、dailyLimit 等别名。",
       "同一字段在多行存在不同真实值时不得只返回第一行；尤其 channels 必须用字符串数组返回全部去重渠道，或为每个不同渠道分别返回有证据的候选。",
       "每个疑似优惠券数据行都必须返回 couponCandidates；当前未开放的折扣券、兑换券、直减券、立减券或 PLUS 券也必须返回 couponType=unsupported，禁止只写入 warnings 后省略结构化候选。",
-      "名单必须返回 SKU 数据区域和所属券档，而不只返回表头。",
-      "文件名含‘白名单’时，材料角色和名单区域 role 应优先识别为 whitelist；文件名含‘黑名单’时应识别为 blacklist，除非工作簿证据明确冲突。",
+      "名单必须返回标识数据区域和所属券档，而不只返回表头；SKU、SPU、MERCHANT_ID 是互相独立的标识维度，不得混淆。",
+      "材料角色（whitelist/blacklist）与标识维度（SKU/SPU/MERCHANT_ID/UNKNOWN）是两个独立判断，不得因文件名含‘商家ID’就把名单角色判断为黑名单或把数字直接判断为 MERCHANT_ID。",
+      "文件名只可作为低权重角色线索：含‘白名单’时 role 可优先为 whitelist，含‘黑名单’时 role 可优先为 blacklist；工作簿内容证据优先。",
+      "无表头单列数字名单无法仅凭数值唯一判断 SKU、SPU 或 MERCHANT_ID，dimension 必须返回 UNKNOWN；headerCell 使用该列第一个真实数据单元格作为区域锚点，startCell 与 headerCell 相同。",
       "listCandidates 的每项必须逐项使用 outputContract.listCandidates 中示例的结构；skuRegionCandidates 必须使用独立的 headerCell、startCell、endCell，禁止返回 region、columns、headerRow 或 dataStartRow 等替代结构。",
       "skuRegionCandidates.endCell 必须是该标识列最后一个真实非空单元格，不能直接使用工作表 rowCount；其他列更长时也不得扩大标识区域。",
       "当前生成只开放 regular_full_reduction；其他模板可以识别，但必须标记 supported=false。",

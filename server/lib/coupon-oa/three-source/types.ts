@@ -10,6 +10,7 @@ import type {
 export const threeSourceRuleVersion = "three-source-offline-v1";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
+export type SourceRoleResolution = SourceRole | "unknown";
 export type CandidateOrigin =
   | "source_explicit"
   | "ai_derived"
@@ -46,7 +47,7 @@ export type CouponTypeResolutionStatus =
   | "unknown"
   | "multiple_coupons"
   | "unsupported";
-export type IdentifierDimension = "SKU" | "SPU" | "MERCHANT_ID";
+export type IdentifierDimension = "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
 export type BlacklistStatus =
   | "uploaded"
   | "absent_pending_confirmation"
@@ -108,6 +109,13 @@ export interface SourceRoleCandidate {
   role: SourceRole;
   score: number;
   reasons: string[];
+}
+
+export interface SourceRoleDecision {
+  role: SourceRoleResolution;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+  requiresOwnerConfirmation: boolean;
 }
 
 export type CouponFieldKey =

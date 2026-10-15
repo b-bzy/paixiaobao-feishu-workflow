@@ -1,5 +1,6 @@
 export type CouponThreeSourceErrorCode =
   | "FILE_TYPE_UNSUPPORTED"
+  | "FILE_TOO_LARGE"
   | "WORKBOOK_UNREADABLE"
   | "WORKBOOK_ENCRYPTED_OR_UNSUPPORTED"
   | "WORKBOOK_EMPTY"
@@ -32,6 +33,11 @@ const knownErrors: Array<{
   code: CouponThreeSourceErrorCode;
   userMessage?: string;
 }> = [
+  {
+    pattern: /不超过 10 MB|超过.*10 MB/iu,
+    code: "FILE_TOO_LARGE",
+    userMessage: "文件超过 10 MB，当前自动流程无法处理，请转人工提报。",
+  },
   {
     pattern: /只接受 \.xlsx|\.xls|\.csv|不支持.*文件格式/iu,
     code: "FILE_TYPE_UNSUPPORTED",

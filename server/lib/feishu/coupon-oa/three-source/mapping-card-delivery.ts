@@ -2,6 +2,7 @@ import { sendFeishuCardWithReceipt, updateFeishuCard } from "../../client";
 import { buildCouponThreeSourceMappingCard } from "./cards";
 import {
   type CouponThreeSourcePilotDraft,
+  computeCouponThreeSourceMappingContextHash,
   updateCouponThreeSourcePilotDraft,
 } from "./store";
 
@@ -26,9 +27,20 @@ export async function deliverCouponThreeSourceMappingCard(
 ): Promise<CouponThreeSourcePilotDraft> {
   const card = buildCouponThreeSourceMappingCard(input.draft);
   const prior = input.draft.mappingCardDelivery;
+  const contextHash = computeCouponThreeSourceMappingContextHash(input.draft);
   if (prior?.revision === input.draft.task.revision) {
     await dependencies.updateCard(prior.messageId, card);
-    return input.draft;
+    if (prior.contextHash === contextHash) return input.draft;
+    return dependencies.updateDraft(
+      input.draft,
+      {
+        mappingCardDelivery: {
+          ...prior,
+          contextHash,
+        },
+      },
+      input.draft.task.revision,
+    );
   }
   const receipt = await dependencies.createCard(
     input.draft.ownerOpenId,
@@ -41,6 +53,7 @@ export async function deliverCouponThreeSourceMappingCard(
       mappingCardDelivery: {
         messageId: receipt.messageId,
         revision: input.draft.task.revision,
+        contextHash,
       },
     },
     input.draft.task.revision,

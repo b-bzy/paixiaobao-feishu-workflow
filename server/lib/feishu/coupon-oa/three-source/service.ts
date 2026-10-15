@@ -8,12 +8,13 @@ import {
   inspectUserCalcImage,
   renderCouponArtifactScreenshots,
 } from "../../../coupon-oa/three-source/calc-image";
+import { CouponThreeSourceError } from "../../../coupon-oa/three-source/errors";
 import { parseMultiSheetTieredIdentifierList } from "../../../coupon-oa/three-source/lists";
 import {
   confirmRegularFullReductionCouponSet,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
-  selectUniqueRole,
+  resolveSourceRoleCandidates,
 } from "../../../coupon-oa/three-source/recognition";
 import {
   type CalcImageMergeMode,
@@ -28,6 +29,7 @@ import {
   saveCouponThreeSourceArtifacts,
   setCouponThreeSourceOverlap,
   stageCouponThreeSourceCalcImage,
+  stageCouponThreeSourcePendingSource,
 } from "../../../coupon-oa/three-source/task";
 import type {
   CouponFieldKey,
@@ -305,7 +307,11 @@ export class CouponThreeSourcePilotService {
       !input.bytes.byteLength ||
       input.bytes.byteLength > maximumSourceBytes
     ) {
-      throw new Error("三源提报源文件必须大于 0 且不超过 10 MB");
+      throw new CouponThreeSourceError({
+        code: "FILE_TOO_LARGE",
+        message: "三源提报源文件必须大于 0 且不超过 10 MB",
+        userMessage: "文件超过 10 MB，当前自动流程无法处理，请转人工提报。",
+      });
     }
     const source: CouponThreeSourceSourceReference = {
       messageId: input.messageId,
@@ -326,33 +332,67 @@ export class CouponThreeSourcePilotService {
       source,
       couponCandidates,
     });
-    try {
-      const role = selectUniqueRole(recognition);
+    const assignedHashes = Object.fromEntries(
+      Object.entries(input.draft.recognitions)
+        .filter((entry): entry is [SourceRole, StoredWorkbookRecognition] =>
+          Boolean(entry[1]),
+        )
+        .map(([role, item]) => [role, item.sourceHash]),
+    );
+    const duplicate = [
+      ...Object.values(input.draft.recognitions),
+      ...(input.draft.pendingSources ?? []).map((item) => item.recognition),
+    ].some((item) => item?.sourceHash === stored.sourceHash);
+    if (duplicate) return input.draft;
+    const roleDecision = resolveSourceRoleCandidates({
+      recognition,
+      occupiedRoles: assignedHashes,
+      sourceCount:
+        Object.keys(input.draft.recognitions).length +
+        (input.draft.pendingSources?.length ?? 0) +
+        1,
+    });
+    if (
+      roleDecision.role !== "unknown" &&
+      !roleDecision.requiresOwnerConfirmation
+    ) {
       return this.assignSource({
         draft: input.draft,
         ownerOpenId: input.ownerOpenId,
         expectedRevision: input.expectedRevision,
-        role,
+        role: roleDecision.role,
         recognition: stored,
         messageId: input.messageId,
       });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "无法识别材料角色";
-      if (!message.includes("需要业务员确认")) throw error;
-      return this.dependencies.updateDraft(
-        input.draft,
-        {
-          pendingRecognition: stored,
-          processedMessageIds: [
-            ...new Set([...input.draft.processedMessageIds, input.messageId]),
-          ],
-          validationIssues: [message],
-          failureReason: undefined,
-        },
-        input.expectedRevision,
-      );
     }
+    const task = stageCouponThreeSourcePendingSource({
+      task: input.draft.task,
+      ownerOpenId: input.ownerOpenId,
+      expectedRevision: input.expectedRevision,
+      source,
+    });
+    const pendingSources = [
+      ...(input.draft.pendingSources ?? []),
+      {
+        source,
+        receivedOrder: input.draft.pendingSources?.length ?? 0,
+        recognition: stored,
+      },
+    ];
+    return this.dependencies.updateDraft(
+      input.draft,
+      {
+        task,
+        pendingSources,
+        pendingRecognition: stored,
+        processedMessageIds: [
+          ...new Set([...input.draft.processedMessageIds, input.messageId]),
+        ],
+        validationIssues: roleDecision.reasons,
+        failureReason: undefined,
+      },
+      input.expectedRevision,
+    );
   }
 
   async receiveCalcImage(input: {
@@ -446,11 +486,15 @@ export class CouponThreeSourcePilotService {
     if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
     const recognition = input.draft.pendingRecognition;
     if (!recognition) throw new Error("当前没有待确认角色的材料");
-    if (
-      !recognition.roleCandidates.some(
-        (candidate) => candidate.role === input.role,
-      )
-    ) {
+    const listedRole = recognition.roleCandidates.some(
+      (candidate) => candidate.role === input.role,
+    );
+    const listShaped = recognition.listCandidates.some(
+      (candidate) => candidate.kind === "identifier",
+    );
+    const allowedListRole =
+      listShaped && (input.role === "whitelist" || input.role === "blacklist");
+    if (!listedRole && !allowedListRole) {
       throw new Error("所选材料角色不在当前候选中");
     }
     return this.assignSource({
@@ -481,6 +525,10 @@ export class CouponThreeSourcePilotService {
           ownerFieldValues: {
             ...input.draft.selections.ownerFieldValues,
             ...input.selections.ownerFieldValues,
+          },
+          identifierDimensionConfirmations: {
+            ...input.draft.selections.identifierDimensionConfirmations,
+            ...input.selections.identifierDimensionConfirmations,
           },
         },
         coupon: undefined,
@@ -704,6 +752,8 @@ export class CouponThreeSourcePilotService {
     const whitelist = await parseMultiSheetTieredIdentifierList({
       recognition: whitelistRecognition,
       role: "whitelist",
+      identifierDimensionConfirmation:
+        input.draft.selections.identifierDimensionConfirmations?.whitelist,
       aiSkuRegions: storedWhitelist.ai?.primary
         ? storedWhitelist.ai.result?.skuRegionCandidates
         : undefined,
@@ -712,6 +762,8 @@ export class CouponThreeSourcePilotService {
       ? await parseMultiSheetTieredIdentifierList({
           recognition: blacklistRecognition,
           role: "blacklist",
+          identifierDimensionConfirmation:
+            input.draft.selections.identifierDimensionConfirmations?.blacklist,
           aiSkuRegions: storedBlacklist?.ai?.primary
             ? storedBlacklist.ai.result?.skuRegionCandidates
             : undefined,
@@ -944,6 +996,7 @@ export class CouponThreeSourcePilotService {
     }
     const oaDraft = await this.dependencies.handoff({
       ownerOpenId: input.ownerOpenId,
+      taskId: input.draft.task.taskId,
       prefill: input.draft.oaPrefill,
       artifacts: input.draft.artifacts,
       oaDraftRecordId: input.draft.oaDraftRecordId,
@@ -1077,6 +1130,10 @@ export class CouponThreeSourcePilotService {
             role,
             recognition ? { ...recognition, ai: undefined } : recognition,
           ]),
+        ),
+        pendingSources: (input.draft.pendingSources ?? []).filter(
+          (item) =>
+            item.recognition.sourceHash !== input.recognition.sourceHash,
         ),
         pendingRecognition: undefined,
         selections: {},

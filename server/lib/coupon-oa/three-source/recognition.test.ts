@@ -12,6 +12,7 @@ import {
   RegularFullReductionFieldError,
   resolveAiPrimaryRecognition,
   resolveCouponType,
+  resolveSourceRoleCandidates,
 } from "./recognition";
 import type { OfflineSourceFile } from "./types";
 
@@ -86,6 +87,97 @@ async function couponSource(
     bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
   };
 }
+
+async function singleColumnSource(input: {
+  fileName: string;
+  header?: string;
+  values: Array<string | number>;
+}): Promise<OfflineSourceFile> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Sheet1");
+  let row = 1;
+  if (input.header !== undefined) {
+    sheet.getCell(`A${row}`).value = input.header;
+    row += 1;
+  }
+  for (const value of input.values) {
+    sheet.getCell(`A${row}`).value = value;
+    row += 1;
+  }
+  return {
+    fileName: input.fileName,
+    bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+  };
+}
+
+describe("source role and identifier dimension", () => {
+  it("detects a headerless numeric column without guessing its id dimension", async () => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await singleColumnSource({
+        fileName: "商家ID_活动名单.xlsx",
+        values: [100078688918788, 10011972132466],
+      }),
+    );
+    expect(recognition.listCandidates).toEqual([
+      expect.objectContaining({
+        kind: "identifier",
+        dimension: "UNKNOWN",
+        headerRow: 0,
+        column: "A",
+      }),
+    ]);
+    expect(recognition.listCandidates[0].reasons.join(" ")).toContain(
+      "文件名包含“商家ID”",
+    );
+    expect(
+      resolveSourceRoleCandidates({
+        recognition,
+        occupiedRoles: { couponTable: "coupon-hash" },
+        sourceCount: 2,
+      }),
+    ).toMatchObject({
+      role: "whitelist",
+      confidence: "low",
+      requiresOwnerConfirmation: false,
+    });
+  });
+
+  it.each([
+    ["SKUID", "SKU"],
+    ["SPUID", "SPU"],
+    ["商家ID", "MERCHANT_ID"],
+  ] as const)("keeps the explicit %s dimension", async (header, dimension) => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await singleColumnSource({
+        fileName: "名单.xlsx",
+        header,
+        values: [100078688918788, 10011972132466],
+      }),
+    );
+    expect(recognition.listCandidates).toContainEqual(
+      expect.objectContaining({ dimension }),
+    );
+  });
+
+  it("does not silently replace an occupied whitelist with a third ambiguous list", async () => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await singleColumnSource({
+        fileName: "补充名单.xlsx",
+        values: [100078688918788, 10011972132466],
+      }),
+    );
+    expect(
+      resolveSourceRoleCandidates({
+        recognition,
+        occupiedRoles: {
+          couponTable: "coupon-hash",
+          whitelist: "whitelist-hash",
+        },
+        sourceCount: 3,
+      }),
+    ).toMatchObject({ role: "unknown", requiresOwnerConfirmation: true });
+  });
+});
 
 describe("single coupon confirmation", () => {
   it("uses validated AI candidates without appending deterministic rows", async () => {
@@ -530,6 +622,25 @@ describe("single coupon identifier list", () => {
 });
 
 describe("multi-sheet identifier list", () => {
+  it("selects the single SKU column when a Sheet also contains an SPU column", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("100减1");
+    sheet.addRow(["SKUID", "SPUID"]);
+    sheet.addRow(["10071816016249", "20071816016249"]);
+    const recognition = await inspectThreeSourceWorkbook({
+      fileName: "商品名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    });
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => entry.id)).toEqual(["10071816016249"]);
+  });
+
   it("normalizes exact numeric SKU cells and preserves displayed leading zeros", async () => {
     const workbook = new ExcelJS.Workbook();
     const numeric = workbook.addWorksheet("数字SKU");

@@ -21,6 +21,7 @@ import type {
   OfflineSourceFile,
   SourceProvenance,
   SourceRole,
+  SourceRoleDecision,
   ValidatedAiRecognition,
   WorkbookRecognition,
 } from "./types";
@@ -192,6 +193,58 @@ function sampleValues(
   return samples;
 }
 
+function isIdentifierLike(value: string): boolean {
+  return /^\d{4,}$/.test(value.trim());
+}
+
+function headerlessSingleColumnCandidate(input: {
+  worksheet: ExcelJS.Worksheet;
+  sourceHash: string;
+  sourceFileName: string;
+}): ListColumnCandidate | undefined {
+  const populatedColumns = new Set<number>();
+  const values: string[] = [];
+  for (let row = 1; row <= input.worksheet.rowCount; row += 1) {
+    const current = input.worksheet.getRow(row);
+    current.eachCell({ includeEmpty: false }, (cell, column) => {
+      const text = cellText(cell);
+      if (!text) return;
+      populatedColumns.add(column);
+      values.push(text);
+    });
+  }
+  if (
+    populatedColumns.size !== 1 ||
+    values.length < 2 ||
+    values.some((value) => !isIdentifierLike(value))
+  ) {
+    return undefined;
+  }
+  const columnIndex = [...populatedColumns][0];
+  const column = columnName(columnIndex);
+  const fileNameHint = normalize(input.sourceFileName).includes("商家id")
+    ? "文件名包含“商家ID”，但原表无表头，不能据此确定 ID 类型"
+    : "原表无表头，无法从单元格证明 ID 类型";
+  return {
+    id: candidateId(
+      input.sourceHash,
+      "identifier-unknown",
+      input.worksheet.name,
+      0,
+      column,
+    ),
+    kind: "identifier",
+    dimension: "UNKNOWN",
+    score: 40,
+    header: "",
+    headerRow: 0,
+    column,
+    sheetName: input.worksheet.name,
+    sampleValues: values.slice(0, 3),
+    reasons: ["识别到无表头单列数字区域", fileNameHint],
+  };
+}
+
 function roleCandidates(input: {
   sourceHash: string;
   sourceFileName: string;
@@ -245,6 +298,20 @@ function roleCandidates(input: {
         reasons: [blacklistSignal.reason],
       });
     }
+    if (!whitelistSignal && !blacklistSignal) {
+      candidates.push({
+        id: candidateId(
+          input.sourceHash,
+          "role",
+          "workbook",
+          0,
+          "default-whitelist",
+        ),
+        role: "whitelist",
+        score: 20,
+        reasons: ["仅检测到名单结构，按当前产品规则默认作为白名单候选"],
+      });
+    }
   }
   return candidates;
 }
@@ -265,6 +332,7 @@ export async function inspectThreeSourceWorkbook(
   const texts: string[] = [];
 
   for (const worksheet of workbook.worksheets) {
+    const firstListCandidateIndex = listCandidates.length;
     texts.push(worksheet.name);
     for (let row = 1; row <= Math.min(worksheet.rowCount, 100); row += 1) {
       const current = worksheet.getRow(row);
@@ -348,6 +416,18 @@ export async function inspectThreeSourceWorkbook(
         }
       }
     }
+    if (
+      !listCandidates
+        .slice(firstListCandidateIndex)
+        .some((candidate) => candidate.kind === "identifier")
+    ) {
+      const candidate = headerlessSingleColumnCandidate({
+        worksheet,
+        sourceHash,
+        sourceFileName: source.fileName,
+      });
+      if (candidate) listCandidates.push(candidate);
+    }
   }
 
   const couponFieldCount = Object.keys(couponFieldCandidates).length;
@@ -364,6 +444,52 @@ export async function inspectThreeSourceWorkbook(
     couponFieldCandidates,
     listCandidates,
     issues: [],
+  };
+}
+
+export function resolveSourceRoleCandidates(input: {
+  recognition: WorkbookRecognition;
+  occupiedRoles: Partial<Record<SourceRole, string>>;
+  sourceCount: number;
+}): SourceRoleDecision {
+  const sorted = [...input.recognition.roleCandidates].sort(
+    (left, right) => right.score - left.score,
+  );
+  const top = sorted[0];
+  if (top && (!sorted[1] || top.score > sorted[1].score)) {
+    const occupiedByOther = Boolean(
+      input.occupiedRoles[top.role] &&
+        input.occupiedRoles[top.role] !== input.recognition.sourceHash,
+    );
+    return {
+      role: occupiedByOther ? "unknown" : top.role,
+      confidence: top.score >= 80 ? "high" : "low",
+      reasons: top.reasons,
+      requiresOwnerConfirmation: occupiedByOther,
+    };
+  }
+  const looksLikeList = input.recognition.listCandidates.some(
+    (candidate) => candidate.kind === "identifier",
+  );
+  if (
+    looksLikeList &&
+    !input.occupiedRoles.whitelist &&
+    input.sourceCount <= 2
+  ) {
+    return {
+      role: "whitelist",
+      confidence: "low",
+      reasons: ["仅识别到名单形态，按常见两份材料场景默认作为白名单候选"],
+      requiresOwnerConfirmation: false,
+    };
+  }
+  return {
+    role: "unknown",
+    confidence: "low",
+    reasons: looksLikeList
+      ? ["名单用途无法从现有证据确定"]
+      : ["无法根据工作簿内容确定材料角色"],
+    requiresOwnerConfirmation: true,
   };
 }
 

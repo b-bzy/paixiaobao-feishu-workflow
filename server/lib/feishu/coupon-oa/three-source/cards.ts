@@ -11,6 +11,7 @@ import type {
   CouponThreeSourcePilotDraft,
   StoredWorkbookRecognition,
 } from "./store";
+import { computeCouponThreeSourceMappingContextHash } from "./store";
 
 const plainText = (content: string) => ({ tag: "plain_text", content });
 
@@ -189,6 +190,18 @@ export function buildCouponThreeSourceRoleCard(input: {
   draft: CouponThreeSourcePilotDraft;
   recognition: StoredWorkbookRecognition;
 }): FeishuCard {
+  const detectedRoles = input.recognition.roleCandidates.map(
+    (candidate) => candidate.role,
+  );
+  const looksLikeList = input.recognition.listCandidates.some(
+    (candidate) => candidate.kind === "identifier",
+  );
+  const roles = [
+    ...new Set([
+      ...detectedRoles,
+      ...(looksLikeList ? (["whitelist", "blacklist"] as const) : []),
+    ]),
+  ];
   return card({
     title: "确认材料角色",
     subtitle: "系统无法唯一判断刚上传的 Excel",
@@ -198,19 +211,23 @@ export function buildCouponThreeSourceRoleCard(input: {
         tag: "markdown",
         content: [
           `**文件：** ${input.recognition.source.fileName}`,
-          "请选择该文件在本次三源提报中的角色。选择后会替换同角色材料并产生新 revision。",
+          input.draft.task.sources.whitelist && looksLikeList
+            ? "已有白名单。请确认这份新名单是替换现有白名单，还是作为商品黑名单；系统不会自动覆盖。"
+            : "请选择该文件在本次三源提报中的角色。选择后会替换同角色材料并产生新 revision。",
         ].join("\n"),
       },
-      ...input.recognition.roleCandidates.map((candidate) =>
+      ...roles.map((role) =>
         button(input.draft, {
           action: "coupon_three_source_role_confirm",
           text:
-            candidate.role === "couponTable"
+            role === "couponTable"
               ? "作为配券表"
-              : candidate.role === "whitelist"
-                ? "作为商品白名单"
+              : role === "whitelist"
+                ? input.draft.task.sources.whitelist
+                  ? "替换现有商品白名单"
+                  : "作为商品白名单"
                 : "作为商品黑名单",
-          extra: { role: candidate.role },
+          extra: { role },
         }),
       ),
       cancelButton(input.draft),
@@ -479,12 +496,28 @@ function aiStatusContent(draft: CouponThreeSourcePilotDraft): string[] {
   return lines;
 }
 
+function unresolvedIdentifierDimension(
+  recognition: StoredWorkbookRecognition | undefined,
+): "SPU" | "MERCHANT_ID" | "UNKNOWN" | undefined {
+  const deterministic = recognition?.listCandidates.find(
+    (candidate) =>
+      candidate.kind === "identifier" && candidate.dimension !== "SKU",
+  )?.dimension;
+  if (deterministic && deterministic !== "SKU") return deterministic;
+  const ai = recognition?.ai?.result?.skuRegionCandidates?.find(
+    (candidate) => candidate.dimension !== "SKU",
+  )?.dimension;
+  return ai && ai !== "SKU" ? ai : undefined;
+}
+
 export function buildCouponThreeSourceMappingCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
   const coupon = draft.recognitions.couponTable;
   const whitelist = draft.recognitions.whitelist;
   const blacklist = draft.recognitions.blacklist;
+  const unresolvedWhitelistDimension = unresolvedIdentifierDimension(whitelist);
+  const unresolvedBlacklistDimension = unresolvedIdentifierDimension(blacklist);
   const coupons = combinedCouponCandidates(coupon);
   const hasUnknownCoupon = coupons.some(
     (candidate) => candidate.couponType === "unknown",
@@ -856,6 +889,35 @@ export function buildCouponThreeSourceMappingCard(
                 content:
                   "**商品白名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
               },
+              ...(unresolvedWhitelistDimension
+                ? [
+                    {
+                      tag: "markdown",
+                      content: `**白名单识别困难：** ${whitelist.source.fileName} 是无表头或标识含义不明确的单列数据，系统只能判断它是名单，不能仅凭数字区分 SKU、SPU 或商家 ID。当前生成只支持 SKU，请确认这些原单元格实际是 SKU；系统不会改写任何值。`,
+                    },
+                    {
+                      tag: "select_static",
+                      name: "whitelist_confirmAsSku",
+                      placeholder: plainText("请确认白名单标识类型"),
+                      required: true,
+                      width: "fill",
+                      options: [
+                        {
+                          text: plainText("确认原值实际是 SKU"),
+                          value: "SKU",
+                        },
+                      ],
+                    },
+                    {
+                      tag: "input",
+                      name: "whitelist_dimensionReason",
+                      label: plainText("确认依据（至少 2 个字）"),
+                      input_type: "text",
+                      required: true,
+                      width: "fill",
+                    },
+                  ]
+                : []),
             ]
           : []),
         ...(blacklist
@@ -865,13 +927,42 @@ export function buildCouponThreeSourceMappingCard(
                 content:
                   "**商品黑名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
               },
+              ...(unresolvedBlacklistDimension
+                ? [
+                    {
+                      tag: "markdown",
+                      content: `**黑名单识别困难：** ${blacklist.source.fileName} 的标识类型不能唯一确定。当前生成只支持 SKU，请确认这些原单元格实际是 SKU；系统不会改写任何值。`,
+                    },
+                    {
+                      tag: "select_static",
+                      name: "blacklist_confirmAsSku",
+                      placeholder: plainText("请确认黑名单标识类型"),
+                      required: true,
+                      width: "fill",
+                      options: [
+                        {
+                          text: plainText("确认原值实际是 SKU"),
+                          value: "SKU",
+                        },
+                      ],
+                    },
+                    {
+                      tag: "input",
+                      name: "blacklist_dimensionReason",
+                      label: plainText("确认依据（至少 2 个字）"),
+                      input_type: "text",
+                      required: true,
+                      width: "fill",
+                    },
+                  ]
+                : []),
             ]
           : []),
         ...(!onlyUnsupported
           ? [
               {
                 tag: "button",
-                name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}`,
+                name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}:${computeCouponThreeSourceMappingContextHash(draft)}`,
                 text: plainText("确认信息并生成标准附件"),
                 type: "primary_filled",
                 width: "fill",
@@ -1062,6 +1153,29 @@ export function buildCouponThreeSourceErrorCard(input: {
             },
           ]
         : []),
+    ],
+  });
+}
+
+export function buildCouponThreeSourceManualSubmissionCard(input: {
+  fileName?: string;
+}): FeishuCard {
+  return card({
+    title: "文件超过 10 MB，需转人工提报",
+    subtitle: "当前自动流程未处理该文件",
+    template: "orange",
+    elements: [
+      {
+        tag: "markdown",
+        content: [
+          input.fileName ? `文件：${input.fileName}` : undefined,
+          "当前自动流程只处理不超过 10 MB 的单个 .xlsx 文件。",
+          "该文件未进入识别，也未发送给 DeepSeek；此前已接收的材料仍会保留。",
+          "请改用现有人工提报渠道。系统不会自动取消当前提报，也不会声称已完成转交。",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
     ],
   });
 }

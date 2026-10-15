@@ -181,13 +181,14 @@ function parseRecord(record: BaseRecord): CouponOaDraft {
 export async function createCouponOaDraft(input: {
   ownerOpenId: string;
   schemaVersion: string;
+  draftId?: string;
   values: CouponOaDraftValues;
   attachments?: CouponOaAttachment[];
   validationIssues?: string[];
 }): Promise<CouponOaDraft> {
   const tableId = getCouponOaDraftTableId();
   const draft = {
-    draftId: `COA-${randomUUID()}`,
+    draftId: input.draftId ?? `COA-${randomUUID()}`,
     ownerOpenId: input.ownerOpenId,
     status: "Draft" as const,
     schemaVersion: input.schemaVersion,

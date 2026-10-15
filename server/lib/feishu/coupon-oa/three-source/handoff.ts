@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { PostgresCouponThreeSourceHandoffRepository } from "../../../control-plane/postgres-coupon-three-source-handoff-repository";
+import { getControlPlaneDatabase } from "../../../control-plane/postgres-sql-database";
 import type { OaPrefillSnapshot } from "../../../coupon-oa/three-source/types";
 import {
   type CouponOaDraftValues,
@@ -24,6 +27,34 @@ export type FrozenThreeSourceArtifact = FrozenCouponOaArtifact & {
   /** Last preview grant failure reason; the preview entry stays hidden. */
   previewGrantError?: string;
 };
+
+export function buildThreeSourceOaDraftIdentity(input: {
+  taskId: string;
+  revision: number;
+  confirmationSnapshotHash: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        taskId: input.taskId,
+        revision: input.revision,
+        confirmationSnapshotHash: input.confirmationSnapshotHash,
+      }),
+    )
+    .digest("hex");
+}
+
+function draftIdForIdentity(sourceIdentity: string): string {
+  return `COA-3S-${sourceIdentity}`;
+}
+
+function durableHandoffRepository():
+  | PostgresCouponThreeSourceHandoffRepository
+  | undefined {
+  return /^postgres(?:ql)?:\/\//iu.test(process.env.DATABASE_URL?.trim() ?? "")
+    ? new PostgresCouponThreeSourceHandoffRepository(getControlPlaneDatabase())
+    : undefined;
+}
 
 function attachmentByRole(
   attachments: Awaited<ReturnType<typeof uploadVerifiedCouponOaArtifacts>>,
@@ -110,14 +141,47 @@ export function mapThreeSourcePrefillToOaValues(input: {
 
 export async function handoffThreeSourcePilotToOaDraft(input: {
   ownerOpenId: string;
+  taskId: string;
   prefill: OaPrefillSnapshot;
   artifacts: FrozenThreeSourceArtifact[];
   oaDraftRecordId?: string;
 }): Promise<CouponOaDraft> {
   assertCouponOaDraftStoreConfigured();
-  if (input.oaDraftRecordId) return getCouponOaDraft(input.oaDraftRecordId);
+  const sourceIdentity = buildThreeSourceOaDraftIdentity({
+    taskId: input.taskId,
+    revision: input.prefill.revision,
+    confirmationSnapshotHash: input.prefill.snapshotHash,
+  });
+  const identityDraftId = draftIdForIdentity(sourceIdentity);
+  const handoffRepository = durableHandoffRepository();
+  const intent = await handoffRepository?.prepare({
+    sourceIdentity,
+    taskId: input.taskId,
+    revision: input.prefill.revision,
+    confirmationSnapshotHash: input.prefill.snapshotHash,
+  });
+  if (intent?.state === "created" && intent.oaDraftRecordId) {
+    return getCouponOaDraft(intent.oaDraftRecordId);
+  }
+  if (input.oaDraftRecordId) {
+    const existing = await getCouponOaDraft(input.oaDraftRecordId);
+    if (existing.draftId !== identityDraftId) {
+      throw new Error(
+        "已有 OA 测试稿不属于当前 revision，请重新生成最新测试稿",
+      );
+    }
+    return existing;
+  }
 
   const active = await listActiveCouponOaDrafts(input.ownerOpenId);
+  const exact = active.find((draft) => draft.draftId === identityDraftId);
+  if (exact) {
+    await handoffRepository?.markCreated({
+      sourceIdentity,
+      oaDraftRecordId: exact.recordId,
+    });
+    return getCouponOaDraft(exact.recordId);
+  }
   if (active.length) {
     throw new Error("你已有未完成的优惠券 OA 草稿，请先完成或取消后再自动填写");
   }
@@ -125,16 +189,50 @@ export async function handoffThreeSourcePilotToOaDraft(input: {
     artifacts: input.artifacts,
   });
   const concurrent = await listActiveCouponOaDrafts(input.ownerOpenId);
+  const reconciled = concurrent.find(
+    (draft) => draft.draftId === identityDraftId,
+  );
+  if (reconciled) {
+    await handoffRepository?.markCreated({
+      sourceIdentity,
+      oaDraftRecordId: reconciled.recordId,
+    });
+    return getCouponOaDraft(reconciled.recordId);
+  }
   if (concurrent.length) {
     throw new Error("自动填写期间产生了另一份优惠券 OA 草稿，已停止以避免覆盖");
   }
-  return createCouponOaDraft({
-    ownerOpenId: input.ownerOpenId,
-    schemaVersion: COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
-    values: mapThreeSourcePrefillToOaValues({
-      prefill: input.prefill,
+  try {
+    const created = await createCouponOaDraft({
+      ownerOpenId: input.ownerOpenId,
+      draftId: identityDraftId,
+      schemaVersion: COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION,
+      values: mapThreeSourcePrefillToOaValues({
+        prefill: input.prefill,
+        attachments,
+      }),
       attachments,
-    }),
-    attachments,
-  });
+    });
+    await handoffRepository?.markCreated({
+      sourceIdentity,
+      oaDraftRecordId: created.recordId,
+    });
+    return created;
+  } catch (error) {
+    const readback = (await listActiveCouponOaDrafts(input.ownerOpenId)).find(
+      (draft) => draft.draftId === identityDraftId,
+    );
+    if (readback) {
+      await handoffRepository?.markCreated({
+        sourceIdentity,
+        oaDraftRecordId: readback.recordId,
+      });
+      return getCouponOaDraft(readback.recordId);
+    }
+    await handoffRepository?.markOutcomeUnknown({
+      sourceIdentity,
+      errorCode: "OA_DRAFT_CREATE_OUTCOME_UNKNOWN",
+    });
+    throw error;
+  }
 }

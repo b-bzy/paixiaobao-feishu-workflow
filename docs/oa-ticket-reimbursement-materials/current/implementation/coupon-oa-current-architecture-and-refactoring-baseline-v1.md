@@ -63,6 +63,23 @@ Sheet 名不需要等于配券表券档名，也不得恢复固定五档 allowli
 Sheet 时，未覆盖 Sheet 继续走确定性 SKU 列发现；同一有效 AI 区域不得再由规则
 重复读取。
 
+名单识别现拆成材料角色和标识维度两条轴：无表头单列数字会形成
+`dimension=UNKNOWN` 的低置信度名单候选，两份材料场景可默认占用白名单角色，但只有
+owner 在第二轮确认“原值实际为 SKU”并填写依据后，确定性解析器才允许复制这些原值。
+若同一 Sheet 同时存在唯一 SKU 与 SPU 候选，SKU 列自动胜出，SPU 不进入标准附件。
+第三份用途不明名单进入 pending source，不覆盖现有白名单；角色卡只允许替换白名单或
+作为黑名单。大于 10 MB 的单文件在解析、AI 和角色写入之前 fail closed，改发人工提报
+提示卡。
+
+第二轮卡保存由 task ID、revision、来源 SHA、角色、名单区域和待确认问题计算的
+`mappingContextHash`；同 revision 只 PATCH 已登记的 message ID，旧 context callback
+拒绝写入。确认生成前向 PostgreSQL `effect_receipts` 登记
+`coupon_three_source_action` 语义动作并持有租约；并发回调只读既有状态，租约过期而
+外部结果未知时转 `outcome_unknown`，禁止盲重放。OA 测试稿使用
+`task ID + revision + confirmation snapshot hash` 的不可变 source identity，并通过新增
+`coupon_three_source_handoffs` 事实表及确定性 Draft ID 对账；owner 的其他活动草稿仍是
+明确冲突，不能被误当成本 revision 的测试稿。
+
 三源运行时在 Base `State JSON` 读取后统一补齐兼容旧状态中的候选数组、选择对象、
 图片和产物集合；未知 task schema 仍 fail closed。所有用户失败卡通过稳定错误合同
 投影，不能直接拼接 TypeError、ExcelJS、Drive/Base 或 SDK 的原始 `error.message`。

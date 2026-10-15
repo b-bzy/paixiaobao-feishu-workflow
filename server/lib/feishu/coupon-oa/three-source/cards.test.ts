@@ -3,10 +3,12 @@ import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/tas
 import {
   buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceIntakeCard,
+  buildCouponThreeSourceManualSubmissionCard,
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceNoBlacklistCard,
   buildCouponThreeSourcePreviewCard,
   buildCouponThreeSourceRecognizingCard,
+  buildCouponThreeSourceRoleCard,
 } from "./cards";
 import type { CouponThreeSourcePilotDraft } from "./store";
 
@@ -693,5 +695,54 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("DeepSeek 表格识别已完成");
     expect(rendered).toContain("补充说明识别失败，请直接检查并填写字段");
     expect(rendered).not.toContain("coupon-three-source-p0-ai-primary-v2");
+  });
+
+  it("routes oversized files to manual submission without implying cancellation", () => {
+    const rendered = JSON.stringify(
+      buildCouponThreeSourceManualSubmissionCard({
+        fileName: "超大材料.xlsx",
+      }),
+    );
+    expect(rendered).toContain("超大材料.xlsx");
+    expect(rendered).toContain("转人工提报");
+    expect(rendered).toContain("不会自动取消当前提报");
+  });
+
+  it("explains a headerless numeric list and requires an auditable SKU confirmation", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    whitelist.source.fileName = "商家ID_活动.xlsx";
+    const identifier = whitelist.listCandidates[0];
+    if (!identifier) throw new Error("test identifier missing");
+    identifier.dimension = "UNKNOWN";
+    identifier.headerRow = 0;
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("不能仅凭数字区分 SKU、SPU 或商家 ID");
+    expect(rendered).toContain("确认原值实际是 SKU");
+    expect(rendered).toContain("whitelist_dimensionReason");
+  });
+
+  it("asks a single replace-white-or-use-as-black question for a third ambiguous list", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    const pending = {
+      ...whitelist,
+      source: {
+        ...whitelist.source,
+        fileName: "第三份名单.xlsx",
+        sha256: "c".repeat(64),
+      },
+      sourceHash: "c".repeat(64),
+      roleCandidates: [],
+    };
+    const rendered = JSON.stringify(
+      buildCouponThreeSourceRoleCard({ draft: current, recognition: pending }),
+    );
+    expect(rendered).toContain("替换现有商品白名单");
+    expect(rendered).toContain("作为商品黑名单");
+    expect(rendered).not.toContain("作为配券表");
   });
 });

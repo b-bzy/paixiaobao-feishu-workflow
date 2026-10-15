@@ -42,6 +42,11 @@ export interface CouponThreeSourceSourceFile {
   sha256: string;
 }
 
+export type PendingCouponThreeSourceSourceFile = Omit<
+  CouponThreeSourceSourceFile,
+  "role"
+>;
+
 export interface CouponThreeSourceArtifact {
   artifactId: string;
   order: number;
@@ -275,6 +280,31 @@ export function replaceCouponThreeSourceSource(input: {
     blacklistStatus,
     overlap: undefined,
     status: collectingStatus(candidate),
+  });
+}
+
+export function stageCouponThreeSourcePendingSource(input: {
+  task: CouponThreeSourceTask;
+  ownerOpenId: string;
+  expectedRevision: number;
+  source: PendingCouponThreeSourceSourceFile;
+}): CouponThreeSourceTask {
+  assertOwnerAndRevision(input.task, input);
+  if (!input.source.fileName.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("三源提报只接受 .xlsx 源文件");
+  }
+  if (!input.source.messageId || !input.source.fileKey) {
+    throw new Error("三源提报源文件缺少飞书消息引用");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(input.source.sha256)) {
+    throw new Error("三源提报源文件 hash 无效");
+  }
+  if (!Number.isSafeInteger(input.source.bytes) || input.source.bytes <= 0) {
+    throw new Error("三源提报源文件大小无效");
+  }
+  return nextRevision(input.task, {
+    overlap: undefined,
+    status: "Collecting",
   });
 }
 

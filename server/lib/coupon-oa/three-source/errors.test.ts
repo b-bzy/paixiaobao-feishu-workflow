@@ -45,6 +45,14 @@ describe("coupon three-source errors", () => {
       code: "VALIDATION_REQUIRED",
       message: "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值",
     });
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error("三源提报源文件必须大于 0 且不超过 10 MB"),
+      ),
+    ).toEqual({
+      code: "FILE_TOO_LARGE",
+      message: "文件超过 10 MB，当前自动流程无法处理，请转人工提报。",
+    });
   });
 
   it("never exposes unknown internal exception text", () => {

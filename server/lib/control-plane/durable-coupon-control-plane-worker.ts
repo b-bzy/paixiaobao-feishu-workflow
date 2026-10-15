@@ -45,6 +45,7 @@ import {
   PostgresCouponAiTextRepository,
 } from "./postgres-coupon-ai-text-repository";
 import { PostgresCouponCommandIntakeRepository } from "./postgres-coupon-command-intake-repository";
+import { couponThreeSourceActionEffectKind } from "./postgres-coupon-three-source-action-repository";
 import { PostgresDurableEffectRepository } from "./postgres-durable-effect-repository";
 import { getControlPlaneDatabase } from "./postgres-sql-database";
 import { PostgresWorkflowJobRepository } from "./postgres-workflow-job-repository";
@@ -170,6 +171,14 @@ export function createDurableCouponControlPlaneWorker(input: {
     coupon_three_source_intake_card: createCouponIntakeCardEffectHandler(
       input.cardGateway,
     ),
+    // The current P0 callback owns the live lease and settles this effect.
+    // If it crashes after an external side effect, the expired lease must stop
+    // for reconciliation instead of blindly replaying file/OA operations.
+    [couponThreeSourceActionEffectKind]: async () => ({
+      kind: "outcome_unknown",
+      errorCode: "COUPON_ACTION_RECONCILIATION_REQUIRED",
+      errorMessage: "Coupon action lease expired before a confirmed outcome",
+    }),
   };
   if (input.aiRecognition) {
     handlers[couponAiRecognitionEffectKind] =

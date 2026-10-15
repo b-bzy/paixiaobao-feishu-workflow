@@ -35,6 +35,9 @@ function dependencies(input: {
   activeOa?: Array<{ recordId: string }>;
   activeExcel?: Array<{ recordId: string }>;
   getOaDraft?: CouponThreeSourceDispatcherDependencies["getOaDraft"];
+  claimAction?: CouponThreeSourceDispatcherDependencies["claimAction"];
+  completeAction?: CouponThreeSourceDispatcherDependencies["completeAction"];
+  failAction?: CouponThreeSourceDispatcherDependencies["failAction"];
 }) {
   const sendCard = vi.fn(
     async (_openId: string, _card: unknown, _idempotencyKey?: string) =>
@@ -66,11 +69,57 @@ function dependencies(input: {
     sendCard,
     deliverMappingCard,
     getOaDraft: input.getOaDraft ?? vi.fn(),
+    claimAction: input.claimAction,
+    completeAction: input.completeAction,
+    failAction: input.failAction,
   };
   return { values, sendCard, deliverMappingCard };
 }
 
 describe("three-source Bot dispatcher", () => {
+  it("does not execute a second mapping confirmation while the semantic action is in progress", async () => {
+    const current = {
+      ...draft(),
+      task: { ...draft().task, revision: 5 },
+      mappingCardDelivery: {
+        messageId: "om-mapping",
+        revision: 5,
+      },
+    };
+    const updateSelections = vi.fn();
+    const updateCard = vi.fn(
+      async (_messageId: string, _card: unknown) => undefined,
+    );
+    const claimAction = vi.fn(async () => ({
+      state: "in_progress" as const,
+      effectId: "effect-existing",
+    }));
+    const built = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+      claimAction,
+    });
+    built.values.updateCard = updateCard;
+    const dispatcher = createCouponThreeSourceDispatcher(built.values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {},
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source action in_progress",
+    });
+
+    expect(updateSelections).not.toHaveBeenCalled();
+    expect(updateCard).toHaveBeenCalledOnce();
+    expect(JSON.stringify(updateCard.mock.calls[0]?.[1])).toContain(
+      "标准附件生成中",
+    );
+  });
+
   it("goes straight from final confirmation to the merged send card", async () => {
     const confirmed = {
       ...draft(),

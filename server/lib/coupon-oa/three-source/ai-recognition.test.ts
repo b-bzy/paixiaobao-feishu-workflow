@@ -277,6 +277,60 @@ describe("coupon three-source AI recognition", () => {
     expect(request).not.toHaveProperty("chunks");
   });
 
+  it("keeps headerless numeric lists dimension-unknown and tells AI to separate role from identifier type", async () => {
+    const sourceWorkbook = new ExcelJS.Workbook();
+    const sheet = sourceWorkbook.addWorksheet("Sheet1");
+    sheet.getCell("A1").value = 162203631;
+    sheet.getCell("A2").value = 147993477;
+    const bytes = await sourceWorkbook.xlsx.writeBuffer();
+    const workbook = await serializeWorkbookForAi({
+      fileName: "商家ID_新商活动.xlsx",
+      bytes: new Uint8Array(bytes),
+    });
+
+    const result = validateCouponThreeSourceAiProposal({
+      workbook,
+      proposal: {
+        listCandidates: [
+          {
+            role: "whitelist",
+            dimension: "UNKNOWN",
+            sheetName: "Sheet1",
+            headerCell: "A1",
+            confidence: 0.55,
+            reason: "无表头单列数字，无法唯一判断标识维度",
+          },
+        ],
+        skuRegionCandidates: [
+          {
+            role: "whitelist",
+            dimension: "UNKNOWN",
+            sheetName: "Sheet1",
+            headerCell: "A1",
+            startCell: "A1",
+            endCell: "A2",
+            confidence: 0.55,
+            reason: "无表头单列数字区域",
+          },
+        ],
+      },
+    });
+
+    expect(result.listCandidates).toEqual([
+      expect.objectContaining({ role: "whitelist", dimension: "UNKNOWN" }),
+    ]);
+    expect(result.skuRegionCandidates).toEqual([
+      expect.objectContaining({ dimension: "UNKNOWN" }),
+    ]);
+
+    const request = buildCouponThreeSourceAiRequest(workbook);
+    expect(request.promptVersion).toContain("v6");
+    expect(request.system).toContain(
+      "材料角色（whitelist/blacklist）与标识维度",
+    );
+    expect(request.system).toContain("dimension 必须返回 UNKNOWN");
+  });
+
   it("keeps valid candidates when the model adds an extension role and activity theme", async () => {
     const workbook = await serializeWorkbookForAi(await source());
     const result = validateCouponThreeSourceAiProposal({

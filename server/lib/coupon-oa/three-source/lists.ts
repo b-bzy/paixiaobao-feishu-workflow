@@ -290,6 +290,12 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   role: "whitelist" | "blacklist";
   selection?: MultiSheetListSelection;
   aiSkuRegions?: AiSkuRegionCandidate[];
+  identifierDimensionConfirmation?: {
+    sourceSha256: string;
+    detectedDimension: "SPU" | "MERCHANT_ID" | "UNKNOWN";
+    confirmedAs: "SKU";
+    reason: string;
+  };
 }): Promise<ParsedTieredIdentifierList> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
@@ -309,6 +315,17 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     (candidate) => candidate.role === input.role,
   );
   const aiCoveredSheets = new Set<string>();
+  const dimensionConfirmedAsSku = (dimension: string): boolean => {
+    const confirmation = input.identifierDimensionConfirmation;
+    return (
+      dimension !== "SKU" &&
+      confirmation?.sourceSha256 === sourceHashValue &&
+      (confirmation.detectedDimension === dimension ||
+        confirmation.detectedDimension === "UNKNOWN") &&
+      confirmation.confirmedAs === "SKU" &&
+      confirmation.reason.trim().length >= 2
+    );
+  };
 
   if (aiRegions.length) {
     for (const region of aiRegions) {
@@ -318,7 +335,10 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         issues.push("系统识别的名单区域已失效，请重新上传材料");
         continue;
       }
-      if (region.dimension !== "SKU") {
+      if (
+        region.dimension !== "SKU" &&
+        !dimensionConfirmedAsSku(region.dimension)
+      ) {
         issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
         continue;
       }
@@ -410,18 +430,26 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     }
     seenTiers.add(resolvedTier);
     sheetOrder.push(resolvedTier);
+    const skuCandidates = sheetCandidates.filter(
+      (candidate) => candidate.dimension === "SKU",
+    );
     const identifier = selected?.identifierCandidateId
       ? sheetCandidates.find(
           (candidate) => candidate.id === selected.identifierCandidateId,
         )
-      : sheetCandidates.length === 1
-        ? sheetCandidates[0]
-        : undefined;
+      : skuCandidates.length === 1
+        ? skuCandidates[0]
+        : sheetCandidates.length === 1
+          ? sheetCandidates[0]
+          : undefined;
     if (!identifier) {
       issues.push(`${worksheet.name} 存在多个 SKU 列候选，需要业务员确认`);
       continue;
     }
-    if (identifier.dimension !== "SKU") {
+    if (
+      identifier.dimension !== "SKU" &&
+      !dimensionConfirmedAsSku(identifier.dimension ?? "UNKNOWN")
+    ) {
       issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
       continue;
     }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ValidatedCouponSupplementText } from "../../../coupon-oa/three-source/ai-text";
 import { toCouponThreeSourceUserFailure } from "../../../coupon-oa/three-source/errors";
 import type { ListColumnSelection } from "../../../coupon-oa/three-source/offline";
@@ -41,6 +41,12 @@ export interface CouponThreeSourceSourceReference {
   sha256: string;
 }
 
+export interface PendingCouponThreeSourceSource {
+  source: CouponThreeSourceSourceReference;
+  receivedOrder: number;
+  recognition: StoredWorkbookRecognition;
+}
+
 export interface StoredWorkbookRecognition
   extends Omit<WorkbookRecognition, "source"> {
   source: CouponThreeSourceSourceReference;
@@ -66,6 +72,17 @@ export interface CouponThreeSourcePilotSelections {
   overrideReasons?: Partial<Record<CouponFieldKey, string>>;
   whitelist?: ListColumnSelection & { selectedSheetName?: string };
   blacklist?: ListColumnSelection & { selectedSheetName?: string };
+  identifierDimensionConfirmations?: Partial<
+    Record<
+      "whitelist" | "blacklist",
+      {
+        sourceSha256: string;
+        detectedDimension: "SPU" | "MERCHANT_ID" | "UNKNOWN";
+        confirmedAs: "SKU";
+        reason: string;
+      }
+    >
+  >;
   activityPointPercent?: number;
   overlapDecision?: OverlapDecision;
 }
@@ -79,6 +96,7 @@ export interface CouponThreeSourcePilotDraft {
   recognitions: Partial<
     Record<"couponTable" | "whitelist" | "blacklist", StoredWorkbookRecognition>
   >;
+  pendingSources?: PendingCouponThreeSourceSource[];
   pendingRecognition?: StoredWorkbookRecognition;
   supplementRecognition?: {
     kind?: "owner_supplement" | "form_repair";
@@ -95,6 +113,7 @@ export interface CouponThreeSourcePilotDraft {
   mappingCardDelivery?: {
     messageId: string;
     revision: number;
+    contextHash?: string;
   };
   selections: CouponThreeSourcePilotSelections;
   coupon?: ConfirmedCouponSource;
@@ -110,6 +129,47 @@ export interface CouponThreeSourcePilotDraft {
   failureReason?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export function computeCouponThreeSourceMappingContextHash(
+  draft: CouponThreeSourcePilotDraft,
+): string {
+  const roles = (["couponTable", "whitelist", "blacklist"] as const).map(
+    (role) => {
+      const recognition = draft.recognitions[role];
+      return {
+        role,
+        sourceSha256: draft.task.sources[role]?.sha256 ?? null,
+        listCandidates: (recognition?.listCandidates ?? []).map(
+          (candidate) => ({
+            id: candidate.id,
+            kind: candidate.kind,
+            dimension: candidate.dimension ?? null,
+            sheetName: candidate.sheetName,
+            column: candidate.column,
+            headerRow: candidate.headerRow,
+          }),
+        ),
+      };
+    },
+  );
+  const pending = (draft.pendingSources ?? [])
+    .map((item) => ({
+      sourceSha256: item.recognition.sourceHash,
+      receivedOrder: item.receivedOrder,
+    }))
+    .sort((left, right) => left.sourceSha256.localeCompare(right.sourceSha256));
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        taskId: draft.task.taskId,
+        revision: draft.task.revision,
+        roles,
+        pending,
+        blacklistStatus: draft.task.blacklistStatus,
+      }),
+    )
+    .digest("hex");
 }
 
 interface BaseRecord {
@@ -175,6 +235,7 @@ function state(
   return {
     task: input.task,
     recognitions: input.recognitions,
+    pendingSources: input.pendingSources ?? [],
     pendingRecognition: input.pendingRecognition,
     supplementRecognition: input.supplementRecognition,
     mappingCardDelivery: input.mappingCardDelivery,
@@ -286,6 +347,11 @@ export function normalizeCouponThreeSourcePilotDraftState(
       whitelist: normalizeStoredRecognition(recognitions.whitelist),
       blacklist: normalizeStoredRecognition(recognitions.blacklist),
     },
+    pendingSources: (stored.pendingSources ?? []).map((pending) => ({
+      ...pending,
+      recognition:
+        normalizeStoredRecognition(pending.recognition) ?? pending.recognition,
+    })),
     pendingRecognition: normalizeStoredRecognition(stored.pendingRecognition),
     selections: stored.selections ?? {},
     artifacts: stored.artifacts ?? [],
@@ -347,6 +413,7 @@ export async function createCouponThreeSourcePilotDraft(input: {
     task: input.task,
     schemaVersion: couponThreeSourcePilotSchemaVersion,
     recognitions: {},
+    pendingSources: [],
     selections: {},
     artifacts: [],
     processedMessageIds: [],

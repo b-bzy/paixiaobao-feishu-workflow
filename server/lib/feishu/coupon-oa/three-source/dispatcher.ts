@@ -1,4 +1,10 @@
 import {
+  type CouponThreeSourceActionClaim,
+  couponThreeSourceActionSemanticKey,
+  PostgresCouponThreeSourceActionRepository,
+} from "../../../control-plane/postgres-coupon-three-source-action-repository";
+import { getControlPlaneDatabase } from "../../../control-plane/postgres-sql-database";
+import {
   type CouponThreeSourceError,
   toCouponThreeSourceError,
   toCouponThreeSourceUserFailure,
@@ -43,6 +49,7 @@ import {
   buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceGeneratingArtifactsCard,
   buildCouponThreeSourceIntakeCard,
+  buildCouponThreeSourceManualSubmissionCard,
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceOverlapCard,
   buildCouponThreeSourcePreviewCard,
@@ -68,6 +75,7 @@ import {
 } from "./service";
 import {
   type CouponThreeSourcePilotDraft,
+  computeCouponThreeSourceMappingContextHash,
   getCouponThreeSourcePilotDraft,
   listActiveCouponThreeSourcePilotDrafts,
 } from "./store";
@@ -115,6 +123,28 @@ export interface CouponThreeSourceDispatcherDependencies {
   ): Promise<Awaited<ReturnType<typeof updateCouponOaDraft>>>;
   /** Freezes the pilot OA draft (definition hash + identity) before send. */
   confirmOaDraft?: typeof confirmCouponOaDraft;
+  claimAction?(input: {
+    semanticKey: string;
+    requestPayload: Record<string, unknown>;
+  }): Promise<CouponThreeSourceActionClaim>;
+  completeAction?(input: {
+    effectId: string;
+    leaseToken: string;
+    externalReference?: string;
+  }): Promise<void>;
+  failAction?(input: {
+    effectId: string;
+    leaseToken: string;
+    errorCode: string;
+    errorMessage: string;
+    outcomeUnknown?: boolean;
+  }): Promise<void>;
+}
+
+function defaultActionRepository(): PostgresCouponThreeSourceActionRepository {
+  return new PostgresCouponThreeSourceActionRepository(
+    getControlPlaneDatabase(),
+  );
 }
 
 const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
@@ -145,6 +175,9 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   cancelOaDraft: (draft) => updateCouponOaDraft(draft, { status: "Canceled" }),
   confirmOaDraft: confirmCouponOaDraft,
   getOaDraft: getCouponOaDraft,
+  claimAction: (input) => defaultActionRepository().prepareAndClaim(input),
+  completeAction: (input) => defaultActionRepository().complete(input),
+  failAction: (input) => defaultActionRepository().fail(input),
 };
 
 function parseRevision(value: unknown): number | undefined {
@@ -323,7 +356,10 @@ async function activeWorkflowConflict(input: {
   return undefined;
 }
 
-function mappingSelections(form: Record<string, unknown>) {
+function mappingSelections(
+  form: Record<string, unknown>,
+  draft: CouponThreeSourcePilotDraft,
+) {
   const activityPointPercent = Number(
     stringValue(form.activityPointPercent)?.replace(/%$/, ""),
   );
@@ -359,6 +395,39 @@ function mappingSelections(form: Record<string, unknown>) {
       selectedSheetName: stringValue(form[`${prefix}_selectedSheetName`]),
     };
   };
+  const identifierDimensionConfirmations = Object.fromEntries(
+    (["whitelist", "blacklist"] as const).flatMap((role) => {
+      const recognition = draft.recognitions[role];
+      if (!recognition) return [];
+      const detectedDimension = recognition.listCandidates.find(
+        (candidate) =>
+          candidate.kind === "identifier" && candidate.dimension !== "SKU",
+      )?.dimension;
+      if (!detectedDimension || detectedDimension === "SKU") return [];
+      if (stringValue(form[`${role}_confirmAsSku`]) !== "SKU") {
+        throw new Error(
+          `${role === "whitelist" ? "白名单" : "黑名单"}标识类型无法唯一确定，请确认原值实际是 SKU`,
+        );
+      }
+      const reason = stringValue(form[`${role}_dimensionReason`])?.trim() ?? "";
+      if (reason.length < 2) {
+        throw new Error(
+          `${role === "whitelist" ? "白名单" : "黑名单"}按 SKU 使用时，请填写确认依据（至少 2 个字）`,
+        );
+      }
+      return [
+        [
+          role,
+          {
+            sourceSha256: recognition.sourceHash,
+            detectedDimension,
+            confirmedAs: "SKU" as const,
+            reason,
+          },
+        ],
+      ];
+    }),
+  );
   return {
     activityPointPercent,
     ...(couponType ? { couponType: "regular_full_reduction" as const } : {}),
@@ -374,6 +443,9 @@ function mappingSelections(form: Record<string, unknown>) {
     repairIssues: ownerInput.issues,
     whitelist: listSelection("whitelist"),
     blacklist: listSelection("blacklist"),
+    ...(Object.keys(identifierDimensionConfirmations).length
+      ? { identifierDimensionConfirmations }
+      : {}),
   };
 }
 
@@ -685,10 +757,15 @@ export function createCouponThreeSourceDispatcher(
         message: `Coupon three-source pilot ${draft.pilotId} opened`,
       };
     } catch (error) {
-      const detail = toCouponThreeSourceUserFailure(error).message;
+      const failure = toCouponThreeSourceUserFailure(error);
+      const detail = failure.message;
       await dependencies.sendCard(
         input.openId,
-        buildCouponThreeSourceErrorCard({ message: detail }),
+        failure.code === "FILE_TOO_LARGE"
+          ? buildCouponThreeSourceManualSubmissionCard({
+              fileName: undefined,
+            })
+          : buildCouponThreeSourceErrorCard({ message: detail }),
         input.idempotencyKey,
       );
       return { handled: true, message: detail };
@@ -861,7 +938,7 @@ export function createCouponThreeSourceDispatcher(
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
     const revisionedAction = input.action.match(
-      /^(coupon_three_source_(?:mapping_confirm|supplement_recognition_start)):([^:]+):(\d+)$/,
+      /^(coupon_three_source_(?:mapping_confirm|supplement_recognition_start)):([^:]+):(\d+)(?::([a-f0-9]{64}))?$/,
     );
     const action = revisionedAction?.[1] ?? input.action;
     const value = input.value ?? {};
@@ -888,6 +965,9 @@ export function createCouponThreeSourceDispatcher(
         message: "Coupon three-source pilot is unavailable",
       };
     }
+    let claimedAction:
+      | Extract<CouponThreeSourceActionClaim, { state: "claimed" }>
+      | undefined;
     try {
       const draft = await dependencies.getDraft(recordId);
       if (draft.ownerOpenId !== input.openId) {
@@ -931,6 +1011,15 @@ export function createCouponThreeSourceDispatcher(
       if (!statelessAction && draft.task.revision !== revision) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
       }
+      const submittedContextHash = revisionedAction?.[4];
+      if (
+        action === "coupon_three_source_mapping_confirm" &&
+        submittedContextHash &&
+        submittedContextHash !==
+          computeCouponThreeSourceMappingContextHash(draft)
+      ) {
+        throw new Error("当前材料或识别结果已变化，请使用最新卡片");
+      }
       const service = dependencies.createService();
       const id = operationId({
         action,
@@ -938,6 +1027,49 @@ export function createCouponThreeSourceDispatcher(
         revision: expectedRevision,
         idempotencyKey: input.idempotencyKey,
       });
+      if (
+        action === "coupon_three_source_mapping_confirm" &&
+        dependencies.claimAction
+      ) {
+        const contextHash = computeCouponThreeSourceMappingContextHash(draft);
+        const claim = await dependencies.claimAction({
+          semanticKey: couponThreeSourceActionSemanticKey({
+            taskId: draft.task.taskId,
+            revision: draft.task.revision,
+            actionName: action,
+            mappingContextHash: contextHash,
+          }),
+          requestPayload: {
+            pilotRecordId: draft.recordId,
+            taskId: draft.task.taskId,
+            revision: draft.task.revision,
+            actionName: action,
+            mappingContextHash: contextHash,
+          },
+        });
+        if (claim.state !== "claimed") {
+          if (draft.mappingCardDelivery?.messageId) {
+            await dependencies.updateCard?.(
+              draft.mappingCardDelivery.messageId,
+              claim.state === "in_progress"
+                ? buildCouponThreeSourceGeneratingArtifactsCard()
+                : buildCouponThreeSourceErrorCard({
+                    message:
+                      claim.state === "outcome_unknown"
+                        ? "上次处理结果尚未确认，系统已停止自动重试，请联系处理人员对账。"
+                        : claim.state === "failed"
+                          ? "上次处理未完成，请使用最新卡片重试。"
+                          : "本次处理已经完成，正在恢复最新结果。",
+                  }),
+            );
+          }
+          return {
+            handled: true,
+            message: `Coupon three-source action ${claim.state}`,
+          };
+        }
+        claimedAction = claim;
+      }
       let next: CouponThreeSourcePilotDraft;
       switch (action) {
         case "coupon_three_source_recognition_start":
@@ -1026,7 +1158,7 @@ export function createCouponThreeSourceDispatcher(
           let settled: CouponThreeSourcePilotDraft;
           try {
             const { repairIssues: parsedIssues, ...parsedSelections } =
-              mappingSelections(input.form ?? {});
+              mappingSelections(input.form ?? {}, draft);
             repairIssues = parsedIssues;
             const selections = {
               ...parsedSelections,
@@ -1118,6 +1250,13 @@ export function createCouponThreeSourceDispatcher(
                   idempotencyKey: input.idempotencyKey,
                   includeArtifacts: true,
                 });
+                if (claimedAction && dependencies.completeAction) {
+                  await dependencies.completeAction({
+                    ...claimedAction,
+                    externalReference: confirmed.oaDraftRecordId,
+                  });
+                  claimedAction = undefined;
+                }
                 return {
                   handled: true,
                   message: `Coupon three-source pilot created OA draft${
@@ -1214,11 +1353,28 @@ export function createCouponThreeSourceDispatcher(
         dependencies,
         idempotencyKey: input.idempotencyKey,
       });
+      if (claimedAction && dependencies.completeAction) {
+        await dependencies.completeAction({ ...claimedAction });
+        claimedAction = undefined;
+      }
       return {
         handled: true,
         message: `Coupon three-source action ${action} completed`,
       };
     } catch (error) {
+      if (claimedAction && dependencies.failAction) {
+        await dependencies
+          .failAction({
+            ...claimedAction,
+            errorCode: toCouponThreeSourceUserFailure(error).code,
+            errorMessage: toCouponThreeSourceUserFailure(error).message,
+            outcomeUnknown: /unknown|未知|结果尚未确认/iu.test(
+              error instanceof Error ? error.message : "",
+            ),
+          })
+          .catch(() => undefined);
+        claimedAction = undefined;
+      }
       const failure = toCouponThreeSourceUserFailure(error);
       if (failure.code === "UNEXPECTED_FAILURE") {
         let diagnosticError = error;

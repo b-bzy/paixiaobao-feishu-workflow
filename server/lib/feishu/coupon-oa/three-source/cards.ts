@@ -420,7 +420,7 @@ function missingOwnerFields(
       !recognition.couponFieldCandidates[key]?.some((candidate) =>
         candidate.sampleValues.some((value) => value.trim()),
       ) &&
-      !recognition.ai?.result?.fieldCandidates.some(
+      !recognition.ai?.result?.fieldCandidates?.some(
         (candidate) => candidate.key === key,
       ),
   );
@@ -834,7 +834,7 @@ export function buildCouponThreeSourceMappingCard(
               !coupon?.couponFieldCandidates[key]?.some((candidate) =>
                 candidate.sampleValues.some((value) => value.trim()),
               ) &&
-              !coupon?.ai?.result?.fieldCandidates.some(
+              !coupon?.ai?.result?.fieldCandidates?.some(
                 (candidate) => candidate.key === key,
               ),
           )

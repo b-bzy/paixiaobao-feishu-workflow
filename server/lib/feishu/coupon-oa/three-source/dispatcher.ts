@@ -1,4 +1,9 @@
 import {
+  type CouponThreeSourceError,
+  toCouponThreeSourceError,
+  toCouponThreeSourceUserFailure,
+} from "../../../coupon-oa/three-source/errors";
+import {
   type CouponOwnerInputIssue,
   couponOwnerRepairText,
   normalizeCouponOwnerInputs,
@@ -50,6 +55,10 @@ import {
   isCouponThreeSourceClearInvocation,
   isCouponThreeSourceInvocation,
 } from "./config";
+import {
+  classifyCouponThreeSourceResource,
+  unsupportedCouponThreeSourceFileError,
+} from "./file-classification";
 import { deliverFrozenArtifactsAsMessages } from "./frozen-artifact-delivery";
 import { deliverCouponThreeSourceMappingCard } from "./mapping-card-delivery";
 import { isCouponThreeSourcePilotEnabled } from "./pilot-config";
@@ -137,10 +146,6 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   confirmOaDraft: confirmCouponOaDraft,
   getOaDraft: getCouponOaDraft,
 };
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function parseRevision(value: unknown): number | undefined {
   const revision = Number(value);
@@ -432,9 +437,9 @@ function assertMappingFormReady(
  * dead-end error card.
  */
 function ownerReported(error: unknown): Error {
-  const reported = new Error(
-    errorMessage(error, "三源提报操作失败，请稍后重试"),
-  ) as Error & { reportedToOwner?: boolean };
+  const reported = toCouponThreeSourceError(error) as CouponThreeSourceError & {
+    reportedToOwner?: boolean;
+  };
   reported.reportedToOwner = true;
   return reported;
 }
@@ -446,7 +451,7 @@ function failureDetail(error: unknown): {
   if (error instanceof RegularFullReductionFieldError) {
     return { message: error.message, fieldIssues: error.fieldIssues };
   }
-  return { message: errorMessage(error, "三源提报操作失败，请稍后重试") };
+  return { message: toCouponThreeSourceUserFailure(error).message };
 }
 
 /**
@@ -680,7 +685,7 @@ export function createCouponThreeSourceDispatcher(
         message: `Coupon three-source pilot ${draft.pilotId} opened`,
       };
     } catch (error) {
-      const detail = errorMessage(error, "无法创建三源提报，请稍后重试");
+      const detail = toCouponThreeSourceUserFailure(error).message;
       await dependencies.sendCard(
         input.openId,
         buildCouponThreeSourceErrorCard({ message: detail }),
@@ -769,6 +774,16 @@ export function createCouponThreeSourceDispatcher(
             : "来源文件未包含 file_key",
         );
       }
+      const resourceKind = classifyCouponThreeSourceResource({
+        resourceType: input.resourceType,
+        fileName,
+      });
+      if (
+        resourceKind === "unsupported_spreadsheet" ||
+        resourceKind === "unsupported_file"
+      ) {
+        throw unsupportedCouponThreeSourceFileError(resourceKind);
+      }
       const bytes = dependencies.downloadResource
         ? await dependencies.downloadResource({
             messageId: input.messageId,
@@ -787,9 +802,7 @@ export function createCouponThreeSourceDispatcher(
               type: "image",
             });
       const service = dependencies.createService();
-      const isWorkbook =
-        input.resourceType === "file" &&
-        (fileName ?? "").toLowerCase().endsWith(".xlsx");
+      const isWorkbook = resourceKind === "excel_xlsx";
       const next = isWorkbook
         ? await service.receiveSource({
             draft: active[0],
@@ -830,7 +843,7 @@ export function createCouponThreeSourceDispatcher(
         message: `Coupon three-source source received for ${next.pilotId}`,
       };
     } catch (error) {
-      const detail = errorMessage(error, "三源来源文件处理失败，请重新上传");
+      const detail = toCouponThreeSourceUserFailure(error).message;
       await dependencies.sendCard(
         input.openId,
         buildCouponThreeSourceErrorCard({ message: detail }),
@@ -1206,7 +1219,7 @@ export function createCouponThreeSourceDispatcher(
         message: `Coupon three-source action ${action} completed`,
       };
     } catch (error) {
-      const detail = errorMessage(error, "三源提报操作失败，请稍后重试");
+      const detail = toCouponThreeSourceUserFailure(error).message;
       if (!(error as { reportedToOwner?: boolean }).reportedToOwner) {
         await dependencies.sendCard(
           input.openId,

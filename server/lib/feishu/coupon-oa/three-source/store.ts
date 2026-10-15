@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ValidatedCouponSupplementText } from "../../../coupon-oa/three-source/ai-text";
+import { toCouponThreeSourceUserFailure } from "../../../coupon-oa/three-source/errors";
 import type { ListColumnSelection } from "../../../coupon-oa/three-source/offline";
 import {
   type CouponThreeSourceTask,
@@ -209,6 +210,93 @@ function fields(
   };
 }
 
+function normalizeStoredRecognition(
+  recognition: StoredWorkbookRecognition | undefined,
+): StoredWorkbookRecognition | undefined {
+  if (!recognition) return undefined;
+  const result = recognition.ai?.result;
+  return {
+    ...recognition,
+    roleCandidates: recognition.roleCandidates ?? [],
+    couponFieldCandidates: recognition.couponFieldCandidates ?? {},
+    listCandidates: recognition.listCandidates ?? [],
+    couponCandidates: recognition.couponCandidates ?? [],
+    issues: recognition.issues ?? [],
+    ai: recognition.ai
+      ? {
+          ...recognition.ai,
+          result: result
+            ? {
+                ...result,
+                roleCandidates: result.roleCandidates ?? [],
+                couponCandidates: result.couponCandidates ?? [],
+                fieldCandidates: result.fieldCandidates ?? [],
+                listCandidates: result.listCandidates ?? [],
+                activityCopyCandidates: result.activityCopyCandidates ?? [],
+                templateCandidates: result.templateCandidates ?? [],
+                tierCandidates: result.tierCandidates ?? [],
+                skuRegionCandidates: result.skuRegionCandidates ?? [],
+                issues: result.issues ?? [],
+              }
+            : undefined,
+        }
+      : undefined,
+  };
+}
+
+export function normalizeCouponThreeSourcePilotDraftState(
+  stored: Omit<
+    CouponThreeSourcePilotDraft,
+    | "recordId"
+    | "pilotId"
+    | "ownerOpenId"
+    | "schemaVersion"
+    | "createdAt"
+    | "updatedAt"
+  >,
+): typeof stored {
+  const legacyTask = stored.task as CouponThreeSourceTask & {
+    schemaVersion: string;
+    sources?: CouponThreeSourceTask["sources"];
+    confirmedCalcImages?: CouponThreeSourceTask["confirmedCalcImages"];
+    pendingCalcImages?: CouponThreeSourceTask["pendingCalcImages"];
+    processedCalcImageOperationIds?: string[];
+    artifacts?: CouponThreeSourceTask["artifacts"];
+  };
+  const recognitions = stored.recognitions ?? {};
+  return {
+    ...stored,
+    task: {
+      ...legacyTask,
+      schemaVersion: couponThreeSourceTaskSchemaVersion,
+      sources: legacyTask.sources ?? {},
+      confirmedCalcImages: legacyTask.confirmedCalcImages ?? [],
+      pendingCalcImages: legacyTask.pendingCalcImages ?? [],
+      processedCalcImageOperationIds:
+        legacyTask.processedCalcImageOperationIds ?? [],
+      artifacts: (legacyTask.artifacts ?? []).map((artifact, index) => ({
+        ...artifact,
+        artifactId:
+          artifact.artifactId ?? `${artifact.role}-${artifact.sha256}`,
+        order: artifact.order ?? index,
+      })),
+    },
+    recognitions: {
+      couponTable: normalizeStoredRecognition(recognitions.couponTable),
+      whitelist: normalizeStoredRecognition(recognitions.whitelist),
+      blacklist: normalizeStoredRecognition(recognitions.blacklist),
+    },
+    pendingRecognition: normalizeStoredRecognition(stored.pendingRecognition),
+    selections: stored.selections ?? {},
+    artifacts: stored.artifacts ?? [],
+    processedMessageIds: stored.processedMessageIds ?? [],
+    validationIssues: stored.validationIssues ?? [],
+    failureReason: stored.failureReason
+      ? toCouponThreeSourceUserFailure(new Error(stored.failureReason)).message
+      : undefined,
+  };
+}
+
 function parseRecord(record: BaseRecord): CouponThreeSourcePilotDraft {
   const stored = parseJson<Omit<
     CouponThreeSourcePilotDraft,
@@ -224,9 +312,6 @@ function parseRecord(record: BaseRecord): CouponThreeSourcePilotDraft {
   }
   const legacyTask = stored.task as CouponThreeSourceTask & {
     schemaVersion: string;
-    confirmedCalcImages?: CouponThreeSourceTask["confirmedCalcImages"];
-    pendingCalcImages?: CouponThreeSourceTask["pendingCalcImages"];
-    processedCalcImageOperationIds?: string[];
   };
   if (
     legacyTask.schemaVersion !== couponThreeSourceTaskSchemaVersion &&
@@ -234,26 +319,13 @@ function parseRecord(record: BaseRecord): CouponThreeSourcePilotDraft {
   ) {
     throw new Error("Three-source pilot record has an unsupported task schema");
   }
-  const task: CouponThreeSourceTask = {
-    ...legacyTask,
-    schemaVersion: couponThreeSourceTaskSchemaVersion,
-    confirmedCalcImages: legacyTask.confirmedCalcImages ?? [],
-    pendingCalcImages: legacyTask.pendingCalcImages ?? [],
-    processedCalcImageOperationIds:
-      legacyTask.processedCalcImageOperationIds ?? [],
-    artifacts: legacyTask.artifacts.map((artifact, index) => ({
-      ...artifact,
-      artifactId: artifact.artifactId ?? `${artifact.role}-${artifact.sha256}`,
-      order: artifact.order ?? index,
-    })),
-  };
+  const normalized = normalizeCouponThreeSourcePilotDraftState(stored);
   return {
     recordId: record.record_id,
     pilotId: scalar(record.fields["Pilot ID"]),
     ownerOpenId: scalar(record.fields["Owner Open ID"]),
     schemaVersion: couponThreeSourcePilotSchemaVersion,
-    ...stored,
-    task,
+    ...normalized,
     createdAt: iso(record.created_time),
     updatedAt: iso(record.last_modified_time),
   };

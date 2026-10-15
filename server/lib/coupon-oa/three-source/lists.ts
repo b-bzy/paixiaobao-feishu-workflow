@@ -308,6 +308,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   const aiRegions = (input.aiSkuRegions ?? []).filter(
     (candidate) => candidate.role === input.role,
   );
+  const aiCoveredSheets = new Set<string>();
 
   if (aiRegions.length) {
     for (const region of aiRegions) {
@@ -347,6 +348,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         issues.push(`${worksheet.name} 的名单区域无法通过服务端校验`);
         continue;
       }
+      aiCoveredSheets.add(worksheet.name);
       const resolvedTier = worksheet.name;
       if (!sheetOrder.includes(resolvedTier)) sheetOrder.push(resolvedTier);
       const seenIds = seenIdsBySheet.get(worksheet.name) ?? new Set<string>();
@@ -389,26 +391,16 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         });
       }
     }
-    if (!entries.length && !issues.length) {
-      issues.push("系统识别的名单区域没有可用 SKU");
-    }
-    return {
-      role: input.role,
-      sourceHash: sourceHashValue,
-      dimension: "SKU",
-      entries,
-      sheetOrder,
-      issues,
-    };
   }
 
   for (const worksheet of workbook.worksheets) {
+    if (aiCoveredSheets.has(worksheet.name)) continue;
     const seenIds = new Set<string>();
     const sheetCandidates = identifierCandidates.filter(
       (candidate) => candidate.sheetName === worksheet.name,
     );
     if (!sheetCandidates.length) continue;
-    const selected = input.selection?.sheets[worksheet.name];
+    const selected = input.selection?.sheets?.[worksheet.name];
     const resolvedTier = selected?.templateTier?.trim() || worksheet.name;
     if (seenTiers.has(resolvedTier)) {
       issues.push(

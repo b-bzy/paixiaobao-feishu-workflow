@@ -10,6 +10,7 @@ import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/tas
 import { getTenantAccessToken } from "../../client";
 import {
   createCouponThreeSourcePilotDraft,
+  normalizeCouponThreeSourcePilotDraftState,
   toStoredWorkbookRecognition,
   updateCouponThreeSourcePilotDraft,
 } from "./store";
@@ -65,10 +66,13 @@ function callFields(call: unknown[]): BaseFields {
  * Revision/Status columns are display-only. Concurrent writers therefore
  * patch the stored task through this helper.
  */
-function withStoredTask(fields: BaseFields, patch: {
-  revision?: number;
-  status?: string;
-}): BaseFields {
+function withStoredTask(
+  fields: BaseFields,
+  patch: {
+    revision?: number;
+    status?: string;
+  },
+): BaseFields {
   const stored = JSON.parse(String(fields["State JSON"]));
   return {
     ...fields,
@@ -196,19 +200,21 @@ describe("three-source pilot Base store", () => {
     const createdFields = callFields(fake.fetchMock.mock.calls[0]);
     // Realistic read-after-write anomaly: the PUT echoes the new state but a
     // fresh GET still shows the pre-write record.
-    fake.fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
-      const method = (init.method ?? "GET").toUpperCase();
-      const bodyFields = init.body
-        ? (JSON.parse(String(init.body)).fields as BaseFields)
-        : undefined;
-      if (method === "GET" || method === "PUT") {
-        if (method === "PUT" && bodyFields) {
-          return okRecord("rec-three-source", bodyFields);
+    fake.fetchMock.mockImplementation(
+      async (_url: string, init: RequestInit) => {
+        const method = (init.method ?? "GET").toUpperCase();
+        const bodyFields = init.body
+          ? (JSON.parse(String(init.body)).fields as BaseFields)
+          : undefined;
+        if (method === "GET" || method === "PUT") {
+          if (method === "PUT" && bodyFields) {
+            return okRecord("rec-three-source", bodyFields);
+          }
+          return okRecord("rec-three-source", createdFields);
         }
         return okRecord("rec-three-source", createdFields);
-      }
-      return okRecord("rec-three-source", createdFields);
-    });
+      },
+    );
 
     await expect(
       updateCouponThreeSourcePilotDraft(
@@ -265,5 +271,76 @@ describe("three-source pilot Base store", () => {
       },
     });
     expect(JSON.stringify(stored)).not.toContain("1,2,3");
+  });
+
+  it("normalizes compatible legacy state with missing nested collections", () => {
+    const task = createCouponThreeSourceTask({
+      taskId: "CTS-legacy",
+      ownerOpenId: "ou_test",
+    });
+    const source = {
+      messageId: "om-legacy",
+      fileKey: "file-legacy",
+      fileName: "legacy.xlsx",
+      bytes: 3,
+      sha256: "a".repeat(64),
+    };
+    const legacy = {
+      task: {
+        ...task,
+        artifacts: undefined,
+        confirmedCalcImages: undefined,
+        pendingCalcImages: undefined,
+        processedCalcImageOperationIds: undefined,
+      },
+      recognitions: {
+        whitelist: {
+          source,
+          sourceHash: source.sha256,
+          roleCandidates: undefined,
+          couponFieldCandidates: undefined,
+          listCandidates: undefined,
+          issues: undefined,
+          ai: {
+            runId: "run-legacy",
+            revision: 1,
+            sourceSha256: source.sha256,
+            status: "succeeded",
+            result: {
+              sourceHash: source.sha256,
+              roleCandidates: undefined,
+              couponCandidates: undefined,
+              fieldCandidates: undefined,
+              listCandidates: undefined,
+              issues: undefined,
+            },
+          },
+        },
+      },
+      selections: undefined,
+      artifacts: undefined,
+      processedMessageIds: undefined,
+      validationIssues: undefined,
+      failureReason: "Cannot read properties of undefined (reading 'sheets')",
+    } as unknown as Parameters<
+      typeof normalizeCouponThreeSourcePilotDraftState
+    >[0];
+
+    const normalized = normalizeCouponThreeSourcePilotDraftState(legacy);
+    const recognition = normalized.recognitions.whitelist;
+    expect(normalized.task.artifacts).toEqual([]);
+    expect(normalized.task.confirmedCalcImages).toEqual([]);
+    expect(normalized.selections).toEqual({});
+    expect(normalized.processedMessageIds).toEqual([]);
+    expect(normalized.failureReason).toBe(
+      "系统未完成本次处理，已保留当前材料，请稍后重试或联系处理。",
+    );
+    expect(recognition?.roleCandidates).toEqual([]);
+    expect(recognition?.couponFieldCandidates).toEqual({});
+    expect(recognition?.ai?.result?.fieldCandidates).toEqual([]);
+    expect(recognition?.ai?.result?.skuRegionCandidates).toEqual([]);
+    expect(normalizeCouponThreeSourcePilotDraftState(normalized)).toEqual(
+      normalized,
+    );
   });
 });

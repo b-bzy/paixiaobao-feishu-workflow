@@ -80,6 +80,12 @@ pnpm audit:workbook -- path/to/配券表.xlsx --json /tmp/audit.json
    若确认演练报字段问题,即解析类故障,按字段修表头/格式或确认 AI 推导;
 4. 修复后在本地以同一草稿真发验证,再提交部署。
 
+附加判读：用户卡片出现 TypeError、`Cannot read properties`、ExcelJS、Drive/Base
+或 SDK 原始英文错误即为失败，即使流程已停止也不能算安全降级。兼容旧草稿导出时，
+应额外删除候选数组或名单 `sheets` 选择对象做回归，确认卡片渲染和名单解析都只
+使用规范化默认值。AI 只返回部分名单 Sheet 时，审计结果必须同时列出其余可由
+确定性规则发现的 Sheet，不能因已有一个 AI 区域就提前结束。
+
 ## 红线与脱敏
 
 - 真实表格、导出草稿、审计 JSON 只放 `/tmp` 或 Git 忽略目录;

@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { isPlaceholderActivityName } from "./activity-copy";
 import { canonicalCouponBusinessDate } from "./business-date";
+import { CouponThreeSourceError } from "./errors";
 import type {
   AiActivityCopyCandidate,
   AiCampaignThemeCandidate,
@@ -121,8 +122,23 @@ export async function serializeWorkbookForAi(
   source: OfflineSourceFile,
 ): Promise<SerializedWorkbookForAi> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(Buffer.from(source.bytes) as never);
-  if (!workbook.worksheets.length) throw new Error("工作簿没有可读取的 Sheet");
+  try {
+    await workbook.xlsx.load(Buffer.from(source.bytes) as never);
+  } catch (error) {
+    throw new CouponThreeSourceError({
+      code: "WORKBOOK_UNREADABLE",
+      message: "Workbook could not be loaded for AI recognition",
+      userMessage: "工作簿无法读取，请检查是否损坏或加密后重新上传。",
+      cause: error,
+    });
+  }
+  if (!workbook.worksheets.length) {
+    throw new CouponThreeSourceError({
+      code: "WORKBOOK_EMPTY",
+      message: "Workbook has no readable worksheets",
+      userMessage: "工作簿没有可读取的数据，请检查后重新上传。",
+    });
+  }
   return {
     fileName: source.fileName,
     sourceHash: sha256(source.bytes),
@@ -305,8 +321,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
       }),
     )
     .max(100)
-    .default([])
-    .catch([]),
+    .default([]),
   skuRegionCandidates: z
     .array(
       z.object({
@@ -322,8 +337,7 @@ export const couponThreeSourceAiProposalSchema = z.object({
       }),
     )
     .max(100)
-    .default([])
-    .catch([]),
+    .default([]),
   activityCopyCandidates: z
     .array(
       z.object({
@@ -422,8 +436,10 @@ export function validateCouponThreeSourceAiProposal(input: {
   proposal: unknown;
   workbook: SerializedWorkbookForAi;
 }): ValidatedAiRecognition {
-  const parsed = couponThreeSourceAiProposalSchema.safeParse(input.proposal);
-  if (!parsed.success) {
+  const proposalObject = z
+    .record(z.string(), z.unknown())
+    .safeParse(input.proposal);
+  if (!proposalObject.success) {
     return {
       sourceHash: input.workbook.sourceHash,
       roleCandidates: [],
@@ -437,13 +453,82 @@ export function validateCouponThreeSourceAiProposal(input: {
       issues: ["AI 返回结构不符合严格候选 schema"],
     };
   }
+  const proposal = proposalObject.data;
+  const partitionIssues: string[] = [];
+  const parsePartition = <T>(input: {
+    label: string;
+    schema: z.ZodType<T>;
+    value: unknown;
+    fallback: T;
+  }): T => {
+    const result = input.schema.safeParse(input.value);
+    if (result.success) return result.data;
+    partitionIssues.push(`AI ${input.label}分区结构无效，已忽略`);
+    return input.fallback;
+  };
+  const data = {
+    templateCandidates: parsePartition({
+      label: "模板候选",
+      schema: couponThreeSourceAiProposalSchema.shape.templateCandidates,
+      value: proposal.templateCandidates,
+      fallback: [],
+    }),
+    tierCandidates: parsePartition({
+      label: "券档候选",
+      schema: couponThreeSourceAiProposalSchema.shape.tierCandidates,
+      value: proposal.tierCandidates,
+      fallback: [],
+    }),
+    sourceRoleCandidates: parsePartition({
+      label: "材料角色候选",
+      schema: couponThreeSourceAiProposalSchema.shape.sourceRoleCandidates,
+      value: proposal.sourceRoleCandidates,
+      fallback: [],
+    }),
+    couponCandidates: parsePartition({
+      label: "优惠券候选",
+      schema: couponThreeSourceAiProposalSchema.shape.couponCandidates,
+      value: proposal.couponCandidates,
+      fallback: [],
+    }),
+    fieldCandidates: parsePartition({
+      label: "字段候选",
+      schema: couponThreeSourceAiProposalSchema.shape.fieldCandidates,
+      value: proposal.fieldCandidates,
+      fallback: [],
+    }),
+    listCandidates: parsePartition({
+      label: "名单候选",
+      schema: couponThreeSourceAiProposalSchema.shape.listCandidates,
+      value: proposal.listCandidates,
+      fallback: [],
+    }),
+    skuRegionCandidates: parsePartition({
+      label: "SKU 区域候选",
+      schema: couponThreeSourceAiProposalSchema.shape.skuRegionCandidates,
+      value: proposal.skuRegionCandidates,
+      fallback: [],
+    }),
+    activityCopyCandidates: parsePartition({
+      label: "活动文案候选",
+      schema: couponThreeSourceAiProposalSchema.shape.activityCopyCandidates,
+      value: proposal.activityCopyCandidates,
+      fallback: [],
+    }),
+    warnings: parsePartition({
+      label: "警告",
+      schema: couponThreeSourceAiProposalSchema.shape.warnings,
+      value: proposal.warnings,
+      fallback: [],
+    }),
+  };
   const coordinates = workbookCoordinates(input.workbook);
-  const issues = [...parsed.data.warnings];
+  const issues = [...partitionIssues, ...data.warnings];
   const has = (sheetName: string, address: string) =>
     coordinates.has(`${sheetName}!${address}`);
 
   const roleCandidates: AiSourceRoleCandidate[] = [];
-  for (const candidate of parsed.data.sourceRoleCandidates) {
+  for (const candidate of data.sourceRoleCandidates) {
     if (
       candidate.role !== "couponTable" &&
       candidate.role !== "whitelist" &&
@@ -472,7 +557,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const templateCandidates: AiTemplateCandidate[] = [];
-  for (const candidate of parsed.data.templateCandidates) {
+  for (const candidate of data.templateCandidates) {
     const invalid = candidate.evidence.cells.filter(
       (cell) => !has(candidate.evidence.sheetName, cell),
     );
@@ -501,7 +586,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const tierCandidates: AiTierCandidate[] = [];
-  for (const candidate of parsed.data.tierCandidates) {
+  for (const candidate of data.tierCandidates) {
     const invalid = candidate.evidenceCells.filter(
       (cell) => !has(candidate.sheetName, cell),
     );
@@ -533,7 +618,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const couponCandidates: CouponCandidate[] = [];
-  for (const candidate of parsed.data.couponCandidates) {
+  for (const candidate of data.couponCandidates) {
     const invalid = candidate.evidenceCells.filter(
       (cell) => !has(candidate.sheetName, cell),
     );
@@ -601,7 +686,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   const fieldCandidates: AiCouponFieldCandidate[] = [];
   const campaignThemeCandidates: AiCampaignThemeCandidate[] = [];
   const sourceActivityNameCandidates: AiSourceActivityNameCandidate[] = [];
-  for (const candidate of parsed.data.fieldCandidates) {
+  for (const candidate of data.fieldCandidates) {
     if (
       candidate.key === "activityTheme" ||
       candidate.key === "campaignTheme"
@@ -689,7 +774,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const skuRegionCandidates: AiSkuRegionCandidate[] = [];
-  for (const candidate of parsed.data.skuRegionCandidates) {
+  for (const candidate of data.skuRegionCandidates) {
     const startColumn = cellColumn(candidate.startCell);
     const endColumn = cellColumn(candidate.endCell);
     const startRow = cellRow(candidate.startCell);
@@ -751,7 +836,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const listCandidates: AiListCandidate[] = [];
-  for (const candidate of parsed.data.listCandidates) {
+  for (const candidate of data.listCandidates) {
     if (!has(candidate.sheetName, candidate.headerCell)) {
       issues.push("AI 名单候选引用不存在的来源坐标");
       continue;
@@ -760,7 +845,7 @@ export function validateCouponThreeSourceAiProposal(input: {
   }
 
   const activityCopyCandidates: AiActivityCopyCandidate[] = [];
-  for (const candidate of parsed.data.activityCopyCandidates) {
+  for (const candidate of data.activityCopyCandidates) {
     const invalid = candidate.evidence.cells.filter(
       (cell) => !has(candidate.evidence.sheetName, cell),
     );

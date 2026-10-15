@@ -576,6 +576,36 @@ describe("three-source Bot dispatcher", () => {
     );
   });
 
+  it("rejects unsupported spreadsheets before download or image parsing", async () => {
+    const current = draft();
+    const receiveSource = vi.fn();
+    const receiveCalcImage = vi.fn();
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { receiveSource, receiveCalcImage },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchFile({
+        openId: "ou_owner",
+        messageId: "om-xls",
+        fileKey: "file-xls",
+        fileName: "配券表.xls",
+      }),
+    ).resolves.toEqual({
+      handled: true,
+      message: "当前只支持 .xlsx 文件，请转换格式后重新上传。",
+    });
+
+    expect(values.downloadFile).not.toHaveBeenCalled();
+    expect(receiveSource).not.toHaveBeenCalled();
+    expect(receiveCalcImage).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
+      "当前只支持 .xlsx 文件",
+    );
+  });
+
   it("keeps a single progress card while consecutive sources are pending", async () => {
     const current = draft();
     current.recognitions.couponTable = {
@@ -924,7 +954,7 @@ describe("three-source Bot dispatcher", () => {
       }),
     ).resolves.toMatchObject({
       handled: true,
-      message: "Feishu Drive file upload failed: parent node not exist",
+      message: "系统未完成本次处理，已保留当前材料，请稍后重试或联系处理。",
     });
 
     expect(recoverFailedGeneration).toHaveBeenCalledWith(
@@ -934,7 +964,7 @@ describe("three-source Bot dispatcher", () => {
       expect.objectContaining({
         draft: recovered,
         failure: expect.objectContaining({
-          message: "Feishu Drive file upload failed: parent node not exist",
+          message: "系统未完成本次处理，已保留当前材料，请稍后重试或联系处理。",
         }),
       }),
     );
@@ -946,7 +976,7 @@ describe("three-source Bot dispatcher", () => {
             revision: 7,
           }),
           failureReason:
-            "Feishu Drive file upload failed: parent node not exist",
+            "系统未完成本次处理，已保留当前材料，请稍后重试或联系处理。",
         }),
       }),
     );

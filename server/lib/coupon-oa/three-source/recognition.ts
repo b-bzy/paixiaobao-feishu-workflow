@@ -672,24 +672,20 @@ export async function resolveAiPrimaryRecognition(input: {
   });
   const ai =
     input.aiRecognition?.sourceHash === input.recognition.sourceHash &&
-    !input.aiRecognition.issues.some((issue) => issue.includes("schema"))
+    !input.aiRecognition.issues.some((issue) =>
+      issue.includes("返回结构不符合严格候选 schema"),
+    )
       ? input.aiRecognition
       : undefined;
-  const couponCandidates = [...(ai?.couponCandidates ?? [])];
-  for (const candidate of deterministic) {
-    if (
-      !couponCandidates.some(
-        (current) =>
-          current.sheetName === candidate.sheetName &&
-          current.row === candidate.row,
-      )
-    ) {
-      couponCandidates.push(candidate);
-    }
-  }
+  const aiCouponPartitionValid =
+    Boolean(ai?.couponCandidates.length) &&
+    !ai?.issues.some((issue) => issue.includes("优惠券候选分区结构无效"));
+  const couponCandidates = aiCouponPartitionValid
+    ? [...(ai?.couponCandidates ?? [])]
+    : deterministic;
   return {
     sourceHash: input.recognition.sourceHash,
-    mode: ai ? "ai_primary" : "rule_fallback",
+    mode: aiCouponPartitionValid ? "ai_primary" : "rule_fallback",
     couponCandidates,
     fieldCandidates: ai?.fieldCandidates ?? [],
     templateCandidates: ai?.templateCandidates ?? [],
@@ -697,8 +693,8 @@ export async function resolveAiPrimaryRecognition(input: {
     skuRegionCandidates: ai?.skuRegionCandidates ?? [],
     issues: [
       ...(ai?.issues ?? []),
-      ...(!ai && input.aiRecognition
-        ? ["AI 识别结果无效，已使用规则降级"]
+      ...(!aiCouponPartitionValid && input.aiRecognition
+        ? ["AI 优惠券候选缺失或无效，已使用规则降级"]
         : []),
       ...input.recognition.issues,
     ],

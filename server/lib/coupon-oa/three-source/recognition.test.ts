@@ -88,7 +88,7 @@ async function couponSource(
 }
 
 describe("single coupon confirmation", () => {
-  it("uses validated AI candidates first and rules only for missing rows", async () => {
+  it("uses validated AI candidates without appending deterministic rows", async () => {
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([
         couponRow("活动A", "100", "20"),
@@ -122,14 +122,10 @@ describe("single coupon confirmation", () => {
       },
     });
     expect(projection.mode).toBe("ai_primary");
-    expect(projection.couponCandidates).toHaveLength(2);
+    expect(projection.couponCandidates).toHaveLength(1);
     expect(projection.couponCandidates[0]).toMatchObject({
       id: "ai-row-2",
       source: "ai",
-    });
-    expect(projection.couponCandidates[1]).toMatchObject({
-      row: 3,
-      source: "deterministic",
     });
   });
 
@@ -150,7 +146,9 @@ describe("single coupon confirmation", () => {
     });
     expect(projection.mode).toBe("rule_fallback");
     expect(projection.couponCandidates[0].source).toBe("deterministic");
-    expect(projection.issues).toContain("AI 识别结果无效，已使用规则降级");
+    expect(projection.issues).toContain(
+      "AI 优惠券候选缺失或无效，已使用规则降级",
+    );
   });
 
   it("discovers one row and binds confirmation to its stable ID", async () => {
@@ -622,6 +620,49 @@ describe("multi-sheet identifier list", () => {
     ]);
   });
 
+  it("combines an AI-covered Sheet with deterministic sibling Sheets", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const aiSheet = workbook.addWorksheet("AI布局");
+    aiSheet.getCell("C1").value = "货号信息";
+    aiSheet.getCell("C2").value = "00123";
+    aiSheet.getColumn("C").numFmt = "@";
+    const ruleSheet = workbook.addWorksheet("规则布局");
+    ruleSheet.getCell("A1").value = "sku";
+    ruleSheet.getCell("A2").value = "00999";
+    ruleSheet.getColumn("A").numFmt = "@";
+    const recognition = await inspectThreeSourceWorkbook({
+      fileName: "部分AI白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    });
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      aiSkuRegions: [
+        {
+          id: "ai-partial-region",
+          role: "whitelist",
+          dimension: "SKU",
+          headerCell: "C1",
+          confidence: 0.98,
+          reason: "AI 仅识别第一张表",
+          evidence: {
+            sourceHash: recognition.sourceHash,
+            sheetName: "AI布局",
+            cells: ["C1", "C2"],
+            region: { startCell: "C2", endCell: "C2" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.entries.map((entry) => [entry.tier, entry.id])).toEqual([
+      ["AI布局", "00123"],
+      ["规则布局", "00999"],
+    ]);
+  });
+
   it("parses every registered tier Sheet without selecting one Sheet", async () => {
     const workbook = new ExcelJS.Workbook();
     for (const [sheetName, sku] of [
@@ -649,6 +690,29 @@ describe("multi-sheet identifier list", () => {
       ["满999减60", "00123"],
       ["满1999减120", "00999"],
     ]);
+  });
+
+  it("treats a legacy selection without sheets as an empty selection", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("商品名单");
+    sheet.getCell("A1").value = "sku";
+    sheet.getCell("A2").value = "00123";
+    sheet.getColumn("A").numFmt = "@";
+    const recognition = await inspectThreeSourceWorkbook({
+      fileName: "旧状态白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    });
+
+    await expect(
+      parseMultiSheetTieredIdentifierList({
+        recognition,
+        role: "whitelist",
+        selection: {} as never,
+      }),
+    ).resolves.toMatchObject({
+      entries: [expect.objectContaining({ id: "00123" })],
+      issues: [],
+    });
   });
 
   it("accepts arbitrary sibling Sheet names without a global tier registry", async () => {

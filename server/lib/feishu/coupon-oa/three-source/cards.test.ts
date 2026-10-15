@@ -255,7 +255,12 @@ describe("three-source Bot cards", () => {
     const noDeduction = JSON.stringify(
       buildCouponThreeSourceMappingCard(current),
     );
-    expect(noDeduction).toContain('"default_value":"否"');
+    // select_static has no default_value in the schema; the stored choice
+    // is surfaced in the title instead and survives server-side merging.
+    expect(noDeduction).toContain(
+      "**是否超扣**（当前：否，如需变更请重新选择）",
+    );
+    expect(noDeduction).not.toContain('"default_value":"否"');
     expect(noDeduction).toContain('"name":"owner_overDeductionReason"');
     expect(noDeduction).not.toContain(
       '"content":"超扣原因（选“是”时必填）"},"input_type":"multiline_text","rows":3,"required":true',
@@ -265,7 +270,10 @@ describe("three-source Bot cards", () => {
     const withDeduction = JSON.stringify(
       buildCouponThreeSourceMappingCard(current),
     );
-    expect(withDeduction).toContain('"default_value":"是"');
+    expect(withDeduction).toContain(
+      "**是否超扣**（当前：是，如需变更请重新选择）",
+    );
+    expect(withDeduction).not.toContain('"default_value":"是"');
     expect(withDeduction).toContain("超扣原因（选“是”时必填）");
   });
 

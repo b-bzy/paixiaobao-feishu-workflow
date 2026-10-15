@@ -73,6 +73,18 @@ function text(value: unknown): string {
     .trim();
 }
 
+/**
+ * Values crossing AI projections or form payloads can be structured objects;
+ * stringifying those would leak "[object Object]" into stored state, cards
+ * and validation errors. Only primitives (and arrays of primitives) carry a
+ * usable business value — everything else becomes a per-field issue.
+ */
+function isUsableInput(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.every((item) => isUsableInput(item));
+  return ["string", "number", "boolean"].includes(typeof value);
+}
+
 function numeric(value: unknown): number | undefined {
   if (typeof value === "number")
     return Number.isFinite(value) ? value : undefined;
@@ -89,6 +101,17 @@ export function normalizeCouponOwnerInputs(
   const issues: CouponOwnerInputIssue[] = [];
   for (const [rawKey, value] of Object.entries(values)) {
     const key = rawKey as CouponFieldKey;
+    if (!isUsableInput(value)) {
+      delete normalized[key];
+      issues.push(
+        issue(
+          key,
+          "[无法识别的内容]",
+          `${labels[key]}的取值格式无法识别，请重新填写`,
+        ),
+      );
+      continue;
+    }
     if (key === "activityStartAt" || key === "activityEndAt") {
       const date = canonicalCouponBusinessDate(value);
       if (date) normalized[key] = date;

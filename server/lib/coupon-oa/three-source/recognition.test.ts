@@ -211,6 +211,59 @@ describe("single coupon confirmation", () => {
     expect(confirmed.input.estimatedGmvYuan).toBe(120_000);
   });
 
+  it("uses the AI-derived value when the workbook cell is an uncached formula", async () => {
+    // Business tables compute 总申请数量 with formulas; without cached
+    // results the raw cell is {formula, result: undefined} and must not
+    // leak "[object Object]" into validation errors.
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("配券表");
+    sheet.getRow(1).values = headers;
+    const row = couponRow("活动A", "100", "20");
+    row.forEach((value, index) => {
+      const cell = sheet.getRow(2).getCell(index + 1);
+      if (index === 9) {
+        cell.value = { formula: "=B2*50", result: undefined };
+      } else {
+        cell.value = value;
+      }
+    });
+    const recognition = await inspectThreeSourceWorkbook({
+      fileName: "配券.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    });
+    const candidates = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    const confirmed = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      couponCandidateId: candidates[0].id,
+      ownerFieldValues: { activityPointPercent: 6 },
+      aiRecognition: {
+        sourceHash: recognition.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [
+          {
+            key: "totalQuantity",
+            sheetName: "配券表",
+            headerCell: "J1",
+            valueCell: "J2",
+            confidence: 0.9,
+            reason: "公式推导",
+            origin: "ai_derived",
+            value: 10_000,
+          },
+        ],
+        listCandidates: [],
+        issues: [],
+      },
+    });
+    expect(confirmed.input.totalQuantity).toBe(10_000);
+    expect(confirmed.provenance.totalQuantity?.sourceKind).toBe("aiDerived");
+  });
+
   it("surfaces unreadable coupon fields as per-field issues with the raw value", async () => {
     const row = couponRow("活动A", "100", "20").map((value, index) =>
       index === 9 ? "满100减20" : value,

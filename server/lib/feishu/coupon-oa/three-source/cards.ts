@@ -345,11 +345,24 @@ const fieldLabels: Partial<Record<CouponFieldKey, string>> = {
   overDeductionReason: "超扣原因",
 };
 
+/** Structured values must never stringify into "[object Object]" on a card. */
+function primitiveText(value: unknown): string {
+  if (["string", "number", "boolean"].includes(typeof value)) {
+    return String(value);
+  }
+  return "";
+}
+
 function ownerFieldDisplayValue(key: CouponFieldKey, value: unknown): string {
   if (key === "activityStartAt" || key === "activityEndAt") {
-    return canonicalCouponBusinessDate(value) ?? String(value);
+    return canonicalCouponBusinessDate(value) ?? primitiveText(value);
   }
-  return Array.isArray(value) ? value.join("、") : String(value);
+  return Array.isArray(value)
+    ? value
+        .map((item) => primitiveText(item))
+        .filter(Boolean)
+        .join("、")
+    : primitiveText(value);
 }
 
 function ownerDefaultValue(
@@ -636,19 +649,24 @@ export function buildCouponThreeSourceMappingCard(
       name: "coupon_three_source_mapping_submit",
       vertical_spacing: "12px",
       elements: [
-        // select_static has no label property in the Feishu card schema
-        // (a label makes the whole card fail to parse), so field titles for
-        // selects are separate markdown lines above the component.
-        { tag: "markdown", content: "**是否超扣**" },
+        // select_static supports neither `label` nor `default_value` in the
+        // Feishu card schema (either makes the whole card fail to parse with
+        // 200621): field titles are markdown lines above the component, and
+        // a previously stored choice is shown in the title while surviving
+        // re-submission server-side (stored owner values are merged even
+        // when the select is left untouched).
+        {
+          tag: "markdown",
+          content: selectedOverDeduction
+            ? `**是否超扣**（当前：${selectedOverDeduction}，如需变更请重新选择）`
+            : "**是否超扣**",
+        },
         {
           tag: "select_static",
           name: "owner_overDeduction",
           placeholder: plainText("请选择是否超扣"),
           required: true,
           width: "fill",
-          ...(selectedOverDeduction
-            ? { default_value: selectedOverDeduction }
-            : {}),
           options: [
             { text: plainText("否，不超扣"), value: "否" },
             { text: plainText("是，需要填写超扣原因"), value: "是" },

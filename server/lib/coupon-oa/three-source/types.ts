@@ -97,7 +97,7 @@ export interface SourceProvenance {
   rawValue: string;
   normalizedValue: string;
   ruleVersion: typeof threeSourceRuleVersion;
-  sourceKind?: "workbook" | "ownerSupplement";
+  sourceKind?: "workbook" | "ownerSupplement" | "aiDerived";
   ownerId?: string;
   revision?: number;
   overrideReason?: string;

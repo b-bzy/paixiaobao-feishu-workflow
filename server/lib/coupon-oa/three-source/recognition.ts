@@ -126,14 +126,38 @@ function normalizeHeader(value: string): string {
 }
 
 function cellText(cell: ExcelJS.Cell): string {
-  if (cell.value === null || cell.value === undefined) return "";
-  if (typeof cell.value === "object" && "richText" in cell.value) {
-    return cell.value.richText
-      .map((item) => item.text)
-      .join("")
-      .trim();
+  const value = cell.value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    if ("richText" in value) {
+      return value.richText
+        .map((item) => item.text)
+        .join("")
+        .trim();
+    }
+    if ("formula" in value || "sharedFormula" in value) {
+      // Formula cells carry {formula, result}. Without a cached result the
+      // value is unknowable from bytes alone — return empty so the caller
+      // falls back to the AI-derived value instead of "[object Object]".
+      const result = (value as { result?: unknown }).result;
+      if (
+        result === undefined ||
+        result === null ||
+        (typeof result === "object" && "error" in result)
+      ) {
+        return "";
+      }
+      return String(result).trim();
+    }
+    if ("hyperlink" in value) {
+      return String((value as { text?: unknown }).text ?? "").trim();
+    }
+    if (value instanceof Date) {
+      return String(cell.text ?? "").trim();
+    }
+    return "";
   }
-  return String(cell.text || cell.value).trim();
+  return String(cell.text || value).trim();
 }
 
 function candidateId(
@@ -927,6 +951,30 @@ export async function confirmRegularFullReductionCoupon(
       rawTexts[key] = source.rawValue;
       values[key] = normalizedOwnerValue(key, source.rawValue);
       provenance[key] = { ...source, sourceKind: "workbook" };
+    } else {
+      const aiValue = aiCandidate?.value;
+      const aiText =
+        typeof aiValue === "string" || typeof aiValue === "number"
+          ? String(aiValue).trim()
+          : "";
+      if (aiText) {
+        // Formula cells without cached results read as empty from the
+        // workbook; the validated AI candidate already derived them.
+        rawTexts[key] = aiText;
+        values[key] = normalizedOwnerValue(key, aiText);
+        provenance[key] = {
+          sourceHash: input.recognition.sourceHash,
+          fileName: input.recognition.source.fileName,
+          sheetName: selected.sheetName,
+          row: selected.row,
+          column: aiColumn ?? "AI",
+          cell: aiColumn ? `${aiColumn}${selected.row}` : "AI",
+          rawValue: aiText,
+          normalizedValue: String(values[key] ?? ""),
+          ruleVersion: threeSourceRuleVersion,
+          sourceKind: "aiDerived",
+        };
+      }
     }
   }
 

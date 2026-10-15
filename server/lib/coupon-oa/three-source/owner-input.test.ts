@@ -43,4 +43,24 @@ describe("coupon owner input normalization", () => {
       "不补充未提供的业务事实",
     );
   });
+
+  it("rejects structured values instead of leaking [object Object]", () => {
+    const result = normalizeCouponOwnerInputs({
+      totalQuantity: { value: 1000, unit: "张" },
+      estimatedGmvYuan: { gmv: "10000" },
+      activityName: "正常名称",
+    });
+    expect(result.values).toEqual({ activityName: "正常名称" });
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        key: "totalQuantity",
+        message: expect.stringContaining("取值格式无法识别"),
+      }),
+      expect.objectContaining({
+        key: "estimatedGmvYuan",
+        message: expect.stringContaining("取值格式无法识别"),
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("[object Object]");
+  });
 });

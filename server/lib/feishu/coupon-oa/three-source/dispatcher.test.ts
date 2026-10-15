@@ -1103,6 +1103,217 @@ describe("three-source Bot dispatcher", () => {
     expect(errorCard).toContain('"pilotRecordId":"rec-three-source"');
   });
 
+  it("delivers the manual mapping card when the owner skips a stuck AI recognition", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    const skipAiRecognition: CouponThreeSourcePilotService["skipAiRecognition"] =
+      vi.fn(async (input) => input.draft);
+    const { values, deliverMappingCard } = dependencies({
+      activeThreeSource: [current],
+      service: { skipAiRecognition },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    // The skip button may carry a stale revision from an older card; the
+    // action must still converge on the persisted draft state.
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_skip_ai_recognition",
+        value: { pilotRecordId: current.recordId, revision: 3 },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(skipAiRecognition).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 5 }),
+    );
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: current }),
+    );
+  });
+
+  it("freezes the mapping card on submit and restores it when validation fails", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    current.mappingCardDelivery = {
+      messageId: "om-mapping-card",
+      revision: 5,
+    };
+    const updateCard = vi.fn(
+      async (_messageId: string, _card: unknown) => undefined,
+    );
+    const recoverFailedGeneration: CouponThreeSourcePilotService["recoverFailedGeneration"] =
+      vi.fn(async () => undefined);
+    const recordGenerationFailure: CouponThreeSourcePilotService["recordGenerationFailure"] =
+      vi.fn(
+        async (
+          input: Parameters<
+            CouponThreeSourcePilotService["recordGenerationFailure"]
+          >[0],
+        ) => ({
+          ...input.draft,
+          failureReason: input.failure.message,
+        }),
+      );
+    const { values, sendCard, deliverMappingCard } = dependencies({
+      activeThreeSource: [current],
+      service: { recoverFailedGeneration, recordGenerationFailure },
+    });
+    values.updateCard = updateCard;
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: { activityPointPercent: "6" },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: expect.stringContaining("请先完整填写"),
+    });
+
+    // The card must be frozen BEFORE validation so repeat clicks see no
+    // button at all…
+    expect(updateCard).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(updateCard.mock.calls[0]?.[1])).toContain(
+      "标准附件生成中",
+    );
+    // …and the invalid submit restores the live form with the reason banner
+    // instead of leaving only a dead error card.
+    expect(recordGenerationFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failure: expect.objectContaining({
+          message: expect.stringContaining("请先完整填写"),
+        }),
+      }),
+    );
+    expect(deliverMappingCard).toHaveBeenCalled();
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it("sends frozen review artifacts once with the first step-4 send card", async () => {
+    const confirmed: CouponThreeSourcePilotDraft = {
+      ...draft(),
+      task: {
+        ...draft().task,
+        revision: 5,
+        status: "AwaitingFinalConfirmation",
+      },
+    };
+    const next = { ...confirmed, oaDraftRecordId: "rec-oa-new" };
+    const confirmFinalPreview: CouponThreeSourcePilotService["confirmFinalPreview"] =
+      vi.fn(async () => next);
+    const attachments = [
+      {
+        role: "couponTable" as const,
+        fileName: "配券表.xlsx",
+        fileCode: "code-coupon",
+        fileToken: "tok-coupon",
+        sha256: "a".repeat(64),
+        order: 0,
+      },
+      {
+        role: "calcImage" as const,
+        fileName: "测算图1.png",
+        fileCode: "code-image",
+        fileToken: "tok-image",
+        sha256: "b".repeat(64),
+        order: 1,
+      },
+    ];
+    const getOaDraft = vi.fn(async () => ({
+      recordId: "rec-oa-new",
+      draftId: "COA-new",
+      status: "Confirmed",
+      values: {
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道"],
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-01",
+        calcImageFileCodes: ["code-image"],
+        couponTableFileCodes: ["code-coupon"],
+        productWhitelistFileCodes: ["code-white"],
+      },
+      attachments,
+    })) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
+    const sendArtifactMessages = vi.fn(async () => ({
+      delivered: ["配券表.xlsx", "测算图1.png"],
+      failed: [],
+    }));
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [confirmed],
+      service: { confirmFinalPreview },
+      getOaDraft,
+    });
+    values.sendArtifactMessages = sendArtifactMessages;
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_final_confirm",
+        value: { pilotRecordId: confirmed.recordId, revision: 5 },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source pilot created OA draft",
+    });
+    expect(sendArtifactMessages).toHaveBeenCalledTimes(1);
+    expect(sendArtifactMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ openId: "ou_owner", attachments }),
+    );
+
+    // A retried delivery of the same confirm re-sends only the card, never
+    // the artifact messages again.
+    confirmed.task = {
+      ...confirmed.task,
+      status: "DraftOnlyConfirmed",
+    };
+    confirmed.oaDraftRecordId = "rec-oa-new";
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_final_confirm",
+        value: { pilotRecordId: confirmed.recordId, revision: 5 },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+    expect(sendCard).toHaveBeenCalledTimes(2);
+    expect(sendArtifactMessages).toHaveBeenCalledTimes(1);
+  });
+
   it("passes mapping choices to the revisioned service before generating artifacts", async () => {
     const current = draft();
     const source = {
@@ -1306,9 +1517,24 @@ describe("three-source Bot dispatcher", () => {
       vi.fn();
     const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
       vi.fn();
-    const { values, sendCard } = dependencies({
+    const recordGenerationFailure: CouponThreeSourcePilotService["recordGenerationFailure"] =
+      vi.fn(
+        async (
+          input: Parameters<
+            CouponThreeSourcePilotService["recordGenerationFailure"]
+          >[0],
+        ) => ({
+          ...input.draft,
+          failureReason: input.failure.message,
+        }),
+      );
+    const { values, sendCard, deliverMappingCard } = dependencies({
       activeThreeSource: [current],
-      service: { updateSelections, confirmSourcesAndGenerate },
+      service: {
+        updateSelections,
+        confirmSourcesAndGenerate,
+        recordGenerationFailure,
+      },
     });
     const dispatcher = createCouponThreeSourceDispatcher(values);
 
@@ -1329,8 +1555,15 @@ describe("three-source Bot dispatcher", () => {
 
     expect(updateSelections).not.toHaveBeenCalled();
     expect(confirmSourcesAndGenerate).not.toHaveBeenCalled();
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
-      "请先完整填写",
+    // The reason is surfaced on the restored live form card (banner), not on
+    // a dead-end error card.
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          failureReason: expect.stringContaining("请先完整填写"),
+        }),
+      }),
     );
   });
 

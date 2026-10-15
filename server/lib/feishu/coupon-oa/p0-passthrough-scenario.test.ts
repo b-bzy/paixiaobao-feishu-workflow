@@ -4,6 +4,10 @@ vi.mock("../client", () => ({
   sendFeishuCard: vi.fn(),
   sendFeishuCardWithReceipt: vi.fn(async () => ({ messageId: "om-card" })),
   updateFeishuCard: vi.fn(),
+  uploadFeishuMessageFile: vi.fn(async () => "file-key"),
+  uploadFeishuMessageImage: vi.fn(async () => "image-key"),
+  sendFeishuFileMessage: vi.fn(),
+  sendFeishuImageMessage: vi.fn(),
 }));
 vi.mock("../coupon-oa/draft-store", () => ({
   COUPON_OA_THREE_SOURCE_PILOT_SCHEMA_VERSION: "coupon-three-source-pilot-v1",
@@ -25,10 +29,13 @@ vi.mock("../coupon-oa/submit-service", () => ({
 }));
 
 import { sendFeishuCard } from "../client";
-import { getCouponOaDraft, updateCouponOaDraft } from "../coupon-oa/draft-store";
-import { missingCouponOaAttachments } from "../coupon-oa/draft-service";
 import type { CouponOaDraftValues } from "../coupon-oa/approval-schema";
+import { missingCouponOaAttachments } from "../coupon-oa/draft-service";
 import type { CouponOaDraft } from "../coupon-oa/draft-store";
+import {
+  getCouponOaDraft,
+  updateCouponOaDraft,
+} from "../coupon-oa/draft-store";
 import {
   confirmCouponOaDraft,
   submitConfirmedCouponOaDraft,
@@ -114,10 +121,16 @@ describe("three-source P0 passthrough full-round scenario", () => {
       throw new Error("Coupon OA native submit kill switch is closed");
     });
 
-    const ingress = { trustedIngress: "bridge", threeSourceOnly: true } as const;
+    const ingress = {
+      trustedIngress: "bridge",
+      threeSourceOnly: true,
+    } as const;
 
     // Step 1: the pilot preview card's button enters the submit page.
-    const confirmed = await handleFeishuPocEvent(cardClick("coupon_oa_confirm", 1), ingress);
+    const confirmed = await handleFeishuPocEvent(
+      cardClick("coupon_oa_confirm", 1),
+      ingress,
+    );
     expect(confirmed).toMatchObject({ kind: "handled" });
     expect(draft.status).toBe("Confirmed");
     expect(sentCards()[0]).toContain("确认提交正式优惠券 OA");
@@ -125,32 +138,47 @@ describe("three-source P0 passthrough full-round scenario", () => {
 
     // Step 2: submitting with the kill switch closed fails visibly, and the
     // draft stays Confirmed so the attempt can be retried after the Gate.
-    const blocked = await handleFeishuPocEvent(cardClick("coupon_oa_submit", 2), ingress);
+    const blocked = await handleFeishuPocEvent(
+      cardClick("coupon_oa_submit", 2),
+      ingress,
+    );
     expect(blocked).toMatchObject({ kind: "handled" });
     expect(sentCards()[1]).toContain("kill switch is closed");
     expect(draft.status).toBe("Confirmed");
 
     // Step 3: a repeated confirm click re-delivers the submit card.
-    const repeat = await handleFeishuPocEvent(cardClick("coupon_oa_confirm", 3), ingress);
+    const repeat = await handleFeishuPocEvent(
+      cardClick("coupon_oa_confirm", 3),
+      ingress,
+    );
     expect(repeat).toMatchObject({ kind: "handled" });
     expect(confirmCouponOaDraft).toHaveBeenCalledTimes(1);
     expect(sentCards()[2]).toContain("确认提交正式优惠券 OA");
 
     // Step 4: the owner abandons the confirmed draft from the submit card.
-    const canceled = await handleFeishuPocEvent(cardClick("coupon_oa_cancel", 4), ingress);
+    const canceled = await handleFeishuPocEvent(
+      cardClick("coupon_oa_cancel", 4),
+      ingress,
+    );
     expect(canceled).toMatchObject({ kind: "handled" });
     expect(draft.status).toBe("Canceled");
     expect(sentCards()[3]).toContain("已结束");
 
     // Step 5: clicks on the now-dead cards answer with an explicit card.
-    const afterCancel = await handleFeishuPocEvent(cardClick("coupon_oa_confirm", 5), ingress);
+    const afterCancel = await handleFeishuPocEvent(
+      cardClick("coupon_oa_confirm", 5),
+      ingress,
+    );
     expect(afterCancel).toMatchObject({ kind: "handled" });
     expect(sentCards()[4]).toContain("cannot be confirmed");
   });
 
   it("keeps a submit in flight converge-safe for impatient double clicks", async () => {
     process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
-    const ingress = { trustedIngress: "bridge", threeSourceOnly: true } as const;
+    const ingress = {
+      trustedIngress: "bridge",
+      threeSourceOnly: true,
+    } as const;
 
     // The pilot draft was already confirmed and a submit is executing.
     draft.status = "Confirmed";
@@ -159,7 +187,10 @@ describe("three-source P0 passthrough full-round scenario", () => {
     draft.status = "Submitting";
     vi.mocked(getCouponOaDraft).mockImplementation(async () => draft);
 
-    const doubleClick = await handleFeishuPocEvent(cardClick("coupon_oa_submit", 2), ingress);
+    const doubleClick = await handleFeishuPocEvent(
+      cardClick("coupon_oa_submit", 2),
+      ingress,
+    );
     expect(doubleClick).toMatchObject({ kind: "handled" });
     expect(submitConfirmedCouponOaDraft).not.toHaveBeenCalled();
     expect(sentCards()[1]).toContain("正在提交");

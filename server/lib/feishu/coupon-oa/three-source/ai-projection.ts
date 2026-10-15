@@ -41,14 +41,24 @@ export function createCouponThreeSourceAiProjector(
       const recognition = draft.recognitions[role];
       // An owner, revision or source change invalidates old AI output. Discarding
       // is terminal and deliberately does not mutate or notify the newer draft.
+      // A canceled or confirmed draft must also discard: the store refuses
+      // writes on inactive drafts, so projecting would retry forever.
       if (
         draft.ownerOpenId !== run.ownerOpenId ||
         draft.task.taskId !== run.businessTaskId ||
         draft.task.revision !== run.revision ||
+        draft.task.status === "Canceled" ||
+        draft.task.status === "DraftOnlyConfirmed" ||
         !recognition ||
         recognition.sourceHash !== run.sourceSha256 ||
         recognition.ai?.runId !== run.id
       ) {
+        return;
+      }
+      // The slot already holds a terminal state (owner skipped the wait, or a
+      // duplicate projection after a partial failure): a late result must not
+      // overwrite the owner's manual-fill decision or reset their card.
+      if (recognition.ai?.status !== "pending") {
         return;
       }
       const updated = await dependencies.updateDraft(

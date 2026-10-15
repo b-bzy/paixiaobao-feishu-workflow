@@ -1,4 +1,5 @@
 import {
+  type CouponOwnerInputIssue,
   couponOwnerRepairText,
   normalizeCouponOwnerInputs,
 } from "../../../coupon-oa/three-source/owner-input";
@@ -49,6 +50,7 @@ import {
   isCouponThreeSourceClearInvocation,
   isCouponThreeSourceInvocation,
 } from "./config";
+import { deliverFrozenArtifactsAsMessages } from "./frozen-artifact-delivery";
 import { deliverCouponThreeSourceMappingCard } from "./mapping-card-delivery";
 import { isCouponThreeSourcePilotEnabled } from "./pilot-config";
 import {
@@ -93,6 +95,8 @@ export interface CouponThreeSourceDispatcherDependencies {
     card: Parameters<typeof sendFeishuCard>[1],
     idempotencyKey?: string,
   ): Promise<void>;
+  /** Best-effort frozen-artifact file/image messages after the send card. */
+  sendArtifactMessages?: typeof deliverFrozenArtifactsAsMessages;
   deliverMappingCard: typeof deliverCouponThreeSourceMappingCard;
   updateCard?: typeof updateFeishuCard;
   getOaDraft: typeof getCouponOaDraft;
@@ -126,6 +130,7 @@ const defaultDependencies: CouponThreeSourceDispatcherDependencies = {
   },
   downloadFile: downloadFeishuMessageResource,
   sendCard: sendFeishuCard,
+  sendArtifactMessages: deliverFrozenArtifactsAsMessages,
   deliverMappingCard: deliverCouponThreeSourceMappingCard,
   updateCard: updateFeishuCard,
   cancelOaDraft: (draft) => updateCouponOaDraft(draft, { status: "Canceled" }),
@@ -491,7 +496,7 @@ async function restoreMappingFormAfterFailure(input: {
   error: unknown;
 }): Promise<void> {
   const recovered = await input.service
-    .recoverFailedGeneration({
+    .recoverFailedGeneration?.({
       draft: input.updated,
       ownerOpenId: input.openId,
       expectedRevision: input.updated.task.revision,
@@ -499,7 +504,7 @@ async function restoreMappingFormAfterFailure(input: {
     .catch(() => undefined);
   const reverted = recovered ?? input.updated;
   const recorded = await input.service
-    .recordGenerationFailure({
+    .recordGenerationFailure?.({
       draft: reverted,
       ownerOpenId: input.openId,
       expectedRevision: reverted.task.revision,
@@ -514,14 +519,17 @@ async function restoreMappingFormAfterFailure(input: {
 /**
  * Loads the handed-off OA draft, freezes it server-side (definition hash +
  * identity snapshot — the owner's single human confirmation is the send
- * click itself), and delivers the merged send card.
+ * click itself), and delivers the merged send card. On first delivery the
+ * frozen artifacts also go out as real file/image messages so the owner can
+ * review the exact frozen bytes inline.
  */
 async function deliverPilotSendCard(input: {
   openId: string;
   dependencies: CouponThreeSourceDispatcherDependencies;
   oaDraftRecordId: string;
   idempotencyKey?: string;
-}): Promise<void> {
+  includeArtifacts?: boolean;
+}): Promise<{ artifactFailures?: number }> {
   let oaDraft = await input.dependencies.getOaDraft(input.oaDraftRecordId);
   if (
     input.dependencies.confirmOaDraft &&
@@ -534,6 +542,19 @@ async function deliverPilotSendCard(input: {
     pilotOaSubmitCard(oaDraft),
     input.idempotencyKey,
   );
+  if (!input.includeArtifacts || !input.dependencies.sendArtifactMessages) {
+    return {};
+  }
+  // Auxiliary delivery: a failed scope or upload must never fail the chain;
+  // failures are surfaced in the dispatch result message for diagnostics.
+  const delivered = await input.dependencies
+    .sendArtifactMessages({
+      openId: input.openId,
+      attachments: oaDraft.attachments,
+      idempotencyKey: input.idempotencyKey,
+    })
+    .catch(() => undefined);
+  return { artifactFailures: delivered?.failed.length ?? 0 };
 }
 
 /**
@@ -887,10 +908,13 @@ export function createCouponThreeSourceDispatcher(
           message: `Coupon three-source pilot ${draft.pilotId} already completed; re-delivered the send card`,
         };
       }
+      // Reopen and skip are current-state actions: their buttons may live on
+      // older cards, and both converge on the persisted draft state.
       const statelessAction =
         action === "coupon_three_source_recognition_start" ||
         action === "coupon_three_source_supplement_recognition_start" ||
-        action === "coupon_three_source_reopen";
+        action === "coupon_three_source_reopen" ||
+        action === "coupon_three_source_skip_ai_recognition";
       const expectedRevision = statelessAction ? draft.task.revision : revision;
       if (!statelessAction && draft.task.revision !== revision) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
@@ -972,50 +996,55 @@ export function createCouponThreeSourceDispatcher(
           });
           break;
         case "coupon_three_source_mapping_confirm": {
-          const { repairIssues, ...parsedSelections } = mappingSelections(
-            input.form ?? {},
-          );
-          const selections = {
-            ...parsedSelections,
-            ...assertMappingFormReady(parsedSelections, draft),
-          };
-          let ready = draft;
-          if (draft.task.blacklistStatus === "absent_pending_confirmation") {
-            if (
-              stringValue(input.form?.blacklistDecision) !== "absent_confirmed"
-            ) {
-              throw new Error("请明确确认本次无商品黑名单");
-            }
-            ready = await service.confirmNoBlacklist({
-              draft,
-              ownerOpenId: input.openId,
-              expectedRevision,
-              operationId: `${id}:no-blacklist`,
-            });
-          }
-          if (ready.mappingCardDelivery?.messageId) {
-            // Best-effort: collapse the card to a no-button "generating"
-            // state so rapid repeat clicks cannot re-enter this branch. The
-            // GeneratingArtifacts gate remains the hard backstop.
+          // Freeze the submitted card before anything else: the confirm
+          // button collapses within one round trip so repeat clicks have
+          // nothing to re-enter. Every failure below restores the live form.
+          if (draft.mappingCardDelivery?.messageId) {
             try {
               await dependencies.updateCard?.(
-                ready.mappingCardDelivery.messageId,
+                draft.mappingCardDelivery.messageId,
                 buildCouponThreeSourceGeneratingArtifactsCard(),
               );
             } catch {
-              // Ignore PATCH failures; generation proceeds either way.
+              // Ignore PATCH failures; processing proceeds either way.
             }
           }
-          let updated: CouponThreeSourcePilotDraft;
+          let restoreBase = draft;
+          let repairIssues: CouponOwnerInputIssue[] = [];
+          let settled: CouponThreeSourcePilotDraft;
           try {
-            updated = await service.updateSelections({
+            const { repairIssues: parsedIssues, ...parsedSelections } =
+              mappingSelections(input.form ?? {});
+            repairIssues = parsedIssues;
+            const selections = {
+              ...parsedSelections,
+              ...assertMappingFormReady(parsedSelections, draft),
+            };
+            let ready = draft;
+            if (draft.task.blacklistStatus === "absent_pending_confirmation") {
+              if (
+                stringValue(input.form?.blacklistDecision) !==
+                "absent_confirmed"
+              ) {
+                throw new Error("请明确确认本次无商品黑名单");
+              }
+              ready = await service.confirmNoBlacklist({
+                draft,
+                ownerOpenId: input.openId,
+                expectedRevision,
+                operationId: `${id}:no-blacklist`,
+              });
+            }
+            restoreBase = ready;
+            const updated = await service.updateSelections({
               draft: ready,
               ownerOpenId: input.openId,
               expectedRevision: ready.task.revision,
               selections,
               operationId: id,
             });
-            next = repairIssues.length
+            restoreBase = updated;
+            settled = repairIssues.length
               ? await service.startSupplementRecognition({
                   draft: updated,
                   ownerOpenId: input.openId,
@@ -1037,22 +1066,23 @@ export function createCouponThreeSourceDispatcher(
                   operationId: `${id}:generate`,
                 });
           } catch (error) {
-            // The confirm card is already collapsed at this point, so every
-            // failure here must restore a live form card or the owner is
-            // left with only dead cards. Generation failures restore inside
+            // The confirm card was collapsed on entry, so every failure here
+            // must restore a live form card or the owner is left with only
+            // dead cards. Generation failures restore inside
             // runGenerationWithRecovery; skip the duplicate pass for those.
             if (!(error as { reportedToOwner?: boolean }).reportedToOwner) {
               await restoreMappingFormAfterFailure({
                 service,
                 dependencies,
                 openId: input.openId,
-                updated: ready,
+                updated: restoreBase,
                 error,
               }).catch(() => undefined);
               throw ownerReported(error);
             }
             throw error;
           }
+          next = settled;
           // Pilot chain: generation and the OA-draft handoff are one step.
           // The owner sees exactly one card afterwards — the draft card with
           // a single send confirmation. A handoff failure falls back to the
@@ -1069,15 +1099,20 @@ export function createCouponThreeSourceDispatcher(
                 operationId: `${id}:handoff`,
               });
               if (confirmed.oaDraftRecordId) {
-                await deliverPilotSendCard({
+                const sent = await deliverPilotSendCard({
                   openId: input.openId,
                   dependencies,
                   oaDraftRecordId: confirmed.oaDraftRecordId,
                   idempotencyKey: input.idempotencyKey,
+                  includeArtifacts: true,
                 });
                 return {
                   handled: true,
-                  message: "Coupon three-source pilot created OA draft",
+                  message: `Coupon three-source pilot created OA draft${
+                    sent.artifactFailures
+                      ? `; ${sent.artifactFailures} review artifact messages failed`
+                      : ""
+                  }`,
                 };
               }
             } catch (error) {
@@ -1131,17 +1166,30 @@ export function createCouponThreeSourceDispatcher(
           if (!next.oaDraftRecordId) {
             throw new Error("OA 测试稿已创建但缺少草稿记录引用");
           }
-          await deliverPilotSendCard({
+          const sent = await deliverPilotSendCard({
             openId: input.openId,
             dependencies,
             oaDraftRecordId: next.oaDraftRecordId,
             idempotencyKey: input.idempotencyKey,
+            includeArtifacts: true,
           });
           return {
             handled: true,
-            message: "Coupon three-source pilot created OA draft",
+            message: `Coupon three-source pilot created OA draft${
+              sent.artifactFailures
+                ? `; ${sent.artifactFailures} review artifact messages failed`
+                : ""
+            }`,
           };
         }
+        case "coupon_three_source_skip_ai_recognition":
+          next = await service.skipAiRecognition({
+            draft,
+            ownerOpenId: input.openId,
+            expectedRevision,
+            operationId: id,
+          });
+          break;
         case "coupon_three_source_reopen":
           // Read-only: re-render whichever card matches the persisted state.
           next = draft;

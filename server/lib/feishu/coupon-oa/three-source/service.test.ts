@@ -260,6 +260,113 @@ describe("CouponThreeSourcePilotService", () => {
     ).rejects.toThrow("只有当前三源提报创建人可以继续操作");
   });
 
+  it("skips pending AI recognition, abandons durable runs, and stays idempotent", async () => {
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-key",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    let stored: CouponThreeSourcePilotDraft = {
+      recordId: "rec-skip",
+      pilotId: "CTS-skip",
+      ownerOpenId: "ou_owner",
+      task: {
+        ...createCouponThreeSourceTask({
+          taskId: "CTS-task",
+          ownerOpenId: "ou_owner",
+        }),
+        revision: 4,
+      },
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {
+        couponTable: {
+          source,
+          sourceHash: "a".repeat(64),
+          roleCandidates: [],
+          couponFieldCandidates: {},
+          listCandidates: [],
+          issues: [],
+          ai: {
+            runId: "run-pending",
+            revision: 4,
+            sourceSha256: "a".repeat(64),
+            status: "pending",
+          },
+        },
+        whitelist: {
+          source,
+          sourceHash: "a".repeat(64),
+          roleCandidates: [],
+          couponFieldCandidates: {},
+          listCandidates: [],
+          issues: [],
+          ai: {
+            runId: "run-done",
+            revision: 4,
+            sourceSha256: "a".repeat(64),
+            status: "succeeded",
+          },
+        },
+      },
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+    const updateDraft = vi.fn(
+      async (
+        current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+      ) => {
+        stored = { ...current, ...updates };
+        return stored;
+      },
+    );
+    const abandonAiRecognition = vi.fn(async () => undefined);
+    const service = new CouponThreeSourcePilotService({
+      updateDraft,
+      abandonAiRecognition,
+    } as unknown as CouponThreeSourcePilotDependencies);
+
+    const skipped = await service.skipAiRecognition({
+      draft: stored,
+      ownerOpenId: "ou_owner",
+      expectedRevision: 4,
+      operationId: "op-skip",
+    });
+
+    expect(skipped.recognitions.couponTable?.ai?.status).toBe("failed");
+    expect(skipped.recognitions.couponTable?.ai?.fallbackCode).toBe(
+      "owner_skipped",
+    );
+    expect(skipped.recognitions.whitelist?.ai?.status).toBe("succeeded");
+    expect(skipped.validationIssues.join("\n")).toContain("owner_skipped");
+    expect(abandonAiRecognition).toHaveBeenCalledTimes(1);
+    expect(abandonAiRecognition).toHaveBeenCalledWith("run-pending");
+
+    // Re-clicking skip after everything settled is a no-op.
+    await expect(
+      service.skipAiRecognition({
+        draft: skipped,
+        ownerOpenId: "ou_owner",
+        expectedRevision: 4,
+        operationId: "op-skip",
+      }),
+    ).resolves.toBe(skipped);
+    expect(abandonAiRecognition).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.skipAiRecognition({
+        draft: skipped,
+        ownerOpenId: "ou_other",
+        expectedRevision: 4,
+        operationId: "op-skip",
+      }),
+    ).rejects.toThrow("只有当前三源提报创建人可以继续操作");
+  });
+
   it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
     const coupon = await strictCouponBytes({ overDeduction: "" });
     const whitelist = await whitelistBytes();

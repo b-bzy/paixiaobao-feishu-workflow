@@ -4,6 +4,10 @@ vi.mock("./client", () => ({
   sendFeishuCard: vi.fn(),
   sendFeishuCardWithReceipt: vi.fn(async () => ({ messageId: "om-card" })),
   updateFeishuCard: vi.fn(),
+  uploadFeishuMessageFile: vi.fn(async () => "file-key"),
+  uploadFeishuMessageImage: vi.fn(async () => "image-key"),
+  sendFeishuFileMessage: vi.fn(),
+  sendFeishuImageMessage: vi.fn(),
 }));
 vi.mock("./coupon-oa/approval-client", () => ({
   downloadFeishuMessageResource: vi.fn(),

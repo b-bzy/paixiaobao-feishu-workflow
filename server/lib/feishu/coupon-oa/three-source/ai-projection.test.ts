@@ -171,4 +171,41 @@ describe("coupon three-source AI projection", () => {
     expect(current.recognitions.whitelist?.ai?.status).toBe("pending");
     expect(deliverMappingCard).not.toHaveBeenCalled();
   });
+
+  it("discards results for a canceled draft instead of retrying forever", async () => {
+    const current = draft();
+    current.task.status = "Canceled";
+    const deliverMappingCard = vi.fn();
+    const updateDraft = vi.fn();
+    const projector = createCouponThreeSourceAiProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: updateDraft as never,
+      deliverMappingCard,
+    });
+    // Must resolve (not throw): the store refuses writes on inactive drafts,
+    // so a throwing projection would make the effect retry endlessly.
+    await expect(
+      projector.project({ run: run(), idempotencyKey: "effect-uuid" }),
+    ).resolves.toBeUndefined();
+    expect(updateDraft).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
+  });
+
+  it("discards a late result when the owner already skipped the wait", async () => {
+    const current = draft();
+    if (current.recognitions.couponTable?.ai) {
+      current.recognitions.couponTable.ai.status = "failed";
+      current.recognitions.couponTable.ai.fallbackCode = "owner_skipped";
+    }
+    const deliverMappingCard = vi.fn();
+    const updateDraft = vi.fn();
+    const projector = createCouponThreeSourceAiProjector({
+      getDraft: vi.fn(async () => current),
+      updateDraft: updateDraft as never,
+      deliverMappingCard,
+    });
+    await projector.project({ run: run(), idempotencyKey: "effect-uuid" });
+    expect(updateDraft).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
+  });
 });

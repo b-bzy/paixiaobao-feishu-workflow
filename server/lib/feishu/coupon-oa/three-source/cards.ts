@@ -261,9 +261,14 @@ export function buildCouponThreeSourceRecognizingCard(
           "DeepSeek 当前只识别候选，不会生成表格或创建 OA。",
           ...pending,
           "识别完成后进入第 3 步：核对并补充活动信息。",
-          "请等待最新卡片；失败时系统会回退到人工补充。",
+          "识别失败会自动降级为人工填写；长时间无响应时也可以直接跳过。",
         ].join("\n"),
       },
+      button(draft, {
+        action: "coupon_three_source_skip_ai_recognition",
+        text: "跳过 AI 识别，改为人工填写",
+        type: "default",
+      }),
       cancelButton(draft),
     ],
   });

@@ -303,6 +303,25 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("请检查配券表对应列的表头和数据行是否已填写");
   });
 
+  it("gives the recognizing card an owner escape hatch to manual fill", () => {
+    const current = draft();
+    const recognition = current.recognitions.couponTable as NonNullable<
+      typeof current.recognitions.couponTable
+    >;
+    recognition.ai = {
+      runId: "run-1",
+      revision: 4,
+      sourceSha256: "a".repeat(64),
+      status: "pending",
+    };
+    const rendered = JSON.stringify(
+      buildCouponThreeSourceRecognizingCard(current),
+    );
+    expect(rendered).toContain("coupon_three_source_skip_ai_recognition");
+    expect(rendered).toContain("跳过 AI 识别，改为人工填写");
+    expect(rendered).toContain("长时间无响应时也可以直接跳过");
+  });
+
   it("gives the failure card a rollback entry only when the draft is known", () => {
     const plain = JSON.stringify(
       buildCouponThreeSourceErrorCard({ message: "上传失败" }),

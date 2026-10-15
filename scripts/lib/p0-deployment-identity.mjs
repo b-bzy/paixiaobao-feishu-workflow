@@ -85,6 +85,12 @@ export async function verifyP0DeploymentIdentity({
       "P0 Preview 缺少 OA 测试稿 Base 配置",
     );
   }
+  if (body?.result?.readiness?.couponOaNativeSubmitDisabled !== true) {
+    throw new P0DeploymentIdentityError(
+      "coupon_oa_native_submit_not_disabled",
+      "P0 Preview 原生 OA 提交开关未关闭，拒绝启动测试消费者",
+    );
+  }
 
   return { gitCommitSha: actual };
 }

@@ -122,11 +122,13 @@ OA 测试稿成功。详细操作边界由仓库 Skill `p0-preview-deploy` 约�
 开始 bridge 或邀请 owner 在飞书测试前，必须同时满足：相关单元/集成测试通过；
 脱敏 Excel 的显式 DeepSeek 预检通过；`pnpm typecheck` 与 `pnpm build` 通过；
 变更文件的 Biome 检查和 `git diff --check` 通过；Preview 身份端点回读的 Git SHA
-与预期 revision 完全一致。任何一项失败都不得启动新测试窗口。原生 OA、native submit
-与未授权生成副作用必须继续关闭。
+与预期 revision 完全一致，并明确回读 `couponOaNativeSubmitDisabled: true`。
+`p0:preview:deploy`、`p0:preview:check` 和 `p0:preview:up` 会对该远端状态
+fail closed，不能再只检查本机 `.env`。任何一项失败都不得启动新测试窗口。
+原生 OA、native submit 与未授权生成副作用必须继续关闭。
 
 1. 使用只含 P0 long-connection scope 的 Git revision 部署 Vercel；不得发布当前脏工作区或 P1 control-plane 文件。
-2. 复核 Vercel 中 native kill switch 为 `false`、三源 pilot 为 `false`，并确认 `/api/feishu/poc-bridge` 对无效 HMAC fail closed。
+2. 复核 Vercel 中 native kill switch 为 `false`、三源 pilot 为 `false`，确认身份端点返回 `couponOaNativeSubmitDisabled: true`，并确认 `/api/feishu/poc-bridge` 对无效 HMAC fail closed。
 3. 若本次不测 AI，确认 AI 开关仍为 `false`，跳过 migration/tick。若本次明确测试 AI，先执行 `pnpm db:migrate:control-plane`，确认 `0005_coupon_ai_recognition_runs.sql` 已应用，再对受保护的 control-plane tick 做无业务副作用健康检查；`local` 阶段仅在 AI Gate 明确开启时允许该 tick，且仍必须通过独立 Bearer token、数据库与 worker 配置检查。任一失败都关闭 AI 开关。
 4. 在 Mac 确认单 consumer 后启动：
    ```bash

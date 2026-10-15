@@ -32,7 +32,10 @@ it("deploys with branch metadata and verifies identity using bypass", async () =
           code: 0,
           result: {
             gitCommitSha: sha,
-            readiness: { couponOaDraftStoreConfigured: true },
+            readiness: {
+              couponOaDraftStoreConfigured: true,
+              couponOaNativeSubmitDisabled: true,
+            },
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },

@@ -13,11 +13,15 @@ describe("deployment identity", () => {
         VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
         FEISHU_BASE_APP_TOKEN: "basCouponDraft",
         FEISHU_COUPON_DRAFT_TABLE_ID: "tblCouponDraft",
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "false",
       }),
     ).toEqual({
       environment: "preview",
       gitCommitSha: "74bd72e319582a1bf05be812bff2d2508208c2e3",
-      readiness: { couponOaDraftStoreConfigured: true },
+      readiness: {
+        couponOaDraftStoreConfigured: true,
+        couponOaNativeSubmitDisabled: true,
+      },
     });
   });
 
@@ -28,7 +32,22 @@ describe("deployment identity", () => {
         VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
       }),
     ).toMatchObject({
-      readiness: { couponOaDraftStoreConfigured: false },
+      readiness: {
+        couponOaDraftStoreConfigured: false,
+        couponOaNativeSubmitDisabled: true,
+      },
+    });
+  });
+
+  it("reports an open native-submit kill switch without exposing configuration", () => {
+    expect(
+      getDeploymentIdentity({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "true",
+      }),
+    ).toMatchObject({
+      readiness: { couponOaNativeSubmitDisabled: false },
     });
   });
 

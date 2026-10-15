@@ -62,6 +62,13 @@ function nativeSubmitEnabled(): boolean {
   );
 }
 
+export function isCouponOaNativeSubmitDisabled(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const value = environment.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED?.trim();
+  return !value || value === "false";
+}
+
 function configuredOpenIds(name: string): Set<string> {
   const value = process.env[name]?.trim() ?? "";
   if (!value) return new Set();

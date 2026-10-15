@@ -32,7 +32,10 @@ describe("P0 deployment identity", () => {
         code: 0,
         result: {
           gitCommitSha: expectedGitCommitSha,
-          readiness: { couponOaDraftStoreConfigured: true },
+          readiness: {
+            couponOaDraftStoreConfigured: true,
+            couponOaNativeSubmitDisabled: true,
+          },
         },
       }),
     }));
@@ -67,7 +70,10 @@ describe("P0 deployment identity", () => {
             code: 0,
             result: {
               gitCommitSha: "04b456b1b12e201c3fbc2f55ea6c94de48189f3f",
-              readiness: { couponOaDraftStoreConfigured: true },
+              readiness: {
+                couponOaDraftStoreConfigured: true,
+                couponOaNativeSubmitDisabled: true,
+              },
             },
           }),
         })),
@@ -97,13 +103,41 @@ describe("P0 deployment identity", () => {
             code: 0,
             result: {
               gitCommitSha: expectedGitCommitSha,
-              readiness: { couponOaDraftStoreConfigured: false },
+              readiness: {
+                couponOaDraftStoreConfigured: false,
+                couponOaNativeSubmitDisabled: true,
+              },
             },
           }),
         })),
       }),
     ).rejects.toMatchObject({
       code: "coupon_oa_draft_store_not_configured",
+    });
+  });
+
+  it("fails closed when native OA creation is enabled remotely", async () => {
+    await expect(
+      verifyP0DeploymentIdentity({
+        target,
+        expectedGitCommitSha,
+        fetchImpl: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 0,
+            result: {
+              gitCommitSha: expectedGitCommitSha,
+              readiness: {
+                couponOaDraftStoreConfigured: true,
+                couponOaNativeSubmitDisabled: false,
+              },
+            },
+          }),
+        })),
+      }),
+    ).rejects.toMatchObject({
+      code: "coupon_oa_native_submit_not_disabled",
     });
   });
 });

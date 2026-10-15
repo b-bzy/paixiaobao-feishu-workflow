@@ -35,6 +35,16 @@ describe("coupon three-source errors", () => {
       code: "STALE_REVISION",
       message: "当前三源提报版本已变化，请使用最新卡片",
     });
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error(
+          "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值",
+        ),
+      ),
+    ).toEqual({
+      code: "VALIDATION_REQUIRED",
+      message: "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值",
+    });
   });
 
   it("never exposes unknown internal exception text", () => {

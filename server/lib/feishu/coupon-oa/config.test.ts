@@ -13,6 +13,7 @@ import {
   isCouponOaDraftStoreConfigured,
   isCouponOaEnabled,
   isCouponOaInvocation,
+  isCouponOaNativeSubmitDisabled,
 } from "./config";
 
 function restoreEnvironment(name: string, value: string | undefined) {
@@ -114,6 +115,25 @@ describe("coupon OA configuration", () => {
       "not allowed for this user",
     );
     expect(() => assertCouponOaNativeSubmitAllowed("ou_allowed")).not.toThrow();
+  });
+
+  it("exposes a fail-closed native-submit readiness check for P0 deployment", () => {
+    expect(isCouponOaNativeSubmitDisabled({})).toBe(true);
+    expect(
+      isCouponOaNativeSubmitDisabled({
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "false",
+      }),
+    ).toBe(true);
+    expect(
+      isCouponOaNativeSubmitDisabled({
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "true",
+      }),
+    ).toBe(false);
+    expect(
+      isCouponOaNativeSubmitDisabled({
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "yes",
+      }),
+    ).toBe(false);
   });
 
   it("denies stateful coupon operations without a general tester allowlist", () => {

@@ -38,7 +38,9 @@
     "test:coupon-three-source:e2e-local:deepseek": "node --import tsx scripts/run-coupon-three-source-e2e-local.mjs --lane deepseek",
     "test:coupon-activity-copy": "vitest run scripts/lib/coupon-activity-copy.test.mjs",
     "run:coupon-three-source:local-case": "node scripts/run-coupon-three-source-local-case.mjs",
-    "recognize:coupon-three-source:deepseek": "node scripts/recognize-coupon-three-source-deepseek.mjs"
+    "recognize:coupon-three-source:deepseek": "node scripts/recognize-coupon-three-source-deepseek.mjs",
+    "audit:workbook": "node --import tsx scripts/coupon-workbook-audit.mjs",
+    "audit:cards": "node --import tsx scripts/coupon-card-live-audit.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1150.0",

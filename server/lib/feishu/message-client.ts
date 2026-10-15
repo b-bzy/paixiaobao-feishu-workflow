@@ -13,10 +13,14 @@ interface FeishuMessageDetail {
   }>;
 }
 
+const FEISHU_MESSAGE_TIMEOUT_MS = 20_000;
+const FEISHU_RESOURCE_TIMEOUT_MS = 30_000;
+
 async function request<T>(path: string): Promise<T> {
   const token = await getTenantAccessToken();
   const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(FEISHU_MESSAGE_TIMEOUT_MS),
   });
   const result = (await response.json()) as FeishuResponse<T>;
   if (!response.ok || result.code !== 0 || !result.data) {
@@ -46,7 +50,10 @@ export async function downloadFeishuMessageResource(input: {
   const token = await getTenantAccessToken();
   const response = await fetch(
     `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(input.messageId)}/resources/${encodeURIComponent(input.fileKey)}?type=${input.type}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(FEISHU_RESOURCE_TIMEOUT_MS),
+    },
   );
   if (!response.ok) {
     throw new Error(

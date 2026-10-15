@@ -12,6 +12,13 @@ interface FeishuApiResponse {
   data?: { message_id?: string };
 }
 
+const FEISHU_API_TIMEOUT_MS = 20_000;
+const FEISHU_MEDIA_TIMEOUT_MS = 60_000;
+
+function feishuApiSignal(timeoutMs = FEISHU_API_TIMEOUT_MS): AbortSignal {
+  return AbortSignal.timeout(timeoutMs);
+}
+
 function getCredentials(): { appId: string; appSecret: string } {
   const appId = process.env.FEISHU_APP_ID;
   const appSecret = process.env.FEISHU_APP_SECRET;
@@ -29,6 +36,7 @@ export async function getTenantAccessToken(): Promise<string> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+      signal: feishuApiSignal(),
     },
   );
   const result = (await response.json()) as TenantTokenResponse;
@@ -66,6 +74,7 @@ export async function sendFeishuCardWithReceipt(
       msg_type: "interactive",
       content: JSON.stringify(card),
     }),
+    signal: feishuApiSignal(),
   });
   const result = (await response.json()) as FeishuApiResponse;
   if (!response.ok || result.code !== 0) {
@@ -96,6 +105,7 @@ export async function updateFeishuCard(
         "Content-Type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({ content: JSON.stringify(card) }),
+      signal: feishuApiSignal(),
     },
   );
   const result = (await response.json()) as FeishuApiResponse;
@@ -134,6 +144,7 @@ export async function uploadFeishuMessageFile(input: {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
+    signal: feishuApiSignal(FEISHU_MEDIA_TIMEOUT_MS),
   });
   const result = (await response.json()) as FeishuUploadResponse;
   if (!response.ok || result.code !== 0 || !result.data?.file_key) {
@@ -161,6 +172,7 @@ export async function uploadFeishuMessageImage(input: {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: form,
+      signal: feishuApiSignal(FEISHU_MEDIA_TIMEOUT_MS),
     },
   );
   const result = (await response.json()) as FeishuUploadResponse;
@@ -192,6 +204,7 @@ async function sendFeishuResourceMessage(input: {
       msg_type: input.msgType,
       content: JSON.stringify(input.content),
     }),
+    signal: feishuApiSignal(),
   });
   const result = (await response.json()) as FeishuApiResponse;
   if (!response.ok || result.code !== 0) {

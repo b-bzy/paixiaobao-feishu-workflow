@@ -47,6 +47,8 @@ describe("Feishu card messages", () => {
       sendFeishuCardWithReceipt("ou-owner", card, "semantic-key"),
     ).resolves.toEqual({ messageId: "om-card" });
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("uuid=semantic-key");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("patches an existing updateable card", async () => {
@@ -75,6 +77,7 @@ describe("Feishu card messages", () => {
     );
     const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
     expect(init.method).toBe("PATCH");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(init.body))).toEqual({
       content: JSON.stringify(card),
     });

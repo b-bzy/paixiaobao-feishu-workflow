@@ -9,6 +9,7 @@ import {
   confirmRegularFullReductionCouponSet,
   discoverRegularFullReductionCoupons,
   inspectThreeSourceWorkbook,
+  RegularFullReductionFieldError,
   resolveAiPrimaryRecognition,
   resolveCouponType,
 } from "./recognition";
@@ -70,10 +71,13 @@ function couponRow(name: string, threshold: string, discount: string) {
   ];
 }
 
-async function couponSource(rows: string[][]): Promise<OfflineSourceFile> {
+async function couponSource(
+  rows: string[][],
+  headerRow: string[] = headers,
+): Promise<OfflineSourceFile> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("配券表");
-  sheet.getRow(1).values = headers;
+  sheet.getRow(1).values = headerRow;
   rows.forEach((row, index) => {
     sheet.getRow(index + 2).values = row;
   });
@@ -176,6 +180,94 @@ describe("single coupon confirmation", () => {
       ownerId: "owner-1",
       revision: 3,
     });
+  });
+
+  it("recognizes manually written header variants and converts pasted number text", async () => {
+    const manualHeaders = headers.map((header) =>
+      header === "总申请数量"
+        ? "发放总量（张）"
+        : header === "预计引入GMV"
+          ? "预计成交额（元）"
+          : header,
+    );
+    const row = couponRow("活动A", "100", "20").map((value, index) =>
+      index === 9 ? "10,000" : index === 17 ? "12万" : value,
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row], manualHeaders),
+    );
+    const candidates = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    expect(candidates).toHaveLength(1);
+    const confirmed = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      couponCandidateId: candidates[0].id,
+      ownerFieldValues: { activityPointPercent: 6 },
+    });
+    expect(confirmed.input.totalQuantity).toBe(10_000);
+    expect(confirmed.input.estimatedGmvYuan).toBe(120_000);
+  });
+
+  it("surfaces unreadable coupon fields as per-field issues with the raw value", async () => {
+    const row = couponRow("活动A", "100", "20").map((value, index) =>
+      index === 9 ? "满100减20" : value,
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row]),
+    );
+    const candidates = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    const error = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      couponCandidateId: candidates[0].id,
+      ownerFieldValues: { activityPointPercent: 6 },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RegularFullReductionFieldError);
+    const fieldError = error as RegularFullReductionFieldError;
+    expect(fieldError.message).toContain("配券表字段不符合常规满减券规则");
+    expect(fieldError.message).toContain("「申请总数量」");
+    expect(fieldError.message).toContain("满100减20");
+    expect(fieldError.fieldIssues.map((issue) => issue.key)).toContain(
+      "totalQuantity",
+    );
+  });
+
+  it("asks for missing manual columns with their canonical labels", async () => {
+    const manualHeaders = headers
+      .filter((header) => header !== "总申请数量" && header !== "预计引入GMV")
+      .flatMap((header) =>
+        header === "单次发放到账张数" ? [header, "发放备注"] : [header],
+      );
+    const row = couponRow("活动A", "100", "20").flatMap((value, index) =>
+      index === 10 ? [value, "无"] : [value],
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row], manualHeaders),
+    );
+    const candidates = await discoverRegularFullReductionCoupons({
+      recognition,
+    });
+    const error = await confirmRegularFullReductionCoupon({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      couponCandidateId: candidates[0].id,
+      ownerFieldValues: { activityPointPercent: 6 },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RegularFullReductionFieldError);
+    const fieldError = error as RegularFullReductionFieldError;
+    const keys = fieldError.fieldIssues.map((issue) => issue.key);
+    expect(keys).toContain("totalQuantity");
+    expect(keys).toContain("estimatedGmvYuan");
+    expect(fieldError.message).toContain("「申请总数量」");
+    expect(fieldError.message).toContain("「预计成交额（元）」");
+    expect(fieldError.message).not.toContain("received undefined");
   });
 
   it("confirms multiple full-reduction rows as one ordered tier set", async () => {

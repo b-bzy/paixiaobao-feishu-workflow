@@ -192,6 +192,74 @@ describe("CouponThreeSourcePilotService", () => {
     expect(updateDraft).toHaveBeenCalledTimes(1);
   });
 
+  it("records generation failures as a banner plus per-field editable inputs", async () => {
+    let stored: CouponThreeSourcePilotDraft = {
+      recordId: "rec-failed",
+      pilotId: "CTS-failed",
+      ownerOpenId: "ou_owner",
+      task: {
+        ...createCouponThreeSourceTask({
+          taskId: "CTS-task",
+          ownerOpenId: "ou_owner",
+        }),
+        revision: 6,
+        status: "AwaitingSourceConfirmation",
+      },
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {},
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+    const updateDraft = vi.fn(
+      async (
+        current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+        expectedRevision?: number,
+      ) => {
+        if (current.task.revision !== expectedRevision) {
+          throw new Error("stale revision");
+        }
+        stored = { ...stored, ...updates };
+        return stored;
+      },
+    );
+    const service = new CouponThreeSourcePilotService({
+      updateDraft,
+    } as unknown as CouponThreeSourcePilotDependencies);
+
+    const recorded = await service.recordGenerationFailure({
+      draft: stored,
+      ownerOpenId: "ou_owner",
+      expectedRevision: 6,
+      failure: {
+        message: "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值",
+        fieldIssues: [
+          {
+            key: "totalQuantity",
+            message: "未识别到「申请总数量」的取值",
+          },
+        ],
+      },
+    });
+
+    expect(recorded.failureReason).toContain("申请总数量");
+    expect(recorded.validationIssues).toEqual([
+      "输入校验[totalQuantity]：未识别到「申请总数量」的取值",
+    ]);
+    expect(recorded.task.revision).toBe(6);
+
+    await expect(
+      service.recordGenerationFailure({
+        draft: stored,
+        ownerOpenId: "ou_other",
+        expectedRevision: 6,
+        failure: { message: "x" },
+      }),
+    ).rejects.toThrow("只有当前三源提报创建人可以继续操作");
+  });
+
   it("generates strict-only artifacts and creates only an existing OA test draft", async () => {
     const coupon = await strictCouponBytes({ overDeduction: "" });
     const whitelist = await whitelistBytes();

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { foldFullWidth, parseFlexibleNumber } from "./number-text";
 
 const requiredText = z.string().trim().min(1);
 const positiveInteger = z.number().int().positive();
@@ -136,10 +137,11 @@ export function computeRegularFullReductionValues(
 }
 
 export function normalizeRegularRatio(value: string): number | undefined {
-  const text = value.trim().replace(/,/g, "");
+  const text = foldFullWidth(value).trim();
   if (!text) return undefined;
   const parsed = text.endsWith("%")
-    ? Number(text.slice(0, -1)) / 100
-    : Number(text);
-  return Number.isFinite(parsed) ? parsed : undefined;
+    ? parseFlexibleNumber(text.slice(0, -1))
+    : parseFlexibleNumber(text);
+  if (parsed === undefined) return undefined;
+  return text.endsWith("%") ? parsed / 100 : parsed;
 }

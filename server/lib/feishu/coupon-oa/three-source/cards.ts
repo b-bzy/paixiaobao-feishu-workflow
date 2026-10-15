@@ -413,6 +413,21 @@ function missingOwnerFields(
   );
 }
 
+/**
+ * Fields recorded by a failed mapping confirmation (`输入校验[key]：…`) must
+ * stay editable on the restored card even though workbook recognition found
+ * a column — the selected row's value was missing or unreadable, and the
+ * owner's supplement takes precedence over the workbook cell.
+ */
+function validationIssueFieldKeys(
+  validationIssues: string[],
+): CouponFieldKey[] {
+  return validationIssues.flatMap((issue) => {
+    const match = issue.match(/^输入校验\[([a-zA-Z]+)\]/);
+    return match ? [match[1] as CouponFieldKey] : [];
+  });
+}
+
 function overDeductionChoice(
   draft: CouponThreeSourcePilotDraft,
 ): "是" | "否" | undefined {
@@ -475,6 +490,7 @@ export function buildCouponThreeSourceMappingCard(
     ...new Set([
       ...missingOwnerFields(coupon),
       ...reviewAiFields.map((candidate) => candidate.key),
+      ...validationIssueFieldKeys(draft.validationIssues),
     ]),
   ];
   const elements: Array<Record<string, unknown>> = [
@@ -527,6 +543,17 @@ export function buildCouponThreeSourceMappingCard(
                 ...draft.task.pendingCalcImages,
               ].map((image, index) => `${index + 1}. ${image.fileName}`),
               "寄卖/POP 将优先使用确认后的图片；若业务模式选择严选，这些图片不会进入 OA。",
+            ].join("\n"),
+          },
+        ]
+      : []),
+    ...(draft.failureReason
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              `**上次确认未完成：** ${draft.failureReason}`,
+              "已恢复本卡片，之前填写的内容已保留；修正后可直接重新提交。",
             ].join("\n"),
           },
         ]
@@ -612,6 +639,7 @@ export function buildCouponThreeSourceMappingCard(
         {
           tag: "select_static",
           name: "owner_overDeduction",
+          label: plainText("是否超扣"),
           placeholder: plainText("请选择是否超扣"),
           required: true,
           width: "fill",
@@ -622,6 +650,20 @@ export function buildCouponThreeSourceMappingCard(
             { text: plainText("否，不超扣"), value: "否" },
             { text: plainText("是，需要填写超扣原因"), value: "是" },
           ],
+        },
+        {
+          tag: "input",
+          name: "owner_overDeductionReason",
+          label: plainText("超扣原因（选“是”时必填）"),
+          input_type: "multiline_text",
+          rows: 3,
+          required: false,
+          width: "fill",
+          ...(ownerDefaultValue(draft, "overDeductionReason")
+            ? {
+                default_value: ownerDefaultValue(draft, "overDeductionReason"),
+              }
+            : {}),
         },
         ...(coupons.length === 0 || hasUnknownCoupon
           ? [
@@ -651,6 +693,7 @@ export function buildCouponThreeSourceMappingCard(
         {
           tag: "select_static",
           name: "owner_businessMode",
+          label: plainText("业务模式"),
           placeholder: plainText("请选择业务模式"),
           required: true,
           width: "fill",
@@ -764,20 +807,6 @@ export function buildCouponThreeSourceMappingCard(
                   width: "fill",
                 }),
           })),
-        {
-          tag: "input",
-          name: "owner_overDeductionReason",
-          label: plainText("超扣原因（选“是”时必填）"),
-          input_type: "multiline_text",
-          rows: 3,
-          required: false,
-          width: "fill",
-          ...(ownerDefaultValue(draft, "overDeductionReason")
-            ? {
-                default_value: ownerDefaultValue(draft, "overDeductionReason"),
-              }
-            : {}),
-        },
         ...optionalOwnerSupplementKeys
           .filter(
             (key) =>
@@ -983,11 +1012,35 @@ export function buildCouponThreeSourceCompletedCard(
 
 export function buildCouponThreeSourceErrorCard(input: {
   message: string;
+  /** Present when the callback context knows the draft: adds a rollback. */
+  reopen?: { recordId: string; revision: number };
 }): FeishuCard {
   return card({
     title: "OA 优惠券三源提报未完成",
     subtitle: "请修正材料或使用最新卡片重试",
     template: "red",
-    content: `**原因：** ${input.message}`,
+    elements: [
+      { tag: "markdown", content: `**原因：** ${input.message}` },
+      ...(input.reopen
+        ? [
+            {
+              tag: "button",
+              text: plainText("回到当前提报卡片重新填写"),
+              type: "default",
+              width: "fill",
+              behaviors: [
+                {
+                  type: "callback",
+                  value: {
+                    action: "coupon_three_source_reopen",
+                    pilotRecordId: input.reopen.recordId,
+                    revision: input.reopen.revision,
+                  },
+                },
+              ],
+            },
+          ]
+        : []),
+    ],
   });
 }

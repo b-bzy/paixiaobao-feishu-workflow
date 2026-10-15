@@ -4,7 +4,9 @@ import {
   normalizeRegularRatio,
   regularFullReductionInputSchema,
 } from "../calculation";
+import { parseFlexibleNumber } from "../number-text";
 import { canonicalCouponBusinessDate } from "./business-date";
+import { couponFieldLabels } from "./owner-input";
 import type {
   AiPrimaryRecognitionProjection,
   ConfirmedCouponSetSource,
@@ -32,10 +34,28 @@ const HEADER_ALIASES: Partial<Record<CouponFieldKey, readonly string[]>> = {
   activityStartAt: ["活动开始日期", "活动开始时间"],
   activityEndAt: ["活动结束日期", "活动结束时间"],
   channels: ["用券渠道", "配置渠道"],
-  thresholdYuan: ["满减门槛", "限额", "门槛"],
-  discountAmountYuan: ["优惠面额", "面额", "优惠金额"],
+  thresholdYuan: ["满减门槛", "限额", "门槛", "满额"],
+  discountAmountYuan: [
+    "优惠面额",
+    "面额",
+    "优惠金额",
+    "减免金额",
+    "券面额",
+    "优惠额度",
+  ],
   activityPointPercent: ["活动点位", "活动点位（%）", "活动点位%"],
-  totalQuantity: ["总申请数量", "申请数量", "总数量"],
+  totalQuantity: [
+    "总申请数量",
+    "申请数量",
+    "总数量",
+    "申请总量",
+    "发放总量",
+    "发放数量",
+    "优惠券数量",
+    "券数量",
+    "总张数",
+    "数量",
+  ],
   grantQuantityPerClaim: ["单次发放到账张数", "单次到账张数"],
   dailyClaimLimit: ["每日领取次数", "日领取次数"],
   claimWindow: ["可领时间", "领券时间"],
@@ -43,7 +63,16 @@ const HEADER_ALIASES: Partial<Record<CouponFieldKey, readonly string[]>> = {
   expectedClaimRate: ["预计领用率", "预计券率", "领用率"],
   expectedUseRate: ["预计使用率", "使用率"],
   platformBearingRatio: ["拍拍平台承担比例", "平台承担比例"],
-  estimatedGmvYuan: ["预计引入GMV", "预估GMV", "预计GMV"],
+  estimatedGmvYuan: [
+    "预计引入GMV",
+    "预估GMV",
+    "预计GMV",
+    "预计成交额",
+    "预估成交额",
+    "成交额",
+    "预计销售额",
+    "GMV",
+  ],
   claimRule: ["用户领券规则", "领券规则"],
   allowGift: ["优惠券赠送", "是否允许赠送"],
   promotionMode: ["推广途径", "推广方式"],
@@ -83,6 +112,17 @@ function columnName(index: number): string {
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[\s_（）()【】：-]/g, "");
+}
+
+/**
+ * Header comparison also drops bracketed units/annotations so manually
+ * maintained tables match: “预计成交额（元）” and “预计成交额” are the same
+ * column for alias lookup and candidate de-duplication.
+ */
+function normalizeHeader(value: string): string {
+  return normalize(
+    value.replace(/（[^（）]*）|\([^()]*\)|【[^【】]*】|\[[^[\]]*\]/g, ""),
+  );
 }
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -215,11 +255,11 @@ export async function inspectThreeSourceWorkbook(
       if (!cells.length) continue;
 
       for (const cell of cells) {
-        const normalized = normalize(cell.text);
+        const normalized = normalizeHeader(cell.text);
         for (const [key, aliases] of Object.entries(HEADER_ALIASES) as Array<
           [CouponFieldKey, readonly string[]]
         >) {
-          if (!aliases.some((alias) => normalize(alias) === normalized))
+          if (!aliases.some((alias) => normalizeHeader(alias) === normalized))
             continue;
           const column = columnName(cell.index);
           const candidate: CouponFieldCandidate = {
@@ -240,7 +280,9 @@ export async function inspectThreeSourceWorkbook(
 
         for (const identifier of IDENTIFIER_ALIASES) {
           if (
-            !identifier.aliases.some((alias) => normalize(alias) === normalized)
+            !identifier.aliases.some(
+              (alias) => normalizeHeader(alias) === normalized,
+            )
           ) {
             continue;
           }
@@ -264,7 +306,9 @@ export async function inspectThreeSourceWorkbook(
             reasons: [`表头“${cell.text}”匹配 ${identifier.dimension} 别名`],
           });
         }
-        if (TIER_ALIASES.some((alias) => normalize(alias) === normalized)) {
+        if (
+          TIER_ALIASES.some((alias) => normalizeHeader(alias) === normalized)
+        ) {
           const column = columnName(cell.index);
           listCandidates.push({
             id: candidateId(sourceHash, "tier", worksheet.name, row, column),
@@ -331,7 +375,7 @@ function selectFieldCandidate(
         (current) =>
           current.sheetName === candidate.sheetName &&
           current.column === candidate.column &&
-          normalize(current.header) === normalize(candidate.header),
+          normalizeHeader(current.header) === normalizeHeader(candidate.header),
       ) === index,
   );
   if (canonicalCandidates.length !== 1) {
@@ -385,13 +429,97 @@ function normalizeChannels(value: string): Array<"JD" | "PAIPAI"> {
 }
 
 function number(value: string): number | undefined {
-  const parsed = Number(value.replace(/,/g, ""));
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseFlexibleNumber(value);
 }
 
 export interface ExtractRegularFullReductionInput {
   recognition: WorkbookRecognition;
   fieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
+}
+
+export interface RegularFullReductionFieldIssue {
+  key: CouponFieldKey;
+  message: string;
+}
+
+interface RegularFieldSchemaIssue {
+  readonly code: string;
+  readonly path: readonly PropertyKey[];
+  readonly message: string;
+  readonly expected?: string;
+  readonly minimum?: unknown;
+  readonly maximum?: unknown;
+}
+
+/**
+ * Field-level, owner-readable validation failure. The message is what the
+ * business user sees on the restored form card; `fieldIssues` lets the
+ * dispatcher render exactly the broken fields as editable inputs.
+ */
+export class RegularFullReductionFieldError extends Error {
+  readonly code = "regular_full_reduction_field_invalid";
+
+  constructor(readonly fieldIssues: RegularFullReductionFieldIssue[]) {
+    super(
+      `配券表字段不符合常规满减券规则：${fieldIssues
+        .map((issue) => issue.message)
+        .join("；")}`,
+    );
+    this.name = "RegularFullReductionFieldError";
+  }
+}
+
+function describeRegularFieldIssues(
+  issues: readonly RegularFieldSchemaIssue[],
+  rawTexts: Partial<Record<CouponFieldKey, string>>,
+): RegularFullReductionFieldIssue[] {
+  return issues.map((issue) => {
+    const key = issue.path[0];
+    const fieldKey =
+      typeof key === "string" ? (key as CouponFieldKey) : undefined;
+    const label = fieldKey ? couponFieldLabels[fieldKey] : undefined;
+    const raw = (fieldKey ? rawTexts[fieldKey] : "")?.trim() ?? "";
+    const quotedRaw = raw ? `“${raw}”` : "";
+    if (!fieldKey || !label || issue.code === "custom") {
+      return { key: fieldKey ?? "activityName", message: issue.message };
+    }
+    if (issue.code === "invalid_type") {
+      if (!raw) {
+        return {
+          key: fieldKey,
+          message: `未识别到「${label}」的取值：请检查配券表对应列的表头和数据行是否已填写`,
+        };
+      }
+      return {
+        key: fieldKey,
+        message: `「${label}」的取值${quotedRaw}无法识别为${
+          issue.expected === "number" ? "数字" : "有效值"
+        }，请修改后重新提交`,
+      };
+    }
+    if (issue.code === "too_small" || issue.code === "too_big") {
+      const bound = issue.code === "too_small" ? issue.minimum : issue.maximum;
+      return {
+        key: fieldKey,
+        message: `「${label}」的取值${quotedRaw}超出允许范围（${
+          issue.code === "too_small" ? "下限" : "上限"
+        } ${String(bound)}）`,
+      };
+    }
+    return {
+      key: fieldKey,
+      message: `「${label}」的取值${quotedRaw}未通过校验：${issue.message}`,
+    };
+  });
+}
+
+function throwRegularFieldIssues(
+  issues: readonly RegularFieldSchemaIssue[],
+  rawTexts: Partial<Record<CouponFieldKey, string>>,
+): never {
+  throw new RegularFullReductionFieldError(
+    describeRegularFieldIssues(issues, rawTexts),
+  );
 }
 
 const REGULAR_FIELD_KEYS = (
@@ -721,6 +849,7 @@ export async function confirmRegularFullReductionCoupon(
   if (!worksheet) throw new Error("已选择的优惠券来源 Sheet 不存在");
   const provenance: Partial<Record<CouponFieldKey, SourceProvenance>> = {};
   const values: Partial<Record<CouponFieldKey, unknown>> = {};
+  const rawTexts: Partial<Record<CouponFieldKey, string>> = {};
 
   for (const key of REGULAR_FIELD_KEYS) {
     const candidateIdValue =
@@ -774,6 +903,7 @@ export async function confirmRegularFullReductionCoupon(
       // Owner-provided values take precedence over explicit workbook cells;
       // the modification is fully traced in provenance (sourceKind
       // "ownerSupplement" plus before/after values, owner and revision).
+      rawTexts[key] = String(input.ownerFieldValues?.[key] ?? "");
       values[key] = ownerValue;
       provenance[key] = {
         sourceHash: input.recognition.sourceHash,
@@ -794,6 +924,7 @@ export async function confirmRegularFullReductionCoupon(
         overrideReason: input.overrideReasons?.[key]?.trim() || undefined,
       };
     } else if (source?.rawValue) {
+      rawTexts[key] = source.rawValue;
       values[key] = normalizedOwnerValue(key, source.rawValue);
       provenance[key] = { ...source, sourceKind: "workbook" };
     }
@@ -806,9 +937,7 @@ export async function confirmRegularFullReductionCoupon(
     claimRiskControl: "0级以下用户可领",
   });
   if (!parsed.success) {
-    throw new Error(
-      `配券表字段不符合常规满减券规则：${parsed.error.issues.map((issue) => `${issue.path.join(".")} ${issue.message}`).join("；")}`,
-    );
+    throwRegularFieldIssues(parsed.error.issues, rawTexts);
   }
 
   const activityPointRaw = input.ownerFieldValues?.activityPointPercent;
@@ -957,6 +1086,9 @@ export async function extractRegularFullReductionInput(
     if (!source) throw new Error(`配券表缺少字段来源：${key}`);
     return source.rawValue;
   };
+  const rawTexts = Object.fromEntries(
+    keys.map((key) => [key, value(key)]),
+  ) as Partial<Record<CouponFieldKey, string>>;
   const parsed = regularFullReductionInputSchema.safeParse({
     activityName: value("activityName"),
     activityBackground: value("activityBackground"),
@@ -994,9 +1126,7 @@ export async function extractRegularFullReductionInput(
     overDeductionReason: value("overDeductionReason"),
   });
   if (!parsed.success) {
-    throw new Error(
-      `配券表字段不符合常规满减券规则：${parsed.error.issues.map((issue) => `${issue.path.join(".")} ${issue.message}`).join("；")}`,
-    );
+    throwRegularFieldIssues(parsed.error.issues, rawTexts);
   }
   return {
     input: parsed.data,

@@ -1019,6 +1019,34 @@ export class CouponThreeSourcePilotService {
     );
   }
 
+  /**
+   * Persists why a mapping confirmation failed so the restored form card can
+   * show the banner and render exactly the broken fields as editable inputs.
+   * Callers treat this as best-effort: a persistence failure must not mask
+   * the original generation error.
+   */
+  async recordGenerationFailure(input: {
+    draft: CouponThreeSourcePilotDraft;
+    ownerOpenId: string;
+    expectedRevision: number;
+    failure: {
+      message: string;
+      fieldIssues?: Array<{ key: CouponFieldKey; message: string }>;
+    };
+  }): Promise<CouponThreeSourcePilotDraft> {
+    assertOwnerAndRevision(input);
+    return this.dependencies.updateDraft(
+      input.draft,
+      {
+        validationIssues: (input.failure.fieldIssues ?? []).map(
+          (issue) => `输入校验[${issue.key}]：${issue.message}`,
+        ),
+        failureReason: input.failure.message,
+      },
+      input.expectedRevision,
+    );
+  }
+
   private async assignSource(input: {
     draft: CouponThreeSourcePilotDraft;
     ownerOpenId: string;

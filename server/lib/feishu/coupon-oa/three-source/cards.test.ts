@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
+  buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceIntakeCard,
   buildCouponThreeSourceMappingCard,
   buildCouponThreeSourceNoBlacklistCard,
@@ -236,6 +237,18 @@ describe("three-source Bot cards", () => {
     expect(undecided).toContain('"name":"owner_overDeduction"');
     expect(undecided).toContain('"name":"owner_overDeductionReason"');
     expect(undecided).toContain("请选择是否超扣");
+    expect(undecided).toContain(
+      '"label":{"tag":"plain_text","content":"是否超扣"}',
+    );
+    expect(undecided.indexOf('"name":"owner_overDeduction"')).toBeLessThan(
+      undecided.indexOf('"name":"owner_overDeductionReason"'),
+    );
+    expect(
+      undecided.indexOf('"name":"owner_overDeductionReason"'),
+    ).toBeLessThan(undecided.indexOf('"name":"owner_businessMode"'));
+    expect(undecided).toContain(
+      '"label":{"tag":"plain_text","content":"业务模式"}',
+    );
 
     current.selections.ownerFieldValues = { overDeduction: "否" };
     const noDeduction = JSON.stringify(
@@ -253,6 +266,59 @@ describe("three-source Bot cards", () => {
     );
     expect(withDeduction).toContain('"default_value":"是"');
     expect(withDeduction).toContain("超扣原因（选“是”时必填）");
+  });
+
+  it("shows the failure banner and re-renders failed fields as editable inputs", () => {
+    const current = draft();
+    const couponFieldCandidates = current.recognitions.couponTable
+      ?.couponFieldCandidates as NonNullable<
+      typeof current.recognitions.couponTable
+    >["couponFieldCandidates"];
+    couponFieldCandidates.totalQuantity = [
+      {
+        id: "total-1",
+        key: "totalQuantity",
+        score: 1,
+        header: "总申请数量",
+        headerRow: 1,
+        column: "J",
+        sheetName: "Sheet1",
+        sampleValues: ["1000"],
+        reasons: [],
+      },
+    ];
+    // With a healthy workbook column the field is not owner-editable.
+    expect(
+      JSON.stringify(buildCouponThreeSourceMappingCard(current)),
+    ).not.toContain('"name":"owner_totalQuantity"');
+
+    current.failureReason =
+      "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值";
+    current.validationIssues = [
+      "输入校验[totalQuantity]：未识别到「申请总数量」的取值：请检查配券表对应列的表头和数据行是否已填写",
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("上次确认未完成");
+    expect(rendered).toContain('"name":"owner_totalQuantity"');
+    expect(rendered).toContain("请检查配券表对应列的表头和数据行是否已填写");
+  });
+
+  it("gives the failure card a rollback entry only when the draft is known", () => {
+    const plain = JSON.stringify(
+      buildCouponThreeSourceErrorCard({ message: "上传失败" }),
+    );
+    expect(plain).toContain("上传失败");
+    expect(plain).not.toContain("coupon_three_source_reopen");
+
+    const withReopen = JSON.stringify(
+      buildCouponThreeSourceErrorCard({
+        message: "当前三源提报版本已变化，请使用最新卡片",
+        reopen: { recordId: "rec-three-source", revision: 4 },
+      }),
+    );
+    expect(withReopen).toContain("coupon_three_source_reopen");
+    expect(withReopen).toContain('"pilotRecordId":"rec-three-source"');
+    expect(withReopen).toContain("回到当前提报卡片重新填写");
   });
 
   it("always renders required date inputs with stored defaults", () => {

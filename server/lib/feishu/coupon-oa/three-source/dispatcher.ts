@@ -2,6 +2,7 @@ import {
   couponOwnerRepairText,
   normalizeCouponOwnerInputs,
 } from "../../../coupon-oa/three-source/owner-input";
+import { RegularFullReductionFieldError } from "../../../coupon-oa/three-source/recognition";
 import type { CouponFieldKey } from "../../../coupon-oa/three-source/types";
 import { sendFeishuCard, updateFeishuCard } from "../../client";
 import {
@@ -216,6 +217,9 @@ async function sendDraftState(input: {
         message: "当前三源提报已取消，请重新发送 /OA优惠券提报。",
       });
     }
+    if (draft.task.status === "GeneratingArtifacts") {
+      return buildCouponThreeSourceGeneratingArtifactsCard();
+    }
     if (draft.pendingRecognition) {
       return buildCouponThreeSourceRoleCard({
         draft,
@@ -418,10 +422,35 @@ function assertMappingFormReady(
 }
 
 /**
- * Runs artifact generation; on failure, reverts the GeneratingArtifacts
- * marker and re-delivers the second-round form so the owner can retry on a
- * live card instead of a dead "generating" card. The original error still
- * propagates so the caller's catch sends the failure card.
+ * Marks an error whose owner-facing report already went out on the restored
+ * form card, so the dispatcher's catch must not bury that card under a
+ * dead-end error card.
+ */
+function ownerReported(error: unknown): Error {
+  const reported = new Error(
+    errorMessage(error, "三源提报操作失败，请稍后重试"),
+  ) as Error & { reportedToOwner?: boolean };
+  reported.reportedToOwner = true;
+  return reported;
+}
+
+function failureDetail(error: unknown): {
+  message: string;
+  fieldIssues?: Array<{ key: CouponFieldKey; message: string }>;
+} {
+  if (error instanceof RegularFullReductionFieldError) {
+    return { message: error.message, fieldIssues: error.fieldIssues };
+  }
+  return { message: errorMessage(error, "三源提报操作失败，请稍后重试") };
+}
+
+/**
+ * Runs artifact generation; on any failure it un-bricks the flow: reverts
+ * the GeneratingArtifacts marker, persists the failure reason (and the exact
+ * broken fields) onto the draft, and re-delivers the second-round form —
+ * in place when the revision is unchanged — so the owner can correct and
+ * re-submit on a live card. The error is rethrown marked as already
+ * reported; the dispatcher's catch then must not send a separate error card.
  */
 async function runGenerationWithRecovery(input: {
   service: CouponThreeSourcePilotService;
@@ -438,20 +467,48 @@ async function runGenerationWithRecovery(input: {
       operationId: input.operationId,
     });
   } catch (error) {
-    const recovered = await input.service
-      .recoverFailedGeneration({
-        draft: input.updated,
-        ownerOpenId: input.openId,
-        expectedRevision: input.updated.task.revision,
-      })
-      .catch(() => undefined);
-    if (recovered) {
-      await input.dependencies
-        .deliverMappingCard({ draft: recovered })
-        .catch(() => undefined);
-    }
-    throw error;
+    await restoreMappingFormAfterFailure({
+      service: input.service,
+      dependencies: input.dependencies,
+      openId: input.openId,
+      updated: input.updated,
+      error,
+    });
+    throw ownerReported(error);
   }
+}
+
+/**
+ * Best-effort rollback shared by every failure after the confirm click:
+ * status revert, failure banner, and live form card re-delivery. Any step
+ * may fail without masking the original error.
+ */
+async function restoreMappingFormAfterFailure(input: {
+  service: CouponThreeSourcePilotService;
+  dependencies: CouponThreeSourceDispatcherDependencies;
+  openId: string;
+  updated: CouponThreeSourcePilotDraft;
+  error: unknown;
+}): Promise<void> {
+  const recovered = await input.service
+    .recoverFailedGeneration({
+      draft: input.updated,
+      ownerOpenId: input.openId,
+      expectedRevision: input.updated.task.revision,
+    })
+    .catch(() => undefined);
+  const reverted = recovered ?? input.updated;
+  const recorded = await input.service
+    .recordGenerationFailure({
+      draft: reverted,
+      ownerOpenId: input.openId,
+      expectedRevision: reverted.task.revision,
+      failure: failureDetail(input.error),
+    })
+    .catch(() => undefined);
+  await input.dependencies
+    .deliverMappingCard({ draft: recorded ?? reverted })
+    .catch(() => undefined);
 }
 
 /**
@@ -802,7 +859,12 @@ export function createCouponThreeSourceDispatcher(
       if (draft.ownerOpenId !== input.openId) {
         throw new Error("只有当前三源提报创建人可以继续操作");
       }
-      if (draft.task.status === "GeneratingArtifacts") {
+      // Reopen is a read-only state re-render, so it stays available to
+      // un-brick a flow that is otherwise showing only dead cards.
+      if (
+        draft.task.status === "GeneratingArtifacts" &&
+        action !== "coupon_three_source_reopen"
+      ) {
         throw new Error("三源标准产物正在生成，请等待最新卡片完成后再操作");
       }
       // A retried delivery (e.g. a bridge timeout resend) of the two confirm
@@ -825,16 +887,12 @@ export function createCouponThreeSourceDispatcher(
           message: `Coupon three-source pilot ${draft.pilotId} already completed; re-delivered the send card`,
         };
       }
-      const expectedRevision =
+      const statelessAction =
         action === "coupon_three_source_recognition_start" ||
-        action === "coupon_three_source_supplement_recognition_start"
-          ? draft.task.revision
-          : revision;
-      if (
-        action !== "coupon_three_source_recognition_start" &&
-        action !== "coupon_three_source_supplement_recognition_start" &&
-        draft.task.revision !== revision
-      ) {
+        action === "coupon_three_source_supplement_recognition_start" ||
+        action === "coupon_three_source_reopen";
+      const expectedRevision = statelessAction ? draft.task.revision : revision;
+      if (!statelessAction && draft.task.revision !== revision) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
       }
       const service = dependencies.createService();
@@ -948,34 +1006,53 @@ export function createCouponThreeSourceDispatcher(
               // Ignore PATCH failures; generation proceeds either way.
             }
           }
-          const updated = await service.updateSelections({
-            draft: ready,
-            ownerOpenId: input.openId,
-            expectedRevision: ready.task.revision,
-            selections,
-            operationId: id,
-          });
-          next = repairIssues.length
-            ? await service.startSupplementRecognition({
-                draft: updated,
-                ownerOpenId: input.openId,
-                expectedRevision: updated.task.revision,
-                operationId: `${id}:repair`,
-                text: couponOwnerRepairText(repairIssues),
-                kind: "form_repair",
-                replaceOwnerFieldKeys: repairIssues.map((item) => item.key),
-                validationIssues: repairIssues.map(
-                  (item) =>
-                    `输入校验[${item.key}]：${item.message}。当前输入：${item.input}`,
-                ),
-              })
-            : await runGenerationWithRecovery({
+          let updated: CouponThreeSourcePilotDraft;
+          try {
+            updated = await service.updateSelections({
+              draft: ready,
+              ownerOpenId: input.openId,
+              expectedRevision: ready.task.revision,
+              selections,
+              operationId: id,
+            });
+            next = repairIssues.length
+              ? await service.startSupplementRecognition({
+                  draft: updated,
+                  ownerOpenId: input.openId,
+                  expectedRevision: updated.task.revision,
+                  operationId: `${id}:repair`,
+                  text: couponOwnerRepairText(repairIssues),
+                  kind: "form_repair",
+                  replaceOwnerFieldKeys: repairIssues.map((item) => item.key),
+                  validationIssues: repairIssues.map(
+                    (item) =>
+                      `输入校验[${item.key}]：${item.message}。当前输入：${item.input}`,
+                  ),
+                })
+              : await runGenerationWithRecovery({
+                  service,
+                  dependencies,
+                  openId: input.openId,
+                  updated,
+                  operationId: `${id}:generate`,
+                });
+          } catch (error) {
+            // The confirm card is already collapsed at this point, so every
+            // failure here must restore a live form card or the owner is
+            // left with only dead cards. Generation failures restore inside
+            // runGenerationWithRecovery; skip the duplicate pass for those.
+            if (!(error as { reportedToOwner?: boolean }).reportedToOwner) {
+              await restoreMappingFormAfterFailure({
                 service,
                 dependencies,
                 openId: input.openId,
-                updated,
-                operationId: `${id}:generate`,
-              });
+                updated: ready,
+                error,
+              }).catch(() => undefined);
+              throw ownerReported(error);
+            }
+            throw error;
+          }
           // Pilot chain: generation and the OA-draft handoff are one step.
           // The owner sees exactly one card afterwards — the draft card with
           // a single send confirmation. A handoff failure falls back to the
@@ -1065,6 +1142,10 @@ export function createCouponThreeSourceDispatcher(
             message: "Coupon three-source pilot created OA draft",
           };
         }
+        case "coupon_three_source_reopen":
+          // Read-only: re-render whichever card matches the persisted state.
+          next = draft;
+          break;
         case "coupon_three_source_cancel":
           next = await service.cancel({
             draft,
@@ -1087,11 +1168,16 @@ export function createCouponThreeSourceDispatcher(
       };
     } catch (error) {
       const detail = errorMessage(error, "三源提报操作失败，请稍后重试");
-      await dependencies.sendCard(
-        input.openId,
-        buildCouponThreeSourceErrorCard({ message: detail }),
-        input.idempotencyKey,
-      );
+      if (!(error as { reportedToOwner?: boolean }).reportedToOwner) {
+        await dependencies.sendCard(
+          input.openId,
+          buildCouponThreeSourceErrorCard({
+            message: detail,
+            ...(recordId && revision ? { reopen: { recordId, revision } } : {}),
+          }),
+          input.idempotencyKey,
+        );
+      }
       return { handled: true, message: detail };
     }
   }

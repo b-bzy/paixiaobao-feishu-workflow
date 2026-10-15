@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { RegularFullReductionFieldError } from "../../../coupon-oa/three-source/recognition";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
   type CouponThreeSourceDispatcherDependencies,
@@ -891,12 +892,18 @@ describe("three-source Bot dispatcher", () => {
     };
     const recoverFailedGeneration: CouponThreeSourcePilotService["recoverFailedGeneration"] =
       vi.fn(async () => recovered);
+    const recordGenerationFailure: CouponThreeSourcePilotService["recordGenerationFailure"] =
+      vi.fn(async (input) => ({
+        ...input.draft,
+        failureReason: input.failure.message,
+      }));
     const { values, sendCard, deliverMappingCard } = dependencies({
       activeThreeSource: [current],
       service: {
         updateSelections,
         confirmSourcesAndGenerate,
         recoverFailedGeneration,
+        recordGenerationFailure,
       },
     });
     const dispatcher = createCouponThreeSourceDispatcher(values);
@@ -923,6 +930,14 @@ describe("three-source Bot dispatcher", () => {
     expect(recoverFailedGeneration).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRevision: 6 }),
     );
+    expect(recordGenerationFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: recovered,
+        failure: expect.objectContaining({
+          message: "Feishu Drive file upload failed: parent node not exist",
+        }),
+      }),
+    );
     expect(deliverMappingCard).toHaveBeenCalledWith(
       expect.objectContaining({
         draft: expect.objectContaining({
@@ -930,12 +945,162 @@ describe("three-source Bot dispatcher", () => {
             status: "AwaitingSourceConfirmation",
             revision: 7,
           }),
+          failureReason:
+            "Feishu Drive file upload failed: parent node not exist",
         }),
       }),
     );
-    expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
-      "parent node not exist",
+    // The restored form card carries the failure banner, so no dead-end
+    // error card may bury it.
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it("restores the form with per-field issues when validation fails before the generating marker", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    const updated = { ...current, task: { ...current.task, revision: 6 } };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async () => updated);
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn(async () => {
+        throw new RegularFullReductionFieldError([
+          {
+            key: "totalQuantity",
+            message:
+              "未识别到「申请总数量」的取值：请检查配券表对应列的表头和数据行是否已填写",
+          },
+        ]);
+      });
+    // The status never flipped to GeneratingArtifacts, so recovery is a
+    // no-op — the restore must still record and re-deliver the live form.
+    const recoverFailedGeneration: CouponThreeSourcePilotService["recoverFailedGeneration"] =
+      vi.fn(async () => undefined);
+    const recordGenerationFailure: CouponThreeSourcePilotService["recordGenerationFailure"] =
+      vi.fn(
+        async (
+          input: Parameters<
+            CouponThreeSourcePilotService["recordGenerationFailure"]
+          >[0],
+        ) => ({
+          ...input.draft,
+          failureReason: input.failure.message,
+          validationIssues: (input.failure.fieldIssues ?? []).map(
+            (issue) => `输入校验[${issue.key}]：${issue.message}`,
+          ),
+        }),
+      );
+    const { values, sendCard, deliverMappingCard } = dependencies({
+      activeThreeSource: [current],
+      service: {
+        updateSelections,
+        confirmSourcesAndGenerate,
+        recoverFailedGeneration,
+        recordGenerationFailure,
+      },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
+        },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(recoverFailedGeneration).toHaveBeenCalled();
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          failureReason: expect.stringContaining("申请总数量"),
+          validationIssues: expect.arrayContaining([
+            expect.stringContaining("输入校验[totalQuantity]"),
+          ]),
+        }),
+      }),
     );
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it("re-renders the persisted state card for the read-only reopen action", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: { role: "couponTable", ...source },
+      whitelist: { role: "whitelist", ...source },
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    const { values, sendCard, deliverMappingCard } = dependencies({
+      activeThreeSource: [current],
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_reopen",
+        value: { pilotRecordId: current.recordId, revision: 2 },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(deliverMappingCard).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: current }),
+    );
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it("adds a rollback entry to error cards raised from a known draft callback", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_no_blacklist_confirm:${current.recordId}:4`,
+        value: { pilotRecordId: current.recordId, revision: 4 },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "当前三源提报版本已变化，请使用最新卡片",
+    });
+
+    const errorCard = JSON.stringify(sendCard.mock.calls[0]?.[1]);
+    expect(errorCard).toContain("当前三源提报版本已变化");
+    expect(errorCard).toContain("coupon_three_source_reopen");
+    expect(errorCard).toContain('"pilotRecordId":"rec-three-source"');
   });
 
   it("passes mapping choices to the revisioned service before generating artifacts", async () => {

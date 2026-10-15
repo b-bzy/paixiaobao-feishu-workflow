@@ -1,3 +1,4 @@
+import { parseFlexibleNumber } from "../number-text";
 import { canonicalCouponBusinessDate } from "./business-date";
 import type { CouponFieldKey } from "./types";
 
@@ -8,25 +9,36 @@ export interface CouponOwnerInputIssue {
   message: string;
 }
 
-const labels: Partial<Record<CouponFieldKey, string>> = {
+/** Canonical Chinese label per field; shared by card rendering and errors. */
+export const couponFieldLabels: Record<CouponFieldKey, string> = {
+  activityName: "活动名称",
+  activityBackground: "活动背景",
+  businessMode: "业务模式",
+  applicantName: "申请人",
   activityStartAt: "活动开始日期",
   activityEndAt: "活动结束日期",
-  businessMode: "业务模式",
   channels: "用券渠道",
-  thresholdYuan: "使用门槛",
-  discountAmountYuan: "优惠金额",
+  thresholdYuan: "使用门槛（元）",
+  discountAmountYuan: "优惠金额（元）",
+  activityPointPercent: "活动点位（%）",
   totalQuantity: "申请总数量",
   grantQuantityPerClaim: "单次发放数量",
   dailyClaimLimit: "每日领取上限",
+  claimWindow: "领取时间",
+  useWindow: "使用时间",
   expectedClaimRate: "预计领取率",
   expectedUseRate: "预计使用率",
   platformBearingRatio: "平台承担比例",
-  estimatedGmvYuan: "预计成交额",
+  estimatedGmvYuan: "预计成交额（元）",
   claimRule: "领取规则",
   allowGift: "是否允许转赠",
   promotionMode: "推广方式",
+  publicPromotionChannels: "公开推广渠道",
   overDeduction: "是否超扣",
+  overDeductionReason: "超扣原因",
 };
+
+const labels = couponFieldLabels;
 
 const positiveNumberKeys = new Set<CouponFieldKey>([
   "thresholdYuan",
@@ -64,12 +76,7 @@ function text(value: unknown): string {
 function numeric(value: unknown): number | undefined {
   if (typeof value === "number")
     return Number.isFinite(value) ? value : undefined;
-  const parsed = Number(
-    text(value)
-      .replace(/[,，\s]/g, "")
-      .replace(/[元张次]$/, ""),
-  );
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseFlexibleNumber(text(value));
 }
 
 export function normalizeCouponOwnerInputs(

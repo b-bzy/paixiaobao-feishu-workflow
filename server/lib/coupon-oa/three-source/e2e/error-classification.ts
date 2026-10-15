@@ -1,9 +1,20 @@
+import { RegularFullReductionFieldError } from "../recognition";
+import type { CouponFieldKey } from "../types";
+
 export interface E2eFailureResult {
   stage: "intake" | "workbook" | "recognition" | "authorization" | "unknown";
   code: string;
   userMessage: string;
   retryable: boolean;
 }
+
+/** Structured field failures map by key before any message matching. */
+const fieldIssueCodes: Partial<Record<CouponFieldKey, string>> = {
+  activityName: "ACTIVITY_NAME_CONFIRMATION_REQUIRED",
+  activityBackground: "ACTIVITY_BACKGROUND_CONFIRMATION_REQUIRED",
+  activityStartAt: "START_DATE_REQUIRED",
+  activityEndAt: "END_DATE_REQUIRED",
+};
 
 const classifications: Array<{
   pattern: RegExp;
@@ -178,6 +189,19 @@ const classifications: Array<{
 ];
 
 export function classifyE2eFailure(error: unknown): E2eFailureResult {
+  if (error instanceof RegularFullReductionFieldError) {
+    for (const issue of error.fieldIssues) {
+      const code = fieldIssueCodes[issue.key];
+      if (code) {
+        return {
+          stage: "recognition",
+          code,
+          userMessage: issue.message,
+          retryable: false,
+        };
+      }
+    }
+  }
   const message = error instanceof Error ? error.message : "";
   return (
     classifications.find((item) => item.pattern.test(message))?.result ?? {

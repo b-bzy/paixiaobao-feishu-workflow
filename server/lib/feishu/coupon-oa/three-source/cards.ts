@@ -5,6 +5,7 @@ import type {
   CouponFieldKey,
 } from "../../../coupon-oa/three-source/types";
 import type { FeishuCard } from "../../expense-poc";
+import { buildCouponThreeSourceRevisionedActionName } from "./action-name";
 import type { FrozenThreeSourceArtifact } from "./handoff";
 import { getCouponThreeSourcePreviewWebBaseUrl } from "./pilot-config";
 import type {
@@ -428,6 +429,44 @@ function ownerDefaultValue(
   return undefined;
 }
 
+// Feishu input components accept max_length up to 1,000 (component docs);
+// prefill above this budget is DROPPED, never truncated — default_value is
+// submitted as-is into the confirmed owner values and would silently alter
+// business data on its way to the OA prefill. Oversize fields are surfaced
+// in a notice and stay editable for manual entry.
+export const CARD_PREFILL_MAX_LENGTH = 800;
+const FIELD_DISPLAY_MAX_LENGTH = 200;
+const OVERSIZE_PREFILL_BASE_KEYS = [
+  "overDeductionReason",
+  "activityName",
+  "activityBackground",
+  "activityStartAt",
+  "activityEndAt",
+] as const satisfies readonly CouponFieldKey[];
+
+function prefillOrDefault(
+  draft: CouponThreeSourcePilotDraft,
+  key: CouponFieldKey,
+): string | undefined {
+  const value = ownerDefaultValue(draft, key);
+  return value !== undefined && value.length <= CARD_PREFILL_MAX_LENGTH
+    ? value
+    : undefined;
+}
+
+function isOversizePrefill(
+  draft: CouponThreeSourcePilotDraft,
+  key: CouponFieldKey,
+): boolean {
+  return (ownerDefaultValue(draft, key)?.length ?? 0) > CARD_PREFILL_MAX_LENGTH;
+}
+
+function clampDisplayText(text: string): string {
+  return text.length > FIELD_DISPLAY_MAX_LENGTH
+    ? `${text.slice(0, FIELD_DISPLAY_MAX_LENGTH)}…`
+    : text;
+}
+
 function missingOwnerFields(
   recognition: StoredWorkbookRecognition | undefined,
 ): CouponFieldKey[] {
@@ -532,13 +571,32 @@ export function buildCouponThreeSourceMappingCard(
           candidate.origin === "ai_inferred" || candidate.confidence < 0.85,
       ) ?? [])
     : [];
-  const fieldsForOwnerReview = [
+  const ownerReviewBaseKeys = [
     ...new Set([
       ...missingOwnerFields(coupon),
       ...reviewAiFields.map((candidate) => candidate.key),
       ...validationIssueFieldKeys(draft.validationIssues),
     ]),
   ];
+  const oversizePrefillKeys = [
+    ...new Set([
+      ...OVERSIZE_PREFILL_BASE_KEYS,
+      ...ownerReviewBaseKeys,
+      ...optionalOwnerSupplementKeys,
+    ]),
+  ].filter((key) => isOversizePrefill(draft, key));
+  const fieldsForOwnerReview = [
+    ...new Set([...ownerReviewBaseKeys, ...oversizePrefillKeys]),
+  ];
+  const supplementRecognition = draft.supplementRecognition;
+  const supplementPrefill =
+    supplementRecognition?.text &&
+    supplementRecognition.kind !== "form_repair" &&
+    supplementRecognition.text.length <= CARD_PREFILL_MAX_LENGTH
+      ? supplementRecognition.text
+      : undefined;
+  const supplementPrefillOversize =
+    (supplementRecognition?.text?.length ?? 0) > CARD_PREFILL_MAX_LENGTH;
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
@@ -635,6 +693,23 @@ export function buildCouponThreeSourceMappingCard(
           },
         ]
       : []),
+    ...(oversizePrefillKeys.length || supplementPrefillOversize
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              "**以下内容源值过长，已清空预填，请手动填写：**",
+              ...oversizePrefillKeys.map(
+                (key) =>
+                  `- ${fieldLabels[key] ?? "业务信息"}（源值超过 ${CARD_PREFILL_MAX_LENGTH} 字符）`,
+              ),
+              ...(supplementPrefillOversize
+                ? [`- 补充说明（原文超过 ${CARD_PREFILL_MAX_LENGTH} 字符）`]
+                : []),
+            ].join("\n"),
+          },
+        ]
+      : []),
     ...(reviewAiFields.length
       ? [
           {
@@ -643,7 +718,7 @@ export function buildCouponThreeSourceMappingCard(
               "**以下内容为系统推测或识别不确定，请务必检查：**",
               ...reviewAiFields.map(
                 (candidate) =>
-                  `- ${fieldLabels[candidate.key] ?? "业务信息"}：${ownerFieldDisplayValue(candidate.key, candidate.value ?? "待确认")}`,
+                  `- ${fieldLabels[candidate.key] ?? "业务信息"}：${clampDisplayText(ownerFieldDisplayValue(candidate.key, candidate.value ?? "待确认"))}`,
               ),
             ].join("\n"),
           },
@@ -662,14 +737,15 @@ export function buildCouponThreeSourceMappingCard(
           rows: 4,
           required: false,
           width: "fill",
-          ...(draft.supplementRecognition?.text &&
-          draft.supplementRecognition.kind !== "form_repair"
-            ? { default_value: draft.supplementRecognition.text }
-            : {}),
+          ...(supplementPrefill ? { default_value: supplementPrefill } : {}),
         },
         {
           tag: "button",
-          name: `coupon_three_source_supplement_recognition_start:${draft.recordId}:${draft.task.revision}`,
+          name: buildCouponThreeSourceRevisionedActionName({
+            action: "coupon_three_source_supplement_recognition_start",
+            recordId: draft.recordId,
+            revision: draft.task.revision,
+          }),
           text: plainText("识别补充说明并回填字段"),
           type: "default",
           width: "fill",
@@ -713,9 +789,9 @@ export function buildCouponThreeSourceMappingCard(
           rows: 3,
           required: false,
           width: "fill",
-          ...(ownerDefaultValue(draft, "overDeductionReason")
+          ...(prefillOrDefault(draft, "overDeductionReason")
             ? {
-                default_value: ownerDefaultValue(draft, "overDeductionReason"),
+                default_value: prefillOrDefault(draft, "overDeductionReason"),
               }
             : {}),
         },
@@ -762,8 +838,8 @@ export function buildCouponThreeSourceMappingCard(
           name: "owner_activityName",
           label: plainText("活动名称"),
           input_type: "text",
-          ...(ownerDefaultValue(draft, "activityName")
-            ? { default_value: ownerDefaultValue(draft, "activityName") }
+          ...(prefillOrDefault(draft, "activityName")
+            ? { default_value: prefillOrDefault(draft, "activityName") }
             : {}),
           required: true,
           width: "fill",
@@ -774,9 +850,9 @@ export function buildCouponThreeSourceMappingCard(
           label: plainText("活动背景"),
           input_type: "multiline_text",
           rows: 3,
-          ...(ownerDefaultValue(draft, "activityBackground")
+          ...(prefillOrDefault(draft, "activityBackground")
             ? {
-                default_value: ownerDefaultValue(draft, "activityBackground"),
+                default_value: prefillOrDefault(draft, "activityBackground"),
               }
             : {}),
           required: true,
@@ -787,8 +863,8 @@ export function buildCouponThreeSourceMappingCard(
           name: "owner_activityStartAt",
           label: plainText("活动开始日期（YYYY-MM-DD）"),
           input_type: "text",
-          ...(ownerDefaultValue(draft, "activityStartAt")
-            ? { default_value: ownerDefaultValue(draft, "activityStartAt") }
+          ...(prefillOrDefault(draft, "activityStartAt")
+            ? { default_value: prefillOrDefault(draft, "activityStartAt") }
             : {}),
           required: true,
           width: "fill",
@@ -798,8 +874,8 @@ export function buildCouponThreeSourceMappingCard(
           name: "owner_activityEndAt",
           label: plainText("活动结束日期（YYYY-MM-DD）"),
           input_type: "text",
-          ...(ownerDefaultValue(draft, "activityEndAt")
-            ? { default_value: ownerDefaultValue(draft, "activityEndAt") }
+          ...(prefillOrDefault(draft, "activityEndAt")
+            ? { default_value: prefillOrDefault(draft, "activityEndAt") }
             : {}),
           required: true,
           width: "fill",
@@ -854,8 +930,8 @@ export function buildCouponThreeSourceMappingCard(
                   input_type:
                     key === "activityBackground" ? "multiline_text" : "text",
                   ...(key === "activityBackground" ? { rows: 3 } : {}),
-                  ...(ownerDefaultValue(draft, key)
-                    ? { default_value: ownerDefaultValue(draft, key) }
+                  ...(prefillOrDefault(draft, key)
+                    ? { default_value: prefillOrDefault(draft, key) }
                     : {}),
                   required: true,
                   width: "fill",
@@ -876,8 +952,8 @@ export function buildCouponThreeSourceMappingCard(
             name: `owner_${key}`,
             label: plainText(fieldLabels[key] ?? "按业务条件补充"),
             input_type: "text",
-            ...(ownerDefaultValue(draft, key)
-              ? { default_value: ownerDefaultValue(draft, key) }
+            ...(prefillOrDefault(draft, key)
+              ? { default_value: prefillOrDefault(draft, key) }
               : {}),
             required: false,
             width: "fill",
@@ -962,7 +1038,13 @@ export function buildCouponThreeSourceMappingCard(
           ? [
               {
                 tag: "button",
-                name: `coupon_three_source_mapping_confirm:${draft.recordId}:${draft.task.revision}:${computeCouponThreeSourceMappingContextHash(draft)}`,
+                name: buildCouponThreeSourceRevisionedActionName({
+                  action: "coupon_three_source_mapping_confirm",
+                  recordId: draft.recordId,
+                  revision: draft.task.revision,
+                  mappingContextHash:
+                    computeCouponThreeSourceMappingContextHash(draft),
+                }),
                 text: plainText("确认信息并生成标准附件"),
                 type: "primary_filled",
                 width: "fill",

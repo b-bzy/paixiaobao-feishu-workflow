@@ -299,10 +299,54 @@ const selected = only
 console.log(
   `构建 ${selected.length} 张卡片(干跑仅验证构建器不抛错;--send 真发并撤回)…\n`,
 );
+
+// 本地 schema 上限静态检查(飞书是唯一裁判,但已实测的上限先在干跑拦住):
+// - 组件 name > 100:ErrCode 11310(2026-10-16 事故,64 位哈希后缀);
+// - input default_value > 800:预填预算(cards.ts CARD_PREFILL_MAX_LENGTH),
+//   超限值应被丢弃而非截断流入提交值。
+const NAME_LIMIT = 100;
+const DEFAULT_VALUE_LIMIT = 800;
+function collectLimitViolations(node, path, violations) {
+  if (Array.isArray(node)) {
+    node.forEach((item, index) =>
+      collectLimitViolations(item, `${path}[${index}]`, violations),
+    );
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "name" && typeof value === "string" && value.length > NAME_LIMIT) {
+      violations.push(
+        `${path}.name ${value.length} > ${NAME_LIMIT}: ${value.slice(0, 72)}`,
+      );
+    }
+    if (
+      key === "default_value" &&
+      typeof value === "string" &&
+      value.length > DEFAULT_VALUE_LIMIT
+    ) {
+      violations.push(
+        `${path}.default_value ${value.length} > ${DEFAULT_VALUE_LIMIT}`,
+      );
+    }
+    collectLimitViolations(value, `${path}.${key}`, violations);
+  }
+}
+
 const results = [];
 for (const [name, build] of selected) {
   try {
     const card = build();
+    const limitViolations = [];
+    collectLimitViolations(card, "card", limitViolations);
+    if (limitViolations.length > 0) {
+      results.push({
+        name,
+        ok: false,
+        error: `本地长度上限检查失败:\n  ${limitViolations.join("\n  ")}`,
+      });
+      continue;
+    }
     if (!liveSend) {
       results.push({ name, ok: true, dryRun: true });
       continue;

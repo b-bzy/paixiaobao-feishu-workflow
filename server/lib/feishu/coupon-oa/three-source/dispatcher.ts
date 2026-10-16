@@ -44,6 +44,10 @@ import { listActiveCouponExcelPilotDrafts } from "../excel-pilot-store";
 import { confirmCouponOaDraft } from "../submit-service";
 import { isUserCancelableCouponOaDraft } from "../workflow-lifecycle";
 import {
+  parseCouponThreeSourceRevisionedAction,
+  shortCouponThreeSourceMappingContextHash,
+} from "./action-name";
+import {
   buildCouponThreeSourceClearedCard,
   buildCouponThreeSourceCompletedCard,
   buildCouponThreeSourceErrorCard,
@@ -937,14 +941,15 @@ export function createCouponThreeSourceDispatcher(
     form?: Record<string, unknown>;
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
-    const revisionedAction = input.action.match(
-      /^(coupon_three_source_(?:mapping_confirm|supplement_recognition_start)):([^:]+):(\d+)(?::([a-f0-9]{64}))?$/,
+    const revisionedAction = parseCouponThreeSourceRevisionedAction(
+      input.action,
     );
-    const action = revisionedAction?.[1] ?? input.action;
+    const action = revisionedAction?.action ?? input.action;
     const value = input.value ?? {};
-    const recordId = revisionedAction?.[2] ?? stringValue(value.pilotRecordId);
+    const recordId =
+      revisionedAction?.recordId ?? stringValue(value.pilotRecordId);
     const revision = revisionedAction
-      ? Number(revisionedAction[3])
+      ? revisionedAction.revision
       : parseRevision(value.revision);
     if (!action.startsWith("coupon_three_source_")) return { handled: false };
     if (!recordId || !revision) {
@@ -1011,12 +1016,14 @@ export function createCouponThreeSourceDispatcher(
       if (!statelessAction && draft.task.revision !== revision) {
         throw new Error("当前三源提报版本已变化，请使用最新卡片");
       }
-      const submittedContextHash = revisionedAction?.[4];
+      const submittedContextHash = revisionedAction?.mappingContextHash;
       if (
         action === "coupon_three_source_mapping_confirm" &&
         submittedContextHash &&
         submittedContextHash !==
-          computeCouponThreeSourceMappingContextHash(draft)
+          shortCouponThreeSourceMappingContextHash(
+            computeCouponThreeSourceMappingContextHash(draft),
+          )
       ) {
         throw new Error("当前材料或识别结果已变化，请使用最新卡片");
       }

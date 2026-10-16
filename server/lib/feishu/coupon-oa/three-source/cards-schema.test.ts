@@ -82,9 +82,9 @@ function collectViolations(
   violations: string[],
 ): void {
   if (Array.isArray(node)) {
-    node.forEach((item, index) =>
-      collectViolations(item, `${path}[${index}]`, violations),
-    );
+    node.forEach((item, index) => {
+      collectViolations(item, `${path}[${index}]`, violations);
+    });
     return;
   }
   if (node === null || typeof node !== "object") return;
@@ -96,6 +96,15 @@ function collectViolations(
       if (!whitelist.has(key)) {
         violations.push(`${path}(${tag}): unknown property "${key}"`);
       }
+    }
+    // Feishu rejects the whole card when any component name exceeds 100
+    // characters (ErrCode 11310, live-verified 2026-10-16 — a 64-hex context
+    // hash suffix bricked every mapping confirm button).
+    const componentName = record.name;
+    if (typeof componentName === "string" && componentName.length > 100) {
+      violations.push(
+        `${path}(${tag}): name length ${componentName.length} exceeds Feishu limit 100`,
+      );
     }
   } else if (tag === undefined) {
     // Structural objects without a tag (card root, config, header, body,
@@ -156,7 +165,10 @@ function baseDraft(): CouponThreeSourcePilotDraft {
   };
   task.blacklistStatus = "absent_confirmed";
   return {
-    recordId: "rec-schema",
+    // Hostile-length record id (Feishu record ids observed ~16 chars): the
+    // action-name codec must keep every button name within the 100-char
+    // limit even at this bound.
+    recordId: `rec-schema-${"0".repeat(19)}`,
     pilotId: "CTS-schema",
     ownerOpenId: "ou_owner",
     task,
@@ -172,6 +184,11 @@ function baseDraft(): CouponThreeSourcePilotDraft {
 const fullFeatureDraft = (): CouponThreeSourcePilotDraft => {
   const draft = baseDraft();
   draft.task.blacklistStatus = "absent_pending_confirmation";
+  // Hostile inputs: a revision with extra digits, and 900-character
+  // Excel-derived values that must be dropped from prefill (never
+  // truncated) with a manual-entry notice. Revision stays small enough that
+  // the action name remains constructible at the hostile record-id bound.
+  draft.task.revision = 42;
   draft.task.confirmedCalcImages = [
     {
       artifactId: "calc-1",
@@ -234,6 +251,19 @@ const fullFeatureDraft = (): CouponThreeSourcePilotDraft => {
           reasons: [],
         },
       ],
+      claimRule: [
+        {
+          id: "claim-rule-1",
+          key: "claimRule",
+          score: 1,
+          header: "领取规则",
+          headerRow: 1,
+          column: "K",
+          sheetName: "Sheet1",
+          sampleValues: ["活动期间每天可领一次".padEnd(900, "长")],
+          reasons: [],
+        },
+      ],
     },
     listCandidates: [],
     issues: [],
@@ -259,10 +289,12 @@ const fullFeatureDraft = (): CouponThreeSourcePilotDraft => {
     overDeduction: "是",
     overDeductionReason: "历史遗留扣点",
     channels: ["京东", "拍拍"],
+    activityBackground: "背".repeat(900),
   };
   draft.failureReason = "上次确认未完成：示例原因";
   draft.validationIssues = [
     "输入校验[totalQuantity]：「申请总数量」的取值无法识别为数字，请修改后重新提交",
+    "输入校验[claimRule]：「领取规则」的取值无法识别，请修改后重新提交",
     "补充说明识别提示：示例提示",
   ];
   return draft;
@@ -346,6 +378,62 @@ describe("Feishu card schema audit across the pilot chain", () => {
       ],
       "mapping cards",
     );
+  });
+
+  it("revisioned action names stay within the Feishu name limit", () => {
+    for (const build of [baseDraft, fullFeatureDraft]) {
+      const names: string[] = [];
+      const collectNames = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          node.forEach(collectNames);
+          return;
+        }
+        if (node && typeof node === "object") {
+          for (const [key, value] of Object.entries(node)) {
+            if (key === "name" && typeof value === "string") {
+              names.push(value);
+            } else {
+              collectNames(value);
+            }
+          }
+        }
+      };
+      collectNames(buildCouponThreeSourceMappingCard(build()));
+      const confirm = names.find((name) =>
+        name.startsWith("coupon_three_source_mapping_confirm:"),
+      );
+      expect(confirm).toMatch(
+        /^coupon_three_source_mapping_confirm:[^:]+:\d+:[a-f0-9]{24}$/,
+      );
+      for (const name of names) {
+        expect(name.length).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it("fails closed in the builder when the name budget is exhausted", () => {
+    // 30-char record id + 10-digit revision exceeds the 100-char budget:
+    // the codec must refuse to build rather than ship a card Feishu will
+    // reject (and burn five effect retries on).
+    const draft = fullFeatureDraft();
+    draft.task.revision = 1234567890;
+    expect(() => buildCouponThreeSourceMappingCard(draft)).toThrow(
+      "100 字符上限",
+    );
+  });
+
+  it("drops oversize prefills with a manual-entry notice instead of truncating", () => {
+    const content = JSON.stringify(
+      buildCouponThreeSourceMappingCard(fullFeatureDraft()),
+    );
+    expect(content).toContain("已清空预填");
+    expect(content).toContain("领取规则");
+    for (const match of content.matchAll(
+      /"default_value":"((?:[^"\\]|\\.)*)"/g,
+    )) {
+      const value = JSON.parse(`"${match[1]}"`) as string;
+      expect(value.length).toBeLessThanOrEqual(800);
+    }
   });
 
   it("preview and OA send cards stay clean", () => {
@@ -458,5 +546,24 @@ describe("Feishu card schema audit across the pilot chain", () => {
     const violations: string[] = [];
     collectViolations(badCard, "card", violations);
     expect(violations.join("\n")).toContain('unknown property "label"');
+  });
+
+  it("the walker itself rejects an over-long component name", () => {
+    const badCard = {
+      ...buildCouponThreeSourceIntakeCard(),
+      body: {
+        direction: "vertical",
+        elements: [
+          {
+            tag: "input",
+            name: "x".repeat(101),
+            label: { tag: "plain_text", content: "超长" },
+          } as never,
+        ],
+      },
+    } as unknown as FeishuCard;
+    const violations: string[] = [];
+    collectViolations(badCard, "card", violations);
+    expect(violations.join("\n")).toContain("exceeds Feishu limit 100");
   });
 });

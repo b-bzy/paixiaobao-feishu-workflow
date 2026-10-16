@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { RegularFullReductionFieldError } from "../../../coupon-oa/three-source/recognition";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
+import { buildCouponThreeSourceRevisionedActionName } from "./action-name";
 import {
   type CouponThreeSourceDispatcherDependencies,
   createCouponThreeSourceDispatcher,
 } from "./dispatcher";
 import type { CouponThreeSourcePilotService } from "./service";
-import type { CouponThreeSourcePilotDraft } from "./store";
+import {
+  type CouponThreeSourcePilotDraft,
+  computeCouponThreeSourceMappingContextHash,
+} from "./store";
 
 function draft(): CouponThreeSourcePilotDraft {
   return {
@@ -118,6 +122,127 @@ describe("three-source Bot dispatcher", () => {
     expect(JSON.stringify(updateCard.mock.calls[0]?.[1])).toContain(
       "标准附件生成中",
     );
+  });
+
+  it("accepts a mapping confirm name carrying the 24-hex wire context hash", async () => {
+    const current = {
+      ...draft(),
+      task: { ...draft().task, revision: 5 },
+      mappingCardDelivery: {
+        messageId: "om-mapping",
+        revision: 5,
+      },
+    };
+    const claimAction = vi.fn(async () => ({
+      state: "in_progress" as const,
+      effectId: "effect-existing",
+    }));
+    const built = dependencies({
+      activeThreeSource: [current],
+      claimAction,
+    });
+    built.values.updateCard = vi.fn(async () => undefined);
+    const dispatcher = createCouponThreeSourceDispatcher(built.values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: buildCouponThreeSourceRevisionedActionName({
+          action: "coupon_three_source_mapping_confirm",
+          recordId: current.recordId,
+          revision: 5,
+          mappingContextHash:
+            computeCouponThreeSourceMappingContextHash(current),
+        }),
+        form: {},
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source action in_progress",
+    });
+  });
+
+  it("rejects a mapping confirm whose wire context hash no longer matches", async () => {
+    const current = { ...draft(), task: { ...draft().task, revision: 5 } };
+    const updateSelections = vi.fn();
+    const built = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(built.values);
+    const name = buildCouponThreeSourceRevisionedActionName({
+      action: "coupon_three_source_mapping_confirm",
+      recordId: current.recordId,
+      revision: 5,
+      mappingContextHash: computeCouponThreeSourceMappingContextHash(current),
+    });
+    const tampered = `${name.slice(0, -1)}${name.endsWith("0") ? "1" : "0"}`;
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: tampered,
+        form: {},
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "当前材料或识别结果已变化，请使用最新卡片",
+    });
+    expect(updateSelections).not.toHaveBeenCalled();
+  });
+
+  it("still accepts legacy mapping confirm names without a hash", async () => {
+    const current = {
+      ...draft(),
+      task: { ...draft().task, revision: 5 },
+      mappingCardDelivery: {
+        messageId: "om-mapping",
+        revision: 5,
+      },
+    };
+    const claimAction = vi.fn(async () => ({
+      state: "in_progress" as const,
+      effectId: "effect-existing",
+    }));
+    const built = dependencies({
+      activeThreeSource: [current],
+      claimAction,
+    });
+    built.values.updateCard = vi.fn(async () => undefined);
+    const dispatcher = createCouponThreeSourceDispatcher(built.values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_mapping_confirm:rec-three-source:5",
+        form: {},
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source action in_progress",
+    });
+  });
+
+  it("rejects the retired 64-hex name format as an invalid callback", async () => {
+    const current = { ...draft(), task: { ...draft().task, revision: 5 } };
+    const updateSelections = vi.fn();
+    const built = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(built.values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5:${"a".repeat(64)}`,
+        form: {},
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: "Coupon three-source callback is invalid",
+    });
+    expect(updateSelections).not.toHaveBeenCalled();
   });
 
   it("goes straight from final confirmation to the merged send card", async () => {

@@ -63,4 +63,49 @@ describe("coupon owner input normalization", () => {
     ]);
     expect(JSON.stringify(result)).not.toContain("[object Object]");
   });
+
+  it("drops oversize free-text values instead of truncating them", () => {
+    const result = normalizeCouponOwnerInputs({
+      activityName: "名".repeat(101),
+      activityBackground: "背".repeat(501),
+      claimRule: "规".repeat(501),
+      overDeductionReason: "原".repeat(201),
+      channels: ["京东"],
+    });
+    expect(result.values).toEqual({ channels: ["京东"] });
+    expect(result.issues.map((item) => [item.key, item.message])).toEqual([
+      [
+        "activityName",
+        "活动名称不能超过 100 字符（当前 101），请精简后重新填写",
+      ],
+      [
+        "activityBackground",
+        "活动背景不能超过 500 字符（当前 501），请精简后重新填写",
+      ],
+      ["claimRule", "领取规则不能超过 500 字符（当前 501），请精简后重新填写"],
+      [
+        "overDeductionReason",
+        "超扣原因不能超过 200 字符（当前 201），请精简后重新填写",
+      ],
+    ]);
+    for (const item of result.issues) {
+      expect(item.input.length).toBeLessThanOrEqual(51);
+    }
+  });
+
+  it("keeps free-text values at the exact limit", () => {
+    const result = normalizeCouponOwnerInputs({
+      activityName: "名".repeat(100),
+      activityBackground: "背".repeat(500),
+      claimRule: "规".repeat(500),
+      overDeductionReason: "原".repeat(200),
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.values).toEqual({
+      activityName: "名".repeat(100),
+      activityBackground: "背".repeat(500),
+      claimRule: "规".repeat(500),
+      overDeductionReason: "原".repeat(200),
+    });
+  });
 });

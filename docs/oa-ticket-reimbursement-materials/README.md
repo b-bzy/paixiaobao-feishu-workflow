@@ -31,7 +31,7 @@
 | `OA优惠券填报` | 收集结构化字段与材料，形成系统草稿 | `draft-only` 先行；原生提交仅可能在后续 Gate 全部通过时，由当前 owner 在当前 revision 明确确认后进行。 |
 | `优惠券Excel试点` | 生成两份受控 Excel 并交接系统草稿 | 流程自身绝不自动创建原生 OA；只消费冻结且已校验的产物。 |
 
-详细的路线合同以 [MVP PRD v1.4](current/product/coupon-oa-mvp-prd-v1.4.md) 为准；P1-1 特有字段、模板和验收以 [P1 Excel 试点 PRD v1.5](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 为准。
+详细的路线合同以 [MVP PRD v1.5](current/product/coupon-oa-mvp-prd-v1.5.md) 为准；P1-1 特有字段、模板和验收以 [P1 Excel 试点 PRD v1.5](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 为准。
 
 ## Claude Code Skill 与本库
 

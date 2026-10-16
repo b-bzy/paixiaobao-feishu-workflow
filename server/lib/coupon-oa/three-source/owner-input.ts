@@ -54,6 +54,19 @@ const ratioKeys = new Set<CouponFieldKey>([
   "platformBearingRatio",
 ]);
 
+// Free-text fields are the only inputs where unbounded prose can enter the
+// confirmed owner values (numeric/enum/date keys are bounded by their own
+// parsers). Oversize values are DROPPED — never truncated — and surface
+// through the standard「输入校验[key]」channel as an editable card input
+// (user-visible contract, PRD v1.5 §7).
+const freeTextMaxLengths: Partial<Record<CouponFieldKey, number>> = {
+  activityName: 100,
+  activityBackground: 500,
+  claimRule: 500,
+  overDeductionReason: 200,
+};
+const OVERSIZE_INPUT_PREVIEW_LENGTH = 50;
+
 function issue(
   key: CouponFieldKey,
   value: unknown,
@@ -151,6 +164,27 @@ export function normalizeCouponOwnerInputs(
       if (ratio !== undefined && ratio >= 0 && ratio <= 1)
         normalized[key] = ratio;
       else issues.push(issue(key, value, `${labels[key]}请输入 0% 至 100%`));
+      continue;
+    }
+    const maxLength = freeTextMaxLengths[key];
+    if (maxLength !== undefined) {
+      const candidateText = Array.isArray(value)
+        ? value
+            .map((item) => text(item))
+            .filter(Boolean)
+            .join("、")
+        : text(value);
+      if (candidateText.length > maxLength) {
+        delete normalized[key];
+        issues.push({
+          key,
+          label: labels[key] ?? "业务字段",
+          input: `${candidateText.slice(0, OVERSIZE_INPUT_PREVIEW_LENGTH)}…`,
+          message: `${labels[key]}不能超过 ${maxLength} 字符（当前 ${candidateText.length}），请精简后重新填写`,
+        });
+        continue;
+      }
+      normalized[key] = candidateText;
       continue;
     }
     normalized[key] = Array.isArray(value)

@@ -61,6 +61,8 @@ import {
   buildCouponThreeSourceRoleCard,
   buildCouponThreeSourceRuntimeBlockedCard,
   buildCouponThreeSourceUnavailableCard,
+  mappingCardEnumDefaults,
+  ownerDefaultValue,
 } from "./cards";
 import {
   isCouponThreeSourceClearInvocation,
@@ -380,13 +382,26 @@ function mappingSelections(
   );
   const submittedOwnerFieldValues = Object.fromEntries(
     Object.entries(form).flatMap(([name, value]) => {
-      const fieldValue = stringValue(value);
+      // 选择组件可能提交数组（多选）；合并为顿号串，领域层按分隔符还原数组。
+      const fieldValue =
+        stringValue(value) ??
+        (Array.isArray(value)
+          ? value
+              .map((item) => String(item).trim())
+              .filter(Boolean)
+              .join("、") || undefined
+          : undefined);
       return name.startsWith("owner_") && fieldValue
         ? [[name.slice("owner_".length) as CouponFieldKey, fieldValue]]
         : [];
     }),
   ) as Partial<Record<CouponFieldKey, unknown>>;
-  const ownerInput = normalizeCouponOwnerInputs(submittedOwnerFieldValues);
+  const ownerInput = normalizeCouponOwnerInputs({
+    // 枚举字段未选择时套卡片声明的服务端默认（仅修正区字段，见函数注释）；
+    // 提交值存在时以提交值为准。
+    ...mappingCardEnumDefaults(draft),
+    ...submittedOwnerFieldValues,
+  });
   const couponType = stringValue(form.couponType);
   if (couponType && couponType !== "regular_full_reduction") {
     throw new Error("当前 P0 只支持常规满减券");
@@ -470,7 +485,7 @@ const couponOwnerFieldLabels: Partial<Record<CouponFieldKey, string>> = {
  * required fields are rejected here: malformed inputs (e.g. "9月30日") must
  * still flow into the AI form-repair path, which can fix them.
  */
-function assertMappingFormReady(
+export function assertMappingFormReady(
   selections: { ownerFieldValues?: Partial<Record<CouponFieldKey, unknown>> },
   draft: CouponThreeSourcePilotDraft,
 ): { ownerFieldValues: Partial<Record<CouponFieldKey, unknown>> } {
@@ -499,6 +514,26 @@ function assertMappingFormReady(
     !String(merged.overDeductionReason ?? "").trim()
   ) {
     throw new Error("选择「是，需要填写超扣原因」后，超扣原因为必填");
+  }
+  // 与领域规则镜像（calculation.ts superRefine）的表单预检：合并提交值后
+  // 的生效推广途径决定公开推广渠道必填/禁填，失败留在原卡可改，不产生
+  // revision 死局。判定值级联复用 cards 的 ownerDefaultValue 单一来源。
+  const effectivePromotionMode =
+    stringValue(merged.promotionMode) ??
+    ownerDefaultValue(draft, "promotionMode");
+  const channelsRaw = merged.publicPromotionChannels;
+  const channels = (
+    Array.isArray(channelsRaw)
+      ? channelsRaw.join("、")
+      : String(channelsRaw ?? "")
+  ).trim();
+  if (effectivePromotionMode === "公开自动推广" && !channels) {
+    throw new Error(
+      "推广途径为「公开自动推广」时，公开推广渠道为必填（全网推广、单品页购物车、领券中心、公开券池）",
+    );
+  }
+  if (effectivePromotionMode === "非公开推广" && channels) {
+    throw new Error("推广途径为非公开推广时，无需填写公开推广渠道");
   }
   const ownerFieldValues = {
     ...(selections.ownerFieldValues ?? {}),
@@ -594,7 +629,32 @@ async function restoreMappingFormAfterFailure(input: {
     .catch(() => undefined);
   await input.dependencies
     .deliverMappingCard({ draft: recorded ?? reverted })
-    .catch(() => undefined);
+    .catch(async (deliveryError: unknown) => {
+      // 恢复卡投递失败不再静默（11310 事故的死局成因）：降级一条纯文字
+      // 报错（不走表单模板，不可能触发 schema 拒收），并留结构化日志。
+      console.warn(
+        JSON.stringify({
+          event: "mapping_card_delivery_failed",
+          draft_id: reverted.pilotId,
+          revision: reverted.task.revision,
+          reason:
+            deliveryError instanceof Error
+              ? deliveryError.message
+              : String(deliveryError),
+        }),
+      );
+      await input.dependencies.sendCard(
+        input.openId,
+        buildCouponThreeSourceErrorCard({
+          message: [
+            `本次确认未通过：${failureDetail(input.error).message}`,
+            "",
+            "表单卡恢复失败，请重发 /OA优惠券提报 获取最新表单卡；已填内容已保留。",
+          ].join("\n"),
+        }),
+        undefined,
+      );
+    });
 }
 
 /**

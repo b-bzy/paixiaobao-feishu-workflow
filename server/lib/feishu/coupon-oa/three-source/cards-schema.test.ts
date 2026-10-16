@@ -139,7 +139,7 @@ function collectViolations(
   }
 }
 
-export function assertFeishuCardSchema(cards: unknown, label: string): void {
+function assertFeishuCardSchema(cards: unknown, label: string): void {
   const violations: string[] = [];
   collectViolations(cards, "card", violations);
   expect(violations, `${label}:\n${violations.join("\n")}`).toEqual([]);
@@ -565,5 +565,97 @@ describe("Feishu card schema audit across the pilot chain", () => {
     const violations: string[] = [];
     collectViolations(badCard, "card", violations);
     expect(violations.join("\n")).toContain("exceeds Feishu limit 100");
+  });
+});
+
+describe("form component name uniqueness (11310 regression)", () => {
+  const incidentDraft = (): CouponThreeSourcePilotDraft => {
+    const draft = baseDraft();
+    draft.recognitions.couponTable = {
+      source: {
+        messageId: "om-source",
+        fileKey: "file-key",
+        fileName: "配券表.xlsx",
+        bytes: 10,
+        sha256: "a".repeat(64),
+      },
+      sourceHash: "a".repeat(64),
+      roleCandidates: [],
+      couponFieldCandidates: {
+        promotionMode: [
+          {
+            id: "pm-1",
+            key: "promotionMode",
+            score: 1,
+            header: "推广途径",
+            headerRow: 1,
+            column: "V",
+            sheetName: "Sheet1",
+            sampleValues: ["公开自动推广"],
+            reasons: [],
+          },
+        ],
+        publicPromotionChannels: [
+          {
+            id: "ch-1",
+            key: "publicPromotionChannels",
+            score: 1,
+            header: "公开推广渠道",
+            headerRow: 1,
+            column: "W",
+            sheetName: "Sheet1",
+            sampleValues: ["", ""],
+            reasons: [],
+          },
+        ],
+      },
+      listCandidates: [],
+      issues: [],
+    };
+    draft.validationIssues = [
+      "输入校验[publicPromotionChannels]：公开自动推广时必须填写公开推广渠道",
+    ];
+    return draft;
+  };
+
+  it("form component names are unique within every mapping card shape", () => {
+    for (const build of [baseDraft, fullFeatureDraft, incidentDraft]) {
+      const card = buildCouponThreeSourceMappingCard(
+        build() as CouponThreeSourcePilotDraft,
+      );
+      const names: string[] = [];
+      const collect = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          node.forEach(collect);
+          return;
+        }
+        if (node && typeof node === "object") {
+          for (const [key, value] of Object.entries(node)) {
+            if (key === "name" && typeof value === "string") {
+              names.push(value);
+            } else {
+              collect(value);
+            }
+          }
+        }
+      };
+      collect(card);
+      const duplicates = names.filter(
+        (name, index) => names.indexOf(name) !== index,
+      );
+      expect(
+        duplicates,
+        `${build.name}: duplicate component names ${duplicates.join(",")}`,
+      ).toEqual([]);
+    }
+  });
+
+  it("incident shape renders public promotion channels exactly once", () => {
+    const rendered = JSON.stringify(
+      buildCouponThreeSourceMappingCard(incidentDraft()),
+    );
+    // 2026-10-16 事故复现形态：校验问题命中 + 列头在但值空，两区同时命中
+    // 时只允许出现一次（重复即飞书 11310 整卡拒收）。
+    expect(rendered.match(/owner_publicPromotionChannels/g)?.length).toBe(1);
   });
 });

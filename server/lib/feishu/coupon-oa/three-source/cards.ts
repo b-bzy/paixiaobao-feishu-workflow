@@ -336,6 +336,49 @@ const optionalOwnerSupplementKeys = [
   "publicPromotionChannels",
 ] as const satisfies readonly CouponFieldKey[];
 
+/**
+ * 封闭枚举字段的卡片选项与默认值：表单入口一律用选择组件代替自由文本，
+ * 默认值仅为可改的预选（表内合法值优先），owner 提交为准，不改写任何原值。
+ */
+const enumFieldChoices: Partial<
+  Record<
+    CouponFieldKey,
+    {
+      options: Array<{ text: string; value: string }>;
+      defaultValue?: string;
+    }
+  >
+> = {
+  claimRule: {
+    options: [
+      { text: "活动期间仅可领一次", value: "活动期间仅可领一次" },
+      { text: "活动期间每天可领一次", value: "活动期间每天可领一次" },
+    ],
+    defaultValue: "活动期间每天可领一次",
+  },
+  allowGift: {
+    options: [
+      { text: "允许", value: "允许" },
+      { text: "不允许", value: "不允许" },
+    ],
+    defaultValue: "不允许",
+  },
+  promotionMode: {
+    options: [
+      { text: "公开自动推广", value: "公开自动推广" },
+      { text: "非公开推广", value: "非公开推广" },
+    ],
+  },
+  publicPromotionChannels: {
+    options: [
+      { text: "全网推广", value: "全网推广" },
+      { text: "单品页购物车", value: "单品页购物车" },
+      { text: "领券中心", value: "领券中心" },
+      { text: "公开券池", value: "公开券池" },
+    ],
+  },
+};
+
 const fieldLabels: Partial<Record<CouponFieldKey, string>> = {
   activityName: "活动名称",
   activityBackground: "活动背景",
@@ -383,7 +426,7 @@ function ownerFieldDisplayValue(key: CouponFieldKey, value: unknown): string {
     : primitiveText(value);
 }
 
-function ownerDefaultValue(
+export function ownerDefaultValue(
   draft: CouponThreeSourcePilotDraft,
   key: CouponFieldKey,
 ): string | undefined {
@@ -549,6 +592,40 @@ function unresolvedIdentifierDimension(
   return ai && ai !== "SKU" ? ai : undefined;
 }
 
+/**
+ * 提交时对未选择枚举字段的服务端默认值：仅当该字段会进入 owner 修正区
+ * （表内缺失/非法/AI 低置信）且表内当前值不是合法选项时才给默认——绝不
+ * 覆盖合法表值。select_static 不支持 default_value（真发 200621）无法客
+ * 户端预选，默认值经此在 dispatcher 提交合并时兜底，卡片占位文案同步告知。
+ */
+export function mappingCardEnumDefaults(
+  draft: CouponThreeSourcePilotDraft,
+): Partial<Record<CouponFieldKey, string>> {
+  const coupon = draft.recognitions.couponTable;
+  const reviewAiFields = coupon?.ai?.primary
+    ? (coupon.ai.result?.fieldCandidates.filter(
+        (candidate) =>
+          candidate.origin === "ai_inferred" || candidate.confidence < 0.85,
+      ) ?? [])
+    : [];
+  const baseKeys = [
+    ...new Set([
+      ...missingOwnerFields(coupon),
+      ...reviewAiFields.map((candidate) => candidate.key),
+      ...validationIssueFieldKeys(draft.validationIssues),
+    ]),
+  ];
+  const defaults: Partial<Record<CouponFieldKey, string>> = {};
+  for (const key of baseKeys) {
+    const choices = enumFieldChoices[key];
+    if (!choices?.defaultValue) continue;
+    const current = prefillOrDefault(draft, key);
+    if (choices.options.some((option) => option.value === current)) continue;
+    defaults[key] = choices.defaultValue;
+  }
+  return defaults;
+}
+
 export function buildCouponThreeSourceMappingCard(
   draft: CouponThreeSourcePilotDraft,
 ): FeishuCard {
@@ -588,6 +665,9 @@ export function buildCouponThreeSourceMappingCard(
   const fieldsForOwnerReview = [
     ...new Set([...ownerReviewBaseKeys, ...oversizePrefillKeys]),
   ];
+  // 生效推广途径（owner 覆盖 → 文案候选 → AI 候选 → 确定性候选）：
+  // 公开自动推广 → 渠道必填；非公开推广 → 不渲染渠道；无法判定 → 可选。
+  const effectivePromotionMode = ownerDefaultValue(draft, "promotionMode");
   const supplementRecognition = draft.supplementRecognition;
   const supplementPrefill =
     supplementRecognition?.text &&
@@ -909,55 +989,98 @@ export function buildCouponThreeSourceMappingCard(
                 "overDeduction",
               ].includes(key),
           )
-          .map((key) => ({
-            ...(key === "businessMode"
-              ? {
-                  tag: "select_static",
-                  name: "owner_businessMode",
-                  placeholder: plainText("请选择业务模式"),
-                  required: true,
-                  width: "fill",
-                  options: [
-                    { text: plainText("严选"), value: "严选" },
-                    { text: plainText("寄卖"), value: "寄卖" },
-                    { text: plainText("POP"), value: "pop" },
-                  ],
+          .map((key) => {
+            const choices = enumFieldChoices[key];
+            if (choices) {
+              // select_static 不支持 default_value（真发验证 200621），
+              // 默认值由服务端在提交时对未选择字段兜底（见
+              // mappingCardEnumDefaults），卡片只用占位文案告知默认。
+              const optionalWithDefault = Boolean(choices.defaultValue);
+              const requiredChannel =
+                key === "publicPromotionChannels" &&
+                effectivePromotionMode === "公开自动推广";
+              const placeholder = requiredChannel
+                ? "请选择公开推广渠道（公开自动推广时必填：全网推广、单品页购物车、领券中心、公开券池）"
+                : optionalWithDefault
+                  ? `请选择${fieldLabels[key] ?? "选项"}（未选择按「${choices.defaultValue}」处理）`
+                  : `请选择${fieldLabels[key] ?? "选项"}`;
+              return {
+                tag: "select_static",
+                name: `owner_${key}`,
+                placeholder: plainText(placeholder),
+                required: requiredChannel || !optionalWithDefault,
+                width: "fill",
+                options: choices.options.map((option) => ({
+                  text: plainText(option.text),
+                  value: option.value,
+                })),
+              };
+            }
+            return {
+              tag: "input",
+              name: `owner_${key}`,
+              label: plainText(fieldLabels[key] ?? "补充信息"),
+              input_type:
+                key === "activityBackground" ? "multiline_text" : "text",
+              ...(key === "activityBackground" ? { rows: 3 } : {}),
+              ...(prefillOrDefault(draft, key)
+                ? { default_value: prefillOrDefault(draft, key) }
+                : {}),
+              required: true,
+              width: "fill",
+            };
+          }),
+        ...(effectivePromotionMode === "非公开推广"
+          ? []
+          : optionalOwnerSupplementKeys
+              .filter(
+                (key) =>
+                  !fieldsForOwnerReview.includes(key) &&
+                  !coupon?.couponFieldCandidates[key]?.some((candidate) =>
+                    candidate.sampleValues.some((value) => value.trim()),
+                  ) &&
+                  !coupon?.ai?.result?.fieldCandidates?.some(
+                    (candidate) => candidate.key === key,
+                  ),
+              )
+              .flatMap((key): Array<Record<string, unknown>> => {
+                const choices = enumFieldChoices[key];
+                const required =
+                  key === "publicPromotionChannels" &&
+                  effectivePromotionMode === "公开自动推广";
+                if (choices) {
+                  return [
+                    {
+                      tag: "select_static",
+                      name: `owner_${key}`,
+                      placeholder: plainText(
+                        required
+                          ? `请选择${fieldLabels[key] ?? "选项"}（公开自动推广时必填）`
+                          : `${fieldLabels[key] ?? "补充"}（选填）`,
+                      ),
+                      required,
+                      width: "fill",
+                      options: choices.options.map((option) => ({
+                        text: plainText(option.text),
+                        value: option.value,
+                      })),
+                    },
+                  ];
                 }
-              : {
-                  tag: "input",
-                  name: `owner_${key}`,
-                  label: plainText(fieldLabels[key] ?? "补充信息"),
-                  input_type:
-                    key === "activityBackground" ? "multiline_text" : "text",
-                  ...(key === "activityBackground" ? { rows: 3 } : {}),
-                  ...(prefillOrDefault(draft, key)
-                    ? { default_value: prefillOrDefault(draft, key) }
-                    : {}),
-                  required: true,
-                  width: "fill",
-                }),
-          })),
-        ...optionalOwnerSupplementKeys
-          .filter(
-            (key) =>
-              !coupon?.couponFieldCandidates[key]?.some((candidate) =>
-                candidate.sampleValues.some((value) => value.trim()),
-              ) &&
-              !coupon?.ai?.result?.fieldCandidates?.some(
-                (candidate) => candidate.key === key,
-              ),
-          )
-          .map((key) => ({
-            tag: "input",
-            name: `owner_${key}`,
-            label: plainText(fieldLabels[key] ?? "按业务条件补充"),
-            input_type: "text",
-            ...(prefillOrDefault(draft, key)
-              ? { default_value: prefillOrDefault(draft, key) }
-              : {}),
-            required: false,
-            width: "fill",
-          })),
+                return [
+                  {
+                    tag: "input",
+                    name: `owner_${key}`,
+                    label: plainText(fieldLabels[key] ?? "按业务条件补充"),
+                    input_type: "text",
+                    ...(prefillOrDefault(draft, key)
+                      ? { default_value: prefillOrDefault(draft, key) }
+                      : {}),
+                    required,
+                    width: "fill",
+                  },
+                ];
+              })),
         ...(whitelist
           ? [
               {

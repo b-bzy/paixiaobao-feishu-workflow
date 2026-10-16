@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
+import type { CouponFieldKey } from "../../../coupon-oa/three-source/types";
 import {
   buildCouponThreeSourceErrorCard,
   buildCouponThreeSourceIntakeCard,
@@ -9,6 +10,7 @@ import {
   buildCouponThreeSourcePreviewCard,
   buildCouponThreeSourceRecognizingCard,
   buildCouponThreeSourceRoleCard,
+  mappingCardEnumDefaults,
 } from "./cards";
 import type { CouponThreeSourcePilotDraft } from "./store";
 
@@ -744,5 +746,93 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("替换现有商品白名单");
     expect(rendered).toContain("作为商品黑名单");
     expect(rendered).not.toContain("作为配券表");
+  });
+});
+
+describe("mapping card enum choices and channel gating", () => {
+  const couponCandidates = (current: CouponThreeSourcePilotDraft) => {
+    const coupon = current.recognitions.couponTable;
+    if (!coupon) throw new Error("fixture missing couponTable");
+    return coupon.couponFieldCandidates;
+  };
+  const fieldCandidate = (
+    key: CouponFieldKey,
+    header: string,
+    sampleValues: string[],
+  ) => ({
+    id: `${key}-1`,
+    key,
+    score: 1,
+    header,
+    headerRow: 1,
+    column: "X",
+    sheetName: "Sheet1",
+    sampleValues,
+    reasons: [],
+  });
+
+  it("renders enum correction entries as selects with server default notices", () => {
+    const current = draft();
+    couponCandidates(current).claimRule = [
+      fieldCandidate("claimRule", "用户领券规则", ["每天可领一次"]),
+    ];
+    current.validationIssues = [
+      "输入校验[claimRule]：「领取规则」只能填「活动期间仅可领一次」或「活动期间每天可领一次」，当前取值“每天可领一次”不在可选项内",
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain(
+      '"tag":"select_static","name":"owner_claimRule"',
+    );
+    expect(rendered).toContain("未选择按「活动期间每天可领一次」处理");
+  });
+
+  it("applies enum defaults only when the table value is missing or illegal", () => {
+    const current = draft();
+    couponCandidates(current).claimRule = [
+      fieldCandidate("claimRule", "用户领券规则", ["每天可领一次"]),
+    ];
+    current.validationIssues = ["输入校验[claimRule]：取值不在可选项内"];
+    expect(mappingCardEnumDefaults(current).claimRule).toBe(
+      "活动期间每天可领一次",
+    );
+
+    const legal = draft();
+    couponCandidates(legal).claimRule = [
+      fieldCandidate("claimRule", "用户领券规则", ["活动期间仅可领一次"]),
+    ];
+    expect(mappingCardEnumDefaults(legal).claimRule).toBeUndefined();
+  });
+
+  it("requires and dedupes public promotion channels under public mode", () => {
+    const current = draft();
+    couponCandidates(current).promotionMode = [
+      fieldCandidate("promotionMode", "推广途径", ["公开自动推广"]),
+    ];
+    couponCandidates(current).publicPromotionChannels = [
+      fieldCandidate("publicPromotionChannels", "公开推广渠道", ["", ""]),
+    ];
+    current.validationIssues = [
+      "输入校验[publicPromotionChannels]：公开自动推广时必须填写公开推广渠道",
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    // 11310 回归：待修正区与可选补充区只允许渲染一次。
+    expect(rendered.match(/owner_publicPromotionChannels/g)?.length).toBe(1);
+    expect(rendered).toContain(
+      '"tag":"select_static","name":"owner_publicPromotionChannels"',
+    );
+    expect(rendered).toContain("公开自动推广时必填");
+    expect(rendered).toContain("全网推广");
+  });
+
+  it("hides public promotion channels under non-public mode", () => {
+    const current = draft();
+    couponCandidates(current).promotionMode = [
+      fieldCandidate("promotionMode", "推广途径", ["非公开推广"]),
+    ];
+    couponCandidates(current).publicPromotionChannels = [
+      fieldCandidate("publicPromotionChannels", "公开推广渠道", ["", ""]),
+    ];
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).not.toContain("owner_publicPromotionChannels");
   });
 });

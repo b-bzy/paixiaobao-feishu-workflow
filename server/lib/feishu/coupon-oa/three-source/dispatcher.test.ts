@@ -3,6 +3,7 @@ import { RegularFullReductionFieldError } from "../../../coupon-oa/three-source/
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import { buildCouponThreeSourceRevisionedActionName } from "./action-name";
 import {
+  assertMappingFormReady,
   type CouponThreeSourceDispatcherDependencies,
   createCouponThreeSourceDispatcher,
 } from "./dispatcher";
@@ -1790,5 +1791,114 @@ describe("three-source Bot dispatcher", () => {
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain(
       "未完成的优惠券 OA 草稿",
     );
+  });
+});
+
+describe("mapping form precheck mirrors promotion channel rules", () => {
+  const channelDraft = (): CouponThreeSourcePilotDraft => {
+    const task = createCouponThreeSourceTask({
+      taskId: "CTS-precheck",
+      ownerOpenId: "ou_owner",
+    });
+    task.revision = 4;
+    task.status = "AwaitingSourceConfirmation";
+    return {
+      recordId: "rec-precheck",
+      pilotId: "CTS-precheck",
+      ownerOpenId: "ou_owner",
+      task,
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {
+        couponTable: {
+          source: {
+            messageId: "om-coupon",
+            fileKey: "file-coupon",
+            fileName: "配券表.xlsx",
+            bytes: 10,
+            sha256: "a".repeat(64),
+          },
+          sourceHash: "a".repeat(64),
+          roleCandidates: [],
+          couponFieldCandidates: {
+            promotionMode: [
+              {
+                id: "pm-1",
+                key: "promotionMode",
+                score: 1,
+                header: "推广途径",
+                headerRow: 1,
+                column: "V",
+                sheetName: "Sheet1",
+                sampleValues: ["公开自动推广"],
+                reasons: [],
+              },
+            ],
+          },
+          listCandidates: [],
+          issues: [],
+        },
+      },
+      selections: {
+        ownerFieldValues: {
+          businessMode: "pop",
+          activityName: "活动",
+          activityBackground: "背景",
+          activityStartAt: "2030-01-01",
+          activityEndAt: "2030-01-02",
+          overDeduction: "否",
+        },
+      },
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+  };
+
+  it("rejects public promotion mode without channels before any revision bump", () => {
+    expect(() =>
+      assertMappingFormReady(
+        {
+          ownerFieldValues: {
+            businessMode: "pop",
+            activityName: "活动",
+            activityBackground: "背景",
+            activityStartAt: "2030-01-01",
+            activityEndAt: "2030-01-02",
+            overDeduction: "否",
+          },
+        },
+        channelDraft(),
+      ),
+    ).toThrow("公开推广渠道为必填");
+  });
+
+  it("accepts when channels are supplied and rejects them under non-public mode", () => {
+    const draft = channelDraft();
+    const couponCandidates =
+      draft.recognitions.couponTable?.couponFieldCandidates;
+    if (!couponCandidates) throw new Error("fixture missing couponTable");
+    couponCandidates.promotionMode = [
+      {
+        id: "pm-1",
+        key: "promotionMode",
+        score: 1,
+        header: "推广途径",
+        headerRow: 1,
+        column: "V",
+        sheetName: "Sheet1",
+        sampleValues: ["非公开推广"],
+        reasons: [],
+      },
+    ];
+    expect(() =>
+      assertMappingFormReady(
+        {
+          ownerFieldValues: {
+            publicPromotionChannels: "全网推广、领券中心",
+          },
+        },
+        draft,
+      ),
+    ).toThrow("无需填写公开推广渠道");
   });
 });

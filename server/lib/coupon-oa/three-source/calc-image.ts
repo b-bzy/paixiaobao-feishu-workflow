@@ -2,13 +2,20 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import type { Metadata } from "sharp";
 import sharp from "sharp";
+import { ensureBundledCjkFont } from "./calc-image-font";
 import type { OfflineArtifact, RenderedCouponScreenshot } from "./types";
 
-export const couponCalcImageRendererVersion = "coupon-calc-image-v1";
+export const couponCalcImageRendererVersion = "coupon-calc-image-v2";
 export const maximumCalcImageBytes = 10 * 1024 * 1024;
 export const maximumCalcImagePixels = 40_000_000;
-const rowsPerPage = 24;
-const columnsPerPage = 8;
+const pageMarginWidth = 80;
+const columnWidth = 200;
+const rowHeight = 48;
+const pageTopHeight = 138;
+const pageBottomHeight = 70;
+const maximumRenderPixelsPerPage = 12_000_000;
+const svgFontFamily =
+  "Noto Sans SC, PingFang SC, Microsoft YaHei, Arial, sans-serif";
 
 export interface InspectedUserCalcImage {
   contentType: "image/png" | "image/jpeg";
@@ -143,41 +150,32 @@ export async function extractCouponScreenshotTable(input: {
 export function paginateCouponScreenshotTable(
   table: CouponScreenshotTable,
 ): CouponScreenshotPage[] {
-  const rowGroups = Math.ceil(table.rows.length / rowsPerPage);
-  const remainingColumns = Array.from(
-    { length: Math.max(0, table.headers.length - 1) },
-    (_, index) => index + 1,
+  const width = pageMarginWidth + table.headers.length * columnWidth;
+  const rowsPerPage = Math.max(
+    1,
+    Math.floor(
+      (maximumRenderPixelsPerPage / width - pageTopHeight - pageBottomHeight) /
+        rowHeight,
+    ),
   );
-  const columnGroups: number[][] = [];
-  if (!remainingColumns.length) columnGroups.push([0]);
-  for (
-    let offset = 0;
-    offset < remainingColumns.length;
-    offset += columnsPerPage - 1
-  ) {
-    columnGroups.push([
-      0,
-      ...remainingColumns.slice(offset, offset + columnsPerPage - 1),
-    ]);
-  }
-  const pageCount = rowGroups * columnGroups.length;
+  const columnIndexes = Array.from(
+    { length: table.headers.length },
+    (_, index) => index,
+  );
+  const pageCount = Math.ceil(table.rows.length / rowsPerPage);
   const pages: CouponScreenshotPage[] = [];
-  for (let rowGroup = 0; rowGroup < rowGroups; rowGroup += 1) {
-    const start = rowGroup * rowsPerPage;
+  for (let page = 0; page < pageCount; page += 1) {
+    const start = page * rowsPerPage;
     const end = Math.min(start + rowsPerPage, table.rows.length);
-    for (const columnIndexes of columnGroups) {
-      pages.push({
-        page: pages.length + 1,
-        pageCount,
-        startRow: start + 2,
-        endRow: end + 1,
-        columnIndexes,
-        headers: columnIndexes.map((index) => table.headers[index]),
-        rows: table.rows
-          .slice(start, end)
-          .map((row) => columnIndexes.map((index) => row[index] ?? "")),
-      });
-    }
+    pages.push({
+      page: page + 1,
+      pageCount,
+      startRow: start + 2,
+      endRow: end + 1,
+      columnIndexes,
+      headers: table.headers,
+      rows: table.rows.slice(start, end),
+    });
   }
   return pages;
 }
@@ -188,11 +186,10 @@ function renderPageSvg(input: {
   revision: number;
   shortHash: string;
 }): string {
-  const width = 1600;
-  const top = 138;
-  const rowHeight = 48;
-  const height = top + (input.page.rows.length + 1) * rowHeight + 70;
-  const columnWidth = Math.floor((width - 80) / input.page.headers.length);
+  const width = pageMarginWidth + input.page.headers.length * columnWidth;
+  const top = pageTopHeight;
+  const height =
+    top + (input.page.rows.length + 1) * rowHeight + pageBottomHeight;
   const cells = [input.page.headers, ...input.page.rows]
     .map((row, rowIndex) =>
       row
@@ -205,12 +202,12 @@ function renderPageSvg(input: {
           const text = escapeXml(
             value.length > 26 ? `${value.slice(0, 25)}…` : value,
           );
-          return `<rect x="${x}" y="${y}" width="${columnWidth}" height="${rowHeight}" fill="${fill}" stroke="#D0D5DD"/><text x="${x + 12}" y="${y + 30}" font-size="19" fill="${color}" font-family="Arial, sans-serif">${text}</text>`;
+          return `<rect x="${x}" y="${y}" width="${columnWidth}" height="${rowHeight}" fill="${fill}" stroke="#D0D5DD"/><text x="${x + 12}" y="${y + 30}" font-size="19" fill="${color}" font-family="${svgFontFamily}">${text}</text>`;
         })
         .join(""),
     )
     .join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#FFFFFF"/><text x="40" y="52" font-size="30" font-weight="700" fill="#101828" font-family="Arial, sans-serif">满减券测算明细</text><text x="40" y="92" font-size="20" fill="#475467" font-family="Arial, sans-serif">业务模式：${escapeXml(input.businessMode)}　revision：${input.revision}　数据 hash：${input.shortHash}　第 ${input.page.page}/${input.page.pageCount} 页</text>${cells}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#FFFFFF"/><text x="40" y="52" font-size="30" font-weight="700" fill="#101828" font-family="${svgFontFamily}">满减券测算明细</text><text x="40" y="92" font-size="20" fill="#475467" font-family="${svgFontFamily}">业务模式：${escapeXml(input.businessMode)}　revision：${input.revision}　数据 hash：${input.shortHash}　第 ${input.page.page}/${input.page.pageCount} 页</text>${cells}</svg>`;
 }
 
 export async function renderCouponArtifactScreenshots(input: {
@@ -219,6 +216,7 @@ export async function renderCouponArtifactScreenshots(input: {
   businessMode: "严选" | "寄卖" | "pop";
 }): Promise<RenderedCouponScreenshot[]> {
   if (input.businessMode === "严选") return [];
+  await ensureBundledCjkFont();
   const table = await extractCouponScreenshotTable({
     couponArtifact: input.couponArtifact,
   });

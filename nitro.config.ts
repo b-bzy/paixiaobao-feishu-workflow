@@ -6,5 +6,9 @@ export default defineNitroConfig({
       baseName: "coupon-excel",
       dir: "server/assets/coupon-excel",
     },
+    {
+      baseName: "coupon-fonts",
+      dir: "server/assets/coupon-fonts",
+    },
   ],
 });

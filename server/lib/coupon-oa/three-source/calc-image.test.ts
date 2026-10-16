@@ -57,14 +57,29 @@ describe("coupon calculation images", () => {
     ).rejects.toThrow("真实 PNG 或 JPEG");
   });
 
-  it("extracts displayed values and paginates every row and column", async () => {
+  it("renders all columns on one page and splits rows only past the pixel budget", async () => {
     const table = await extractCouponScreenshotTable({
       couponArtifact: await couponArtifact(),
     });
     const pages = paginateCouponScreenshotTable(table);
-    expect(pages).toHaveLength(6);
-    expect(pages.flatMap((page) => page.rows).length).toBe(98);
-    expect(pages.every((page) => page.columnIndexes[0] === 0)).toBe(true);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.rows).toHaveLength(49);
+    expect(pages[0]?.columnIndexes).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+    const wideTable = await extractCouponScreenshotTable({
+      couponArtifact: await couponArtifact(2, 30),
+    });
+    const widePages = paginateCouponScreenshotTable(wideTable);
+    expect(widePages).toHaveLength(1);
+    expect(widePages[0]?.headers).toHaveLength(30);
+
+    const tallTable = await extractCouponScreenshotTable({
+      couponArtifact: await couponArtifact(130, 10),
+    });
+    const tallPages = paginateCouponScreenshotTable(tallTable);
+    expect(tallPages.map((page) => page.rows.length)).toEqual([115, 15]);
+    expect(tallPages[1]?.startRow).toBe(117);
+    expect(tallPages[1]?.endRow).toBe(131);
   });
 
   it("renders ordered deterministic PNG pages from the frozen workbook", async () => {
@@ -84,13 +99,14 @@ describe("coupon calculation images", () => {
       order: 0,
       page: 1,
       pageCount: 1,
+      fileName: "满减券测算明细-1of1.png",
       contentType: "image/png",
       sourceArtifactSha256: artifact.sha256,
     });
     expect(first[0].sha256).toBe(second[0].sha256);
     await expect(inspectUserCalcImage(first[0].bytes)).resolves.toMatchObject({
       contentType: "image/png",
-      width: 1600,
+      width: 680,
     });
   });
 });

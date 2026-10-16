@@ -9,9 +9,14 @@
 
 飞书卡片 schema 的权威判定只在线上:非法属性会在 im 发送接口返回
 `ErrCode 200621 parse card json err — unknown property "xxx", path: …`,
-带精确 JSON path,一锤定音。结构化单测(cards-schema.test.ts 的属性白名单)
-负责防"已知"回归,真发审计负责发现"未知"——两者缺一不可。工作簿识别同理:
-真实 Excel 里的公式、全角字符、粘贴残留只有灌进真实管线才暴露。
+带精确 JSON path,一锤定音。同类投递型拒收还有**属性超长**:组件 `name`
+超过 100 字符报 `ErrCode 11310 name exceed the default maximum 100`
+(2026-10-16 事故:确认按钮 name 拼了全量 64 位上下文哈希,~119 字符,
+所有映射表单卡被拒、发卡 effect 重试烧完进死信,用户永远停在"AI 识别中")。
+结构化单测(cards-schema.test.ts 的属性白名单 + name/default_value 长度
+门禁)负责防"已知"回归,真发审计负责发现"未知"——两者缺一不可。
+工作簿识别同理:真实 Excel 里的公式、全角字符、粘贴残留只有灌进真实管线
+才暴露。
 
 ## 工具一:卡片真发审计
 
@@ -75,7 +80,9 @@ pnpm audit:workbook -- path/to/配券表.xlsx --json /tmp/audit.json
    看 task.status、recognitions.*.ai.status、mappingCardDelivery、
    failureReason——确定卡在哪一步;
 2. **卡片能否发出**:把该草稿导出 → `pnpm audit:cards -- --send --draft …`
-   若真发 FAIL,即投递类故障(200621 类),按 path 修卡片;
+   若真发 FAIL,即投递类故障(200621 属性非法 / 11310 name 超长),
+   按报错里的 path/ErrMsg 修卡片;干跑(`pnpm audit:cards`)现在也
+   静态拦截 name>100 与 default_value>800 两类已知上限;
 3. **数据能否识别**:拿用户的原始 Excel → `pnpm audit:workbook`,
    若确认演练报字段问题,即解析类故障,按字段修表头/格式或确认 AI 推导;
 4. 修复后在本地以同一草稿真发验证,再提交部署。

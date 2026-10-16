@@ -599,6 +599,30 @@ interface RegularFieldSchemaIssue {
   readonly expected?: string;
   readonly minimum?: unknown;
   readonly maximum?: unknown;
+  readonly values?: readonly unknown[];
+}
+
+/**
+ * Where a field's value came from, so validation failures can explain the
+ * origin in owner-readable Chinese instead of leaking schema jargon ("Invalid
+ * option") and field names the owner never saw on the card.
+ */
+interface RegularFieldSourceHint {
+  readonly sourceKind?: string;
+  readonly header?: string;
+}
+
+function regularFieldOriginClause(
+  hint: RegularFieldSourceHint | undefined,
+): string {
+  if (hint?.sourceKind === "workbook") {
+    return hint.header
+      ? `来自你上传配券表的「${hint.header}」列`
+      : "来自你上传的配券表";
+  }
+  if (hint?.sourceKind === "ownerSupplement") return "来自你在表单中的填写";
+  if (hint?.sourceKind === "aiDerived") return "来自 AI 对公式单元格的推导";
+  return "";
 }
 
 /**
@@ -622,6 +646,7 @@ export class RegularFullReductionFieldError extends Error {
 function describeRegularFieldIssues(
   issues: readonly RegularFieldSchemaIssue[],
   rawTexts: Partial<Record<CouponFieldKey, string>>,
+  sources: Partial<Record<CouponFieldKey, RegularFieldSourceHint>> = {},
 ): RegularFullReductionFieldIssue[] {
   return issues.map((issue) => {
     const key = issue.path[0];
@@ -632,6 +657,24 @@ function describeRegularFieldIssues(
     const quotedRaw = raw ? `“${raw}”` : "";
     if (!fieldKey || !label || issue.code === "custom") {
       return { key: fieldKey ?? "activityName", message: issue.message };
+    }
+    if (issue.code === "invalid_value") {
+      const options = (issue.values ?? [])
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => `「${value}」`)
+        .join("或");
+      if (options) {
+        const origin = regularFieldOriginClause(sources[fieldKey]);
+        return {
+          key: fieldKey,
+          message:
+            `「${label}」只能填${options}` +
+            (raw
+              ? `，当前取值“${raw}”${origin ? `（${origin}）` : ""}不在可选项内`
+              : "") +
+            "。该字段已加入下方表单，请确认业务含义后重新选择并提交",
+        };
+      }
     }
     if (issue.code === "invalid_type") {
       if (!raw) {
@@ -656,9 +699,15 @@ function describeRegularFieldIssues(
         } ${String(bound)}）`,
       };
     }
+    // Zod's stock messages are English ("Invalid option: expected one of
+    // ..."); only pass them through when they carry Chinese business text
+    // (e.g. superRefine rules), otherwise the owner sees raw schema jargon.
+    const detail = /[\u4e00-\u9fff]/.test(issue.message)
+      ? `：${issue.message}`
+      : "";
     return {
       key: fieldKey,
-      message: `「${label}」的取值${quotedRaw}未通过校验：${issue.message}`,
+      message: `「${label}」的取值${quotedRaw}未通过校验${detail}`,
     };
   });
 }
@@ -666,9 +715,10 @@ function describeRegularFieldIssues(
 function throwRegularFieldIssues(
   issues: readonly RegularFieldSchemaIssue[],
   rawTexts: Partial<Record<CouponFieldKey, string>>,
+  sources: Partial<Record<CouponFieldKey, RegularFieldSourceHint>> = {},
 ): never {
   throw new RegularFullReductionFieldError(
-    describeRegularFieldIssues(issues, rawTexts),
+    describeRegularFieldIssues(issues, rawTexts, sources),
   );
 }
 
@@ -996,6 +1046,7 @@ export async function confirmRegularFullReductionCoupon(
   const provenance: Partial<Record<CouponFieldKey, SourceProvenance>> = {};
   const values: Partial<Record<CouponFieldKey, unknown>> = {};
   const rawTexts: Partial<Record<CouponFieldKey, string>> = {};
+  const fieldHeaders: Partial<Record<CouponFieldKey, string>> = {};
 
   for (const key of REGULAR_FIELD_KEYS) {
     const candidateIdValue =
@@ -1019,6 +1070,9 @@ export async function confirmRegularFullReductionCoupon(
     const candidate =
       explicitlySelectedCandidate ??
       (!aiCandidate && candidates.length === 1 ? candidates[0] : undefined);
+    if (candidate?.header) {
+      fieldHeaders[key] = candidate.header;
+    }
     if (candidate && candidate.sheetName !== selected.sheetName) {
       throw new Error(`字段 ${key} 与已选择优惠券不在同一 Sheet`);
     }
@@ -1107,7 +1161,19 @@ export async function confirmRegularFullReductionCoupon(
     claimRiskControl: "0级以下用户可领",
   });
   if (!parsed.success) {
-    throwRegularFieldIssues(parsed.error.issues, rawTexts);
+    throwRegularFieldIssues(
+      parsed.error.issues,
+      rawTexts,
+      Object.fromEntries(
+        REGULAR_FIELD_KEYS.map((key) => [
+          key,
+          {
+            sourceKind: provenance[key]?.sourceKind,
+            header: fieldHeaders[key],
+          },
+        ]),
+      ),
+    );
   }
 
   const activityPointRaw = input.ownerFieldValues?.activityPointPercent;
@@ -1296,7 +1362,18 @@ export async function extractRegularFullReductionInput(
     overDeductionReason: value("overDeductionReason"),
   });
   if (!parsed.success) {
-    throwRegularFieldIssues(parsed.error.issues, rawTexts);
+    // Deterministic workbook extraction: every value below comes straight
+    // from a matched column, so failures always have workbook provenance.
+    throwRegularFieldIssues(
+      parsed.error.issues,
+      rawTexts,
+      Object.fromEntries(
+        keys.map((key) => [
+          key,
+          { sourceKind: "workbook", header: candidates[key].header },
+        ]),
+      ),
+    );
   }
   return {
     input: parsed.data,

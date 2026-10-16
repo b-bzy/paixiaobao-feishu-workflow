@@ -413,6 +413,57 @@ describe("single coupon confirmation", () => {
     expect(fieldError.message).not.toContain("received undefined");
   });
 
+  it("explains enum mismatches with provenance and legal options in Chinese", async () => {
+    const row = couponRow("活动A", "100", "20").map((value, index) =>
+      index === 19 ? "是" : value,
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row]),
+    );
+    await discoverRegularFullReductionCoupons({ recognition });
+    const error = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      ownerFieldValues: { activityPointPercent: 6 },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RegularFullReductionFieldError);
+    const fieldError = error as RegularFullReductionFieldError;
+    const issue = fieldError.fieldIssues.find(
+      (item) => item.key === "allowGift",
+    );
+    expect(issue?.message).toContain(
+      "「是否允许转赠」只能填「允许」或「不允许」",
+    );
+    expect(issue?.message).toContain(
+      "当前取值“是”（来自你上传配券表的「优惠券赠送」列）",
+    );
+    expect(issue?.message).toContain("该字段已加入下方表单");
+    expect(fieldError.message).not.toContain("Invalid option");
+  });
+
+  it("explains enum mismatches entered on the card as owner-supplied", async () => {
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([couponRow("活动A", "100", "20")]),
+    );
+    await discoverRegularFullReductionCoupons({ recognition });
+    const error = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      ownerFieldValues: {
+        activityPointPercent: 6,
+        allowGift: "是",
+      },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RegularFullReductionFieldError);
+    const fieldError = error as RegularFullReductionFieldError;
+    const issue = fieldError.fieldIssues.find(
+      (item) => item.key === "allowGift",
+    );
+    expect(issue?.message).toContain("当前取值“是”（来自你在表单中的填写）");
+  });
+
   it("confirms multiple full-reduction rows as one ordered tier set", async () => {
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([

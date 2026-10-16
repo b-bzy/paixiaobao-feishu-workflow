@@ -4,8 +4,8 @@
 
 | 主题 | 权威材料 | 用途 |
 | --- | --- | --- |
-| 通用产品边界 | [MVP PRD v1.5](product/coupon-oa-mvp-prd-v1.5.md) | 三条用户路线、draft-only 与 native-submit 的通用门禁。 |
-| P1-1 Excel 试点 | [P1 Excel 试点 PRD v1.5](product/coupon-oa-p1-excel-pilot-prd-v1.5.md) | 当前支持的券型、字段、模板、状态和验收。 |
+| 通用产品边界 | [MVP PRD v1.6](product/coupon-oa-mvp-prd-v1.6.md) | 三条用户路线、draft-only 与 native-submit 的通用门禁。 |
+| P1-1 Excel 试点 | [P1 Excel 试点 PRD v1.6](product/coupon-oa-p1-excel-pilot-prd-v1.5.md) | 当前支持的券型、字段、模板、状态和验收。 |
 | 当前代码结构 | [功能结构与重构基线](implementation/coupon-oa-current-architecture-and-refactoring-baseline-v1.md) | 已实现模块、状态机、文件交接、阻塞项和重构顺序。 |
 | 提交与附件边界 | [自动填报实施方案 v1.4](implementation/coupon-oa-bot-autofill-plan-v1.4.md) | 源文件、冻结产物、Drive/Base/file code 与原生 OA 的边界。 |
 | Bridge 设计 | [企业托管长连接桥设计](implementation/coupon-oa-managed-bridge-design-v1.md) | 内网试点 ingress 的目标实施边界。 |

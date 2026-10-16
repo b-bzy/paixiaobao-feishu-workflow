@@ -6,7 +6,7 @@
 
 | 事项 | 当前结论 | 权威入口 |
 | --- | --- | --- |
-| P1-1 Excel 试点 | 当前唯一的受控生成基线：Bot 单聊中生成常规满减券配券表和单列 `SKUID` 白名单，并交接至系统草稿。 | [P1 Excel 试点 PRD v1.5](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) |
+| P1-1 Excel 试点 | 当前唯一的受控生成基线：Bot 单聊中生成常规满减券配券表和单列 `SKUID` 白名单，并交接至系统草稿。 | [P1 Excel 试点 PRD v1.6](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) |
 | 原生 OA | 内网首发仅 `draft-only`；未通过 rollout 的 native-submit Gate 前，服务端不得创建原生 OA。 | [rollout 计划](current/operations/coupon-oa-internal-pilot-rollout-plan-v1.md) |
 | 一轮确认改造 | 已形成待评审方案，**尚未替代**当前 P1-1 多步骤试点。 | [一轮确认提议](proposals/conversational-single-confirm/coupon-oa-conversational-single-confirm-prd-v1.3.md) |
 | 三源填报 | 已形成待评审方案；仓库中的 R2 模块基础默认关闭，**尚未启用**；正式白/黑名单模板和字段映射未登记、持久 ingress/资源 Gate 未通过前不得上线。 | [三源提议](proposals/three-source/coupon-oa-three-source-workflow-prd-v1.md) · [飞书升级方案](proposals/three-source/coupon-oa-feishu-unified-skill-upgrade-plan-v1.md) |
@@ -31,7 +31,7 @@
 | `OA优惠券填报` | 收集结构化字段与材料，形成系统草稿 | `draft-only` 先行；原生提交仅可能在后续 Gate 全部通过时，由当前 owner 在当前 revision 明确确认后进行。 |
 | `优惠券Excel试点` | 生成两份受控 Excel 并交接系统草稿 | 流程自身绝不自动创建原生 OA；只消费冻结且已校验的产物。 |
 
-详细的路线合同以 [MVP PRD v1.5](current/product/coupon-oa-mvp-prd-v1.5.md) 为准；P1-1 特有字段、模板和验收以 [P1 Excel 试点 PRD v1.5](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 为准。
+详细的路线合同以 [MVP PRD v1.6](current/product/coupon-oa-mvp-prd-v1.6.md) 为准；P1-1 特有字段、模板和验收以 [P1 Excel 试点 PRD v1.6](current/product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 为准。
 
 ## Claude Code Skill 与本库
 

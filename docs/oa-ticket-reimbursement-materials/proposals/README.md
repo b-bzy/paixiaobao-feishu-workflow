@@ -16,6 +16,8 @@
 | 耐久控制面风险整改 | [开发清单 v1](three-source/coupon-oa-durable-control-plane-risk-remediation-backlog-v1.md) | 已将 CP-RISK-001–008 映射到唯一 FDEV/FDEV 子需求；优先处理 bridge ACK、外部 effect fencing、unknown/DLQ 与运行观测。 |
 | 持久 Command-Intake Worker 验证 | [测试方案 v1](three-source/coupon-oa-durable-command-intake-worker-test-plan-v1.md) | 已有 unit/SQL contract 与本地 PostgreSQL integration 证据；HTTP rehearsal、durable bridge ACK、真实 Dev Bot 和受控 E2E 待实施。 |
 | 三源后续迭代 | [迭代计划 v1](three-source/coupon-oa-three-source-follow-up-iteration-plan-v1.md) | 已记录后续决策，不表示已实现或已接入飞书。 |
+| 商家 ID 名单封闭集判定 | [设计与审计 v1](three-source/coupon-three-source-merchant-id-whitelist-design-v1.md) | 待评审；无表头单列数字由 AI 封闭集判定 SKU/商家 ID，owner 双选项确认后按维度生成忠实产物与「限商家ID」配券表。实施计划见 `docs/superpowers/plans/2026-10-16-coupon-three-source-merchant-id-whitelist.md`。 |
+| 第二轮表单模版缺项提醒 | [设计 v1](three-source/coupon-three-source-template-gap-reminder-design-v1.md) | 待评审；修复 2026-10-16「生成中死卡」事故三项缺陷：条件必填字段提前到第二轮卡片、恢复卡组件重名（11310）、投递失败静默。 |
 | 三源离线验证 | [离线测试方案 v1](three-source/coupon-oa-three-source-offline-test-plan-v1.md) | 仅合成数据和本地零副作用验证，不能推断为飞书或 OA 联调通过。 |
 | 优惠券 OA 模块化升级 | [升级方案 v1](modularization/coupon-oa-modularization-upgrade-proposal-v1.md) | 待技术、流程与业务 Owner 评审；仅定义渐进式模块化目标，不改变当前代码或运行行为。 |
 

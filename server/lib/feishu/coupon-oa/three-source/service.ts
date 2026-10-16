@@ -1118,6 +1118,12 @@ export class CouponThreeSourcePilotService {
       expectedRevision: input.expectedRevision,
       source,
     });
+    // 角色确认后推进待定队列：把下一个待确认材料提升为 pendingRecognition，
+    // 让状态卡渲染下一张角色卡；否则多文件场景下剩余材料永远无人问询
+    //（2026-10-16 case9 重放实测的队列死滞）。队列按接收顺序消费。
+    const remainingPending = (input.draft.pendingSources ?? []).filter(
+      (item) => item.recognition.sourceHash !== input.recognition.sourceHash,
+    );
     return this.dependencies.updateDraft(
       input.draft,
       {
@@ -1131,11 +1137,8 @@ export class CouponThreeSourcePilotService {
             recognition ? { ...recognition, ai: undefined } : recognition,
           ]),
         ),
-        pendingSources: (input.draft.pendingSources ?? []).filter(
-          (item) =>
-            item.recognition.sourceHash !== input.recognition.sourceHash,
-        ),
-        pendingRecognition: undefined,
+        pendingSources: remainingPending,
+        pendingRecognition: remainingPending[0]?.recognition,
         selections: {},
         coupon: undefined,
         whitelist: undefined,

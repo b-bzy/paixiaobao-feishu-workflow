@@ -513,7 +513,7 @@ describe("CouponThreeSourcePilotService", () => {
     expect(markerArgs[2]).toBe(markerArgs[0].task.revision);
     const markerOrder =
       updateDraft.mock.invocationCallOrder[
-        updateDraft.mock.calls.findIndex((call) => call === markerCall)
+        updateDraft.mock.calls.indexOf(markerArgs as never)
       ];
     expect(markerOrder).toBeLessThan(
       uploadArtifact.mock.invocationCallOrder[0],
@@ -751,5 +751,129 @@ describe("CouponThreeSourcePilotService", () => {
     });
     expect(prepareAiRecognition).toHaveBeenCalledTimes(2);
     expect(activateAiRecognition).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("pending source queue promotion", () => {
+  it("promotes the next pending source after a role confirmation", async () => {
+    const recognitionFor = (fileName: string, marker: string) =>
+      ({
+        source: {
+          messageId: `om-${marker}`,
+          fileKey: `file-${marker}`,
+          fileName,
+          bytes: 10,
+          sha256: marker.repeat(64).slice(0, 64),
+        },
+        sourceHash: marker.repeat(64).slice(0, 64),
+        roleCandidates: [
+          { id: "r1", role: "whitelist", score: 1, reasons: [] },
+        ],
+        couponFieldCandidates: {},
+        listCandidates: [
+          {
+            id: `${marker}-col`,
+            kind: "identifier",
+            dimension: "SKU",
+            score: 1,
+            header: "sku",
+            headerRow: 1,
+            column: "A",
+            sheetName: "Sheet1",
+            sampleValues: ["1"],
+            reasons: [],
+          },
+        ],
+        issues: [],
+      }) as never;
+
+    let stored: CouponThreeSourcePilotDraft = {
+      recordId: "rec-queue",
+      pilotId: "CTS-queue",
+      ownerOpenId: "ou_owner",
+      task: {
+        ...createCouponThreeSourceTask({
+          taskId: "CTS-queue",
+          ownerOpenId: "ou_owner",
+        }),
+        revision: 5,
+        status: "AwaitingSourceConfirmation",
+        sources: {
+          couponTable: {
+            role: "couponTable",
+            messageId: "om-coupon",
+            fileKey: "file-coupon",
+            fileName: "配券表.xlsx",
+            bytes: 10,
+            sha256: "a".repeat(64),
+          },
+          whitelist: {
+            role: "whitelist",
+            messageId: "om-wl0",
+            fileKey: "file-wl0",
+            fileName: "第一份白名单.xlsx",
+            bytes: 10,
+            sha256: "0".repeat(64),
+          },
+        },
+      },
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {},
+      pendingSources: [
+        {
+          source: {
+            messageId: "om-1",
+            fileKey: "file-1",
+            fileName: "名单A.xlsx",
+            bytes: 10,
+            sha256: "1".repeat(64),
+          },
+          receivedOrder: 0,
+          recognition: recognitionFor("名单A.xlsx", "1"),
+        },
+        {
+          source: {
+            messageId: "om-2",
+            fileKey: "file-2",
+            fileName: "名单B.xlsx",
+            bytes: 10,
+            sha256: "2".repeat(64),
+          },
+          receivedOrder: 1,
+          recognition: recognitionFor("名单B.xlsx", "2"),
+        },
+      ],
+      pendingRecognition: recognitionFor("名单A.xlsx", "1"),
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+    const updateDraft = vi.fn(
+      async (
+        _current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+      ) => {
+        stored = { ...stored, ...updates };
+        return stored;
+      },
+    );
+    const service = new CouponThreeSourcePilotService({
+      updateDraft,
+    } as unknown as CouponThreeSourcePilotDependencies);
+
+    const next = await service.selectPendingRole({
+      draft: stored,
+      ownerOpenId: "ou_owner",
+      expectedRevision: 5,
+      role: "blacklist",
+      operationId: "op-queue-1",
+    });
+
+    // 队列推进：确认名单A后，名单B 成为下一个待确认角色材料，
+    // 不再回到"无待定项、剩余材料永远悬空"的死滞（case9 实测缺陷）。
+    expect(next.pendingSources?.length).toBe(1);
+    expect(next.pendingRecognition?.source.fileName).toBe("名单B.xlsx");
+    expect(next.task.sources.blacklist?.fileName).toBe("名单A.xlsx");
   });
 });

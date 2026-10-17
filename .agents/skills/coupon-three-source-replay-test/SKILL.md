@@ -66,3 +66,16 @@ description: 三源优惠券链路真发自动重放测试。当用户要求"跑
 - 文件只能以用户身份发（跨应用伪造 file_key 不可行）；event_id/message_id 一律全新，绝不重放。
 - 注入即代用户声明字段事实：活动名/背景一律带「本地自动测试」前缀，保证草稿可辨识。
 - 用户测试期间不要手点卡片（revision 竞态会污染结果）。
+
+## 一键回归（2026-10-17 新增，优先使用）
+
+`node --import tsx --env-file=.env.local scripts/coupon-three-source-replay-all.mts`
+——串行跑 9 case 全流程：clear → 提报 → 以用户身份发文件 → 角色队列逐份确认（case9 内置角色计划）→ 注入 AI 识别并等待各槽位终态 → 渲染映射卡智能填表（枚举选合法值、数字填合法数）→ 确认（带 revision 竞态重试，经恢复卡最多 4 轮）→ 终态校验。`REPLAY_ONLY=case6,case9` 只跑指定 case。输出 `.local/flow-replay-r2/<case>/final-state.json` + `summary.json`。
+
+**期望基线（修复版 5a0e318 实测）**：9/9 `DraftOnlyConfirmed`；case9 到 rev14、三槽 AI、白黑双名单；每案测算图恰 1 张。
+
+**已知坑**：
+- 跑前确认 bridge/worker 活着（`pnpm p0:preview:status`）；长连接判死或 worker 8 连败会静默退出，表现为"口令有效但文件断流"→ down/up 重启。
+- 多次注入可能被 AI 横幅等后台更新的 revision 守卫弹回（预期），脚本已重试；真人不会遇到。
+- 单案 ~2 分钟，case9 ~7 分钟（8 文件 + 6 次角色确认 + 3 槽 AI）。
+- 瞬时"系统未完成本次处理"（无校验问题、revision 不动）=环境抖动，重跑该 case 即可。

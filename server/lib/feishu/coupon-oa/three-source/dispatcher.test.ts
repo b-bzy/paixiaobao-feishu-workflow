@@ -1902,3 +1902,80 @@ describe("mapping form precheck mirrors promotion channel rules", () => {
     ).toThrow("无需填写公开推广渠道");
   });
 });
+
+describe("mapping form precheck honours table-recognised channel values", () => {
+  it("passes when channels come from the recognised table column (no owner value)", () => {
+    const task = createCouponThreeSourceTask({
+      taskId: "CTS-table-channels",
+      ownerOpenId: "ou_owner",
+    });
+    task.revision = 4;
+    task.status = "AwaitingSourceConfirmation";
+    const candidate = (
+      key: "promotionMode" | "publicPromotionChannels",
+      header: string,
+      value: string,
+    ) => ({
+      id: `${key}-1`,
+      key,
+      score: 1,
+      header,
+      headerRow: 1,
+      column: "V",
+      sheetName: "Sheet1",
+      sampleValues: [value],
+      reasons: [],
+    });
+    const draft: CouponThreeSourcePilotDraft = {
+      recordId: "rec-table-channels",
+      pilotId: "CTS-table-channels",
+      ownerOpenId: "ou_owner",
+      task,
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {
+        couponTable: {
+          source: {
+            messageId: "om-coupon",
+            fileKey: "file-coupon",
+            fileName: "配券表.xlsx",
+            bytes: 10,
+            sha256: "a".repeat(64),
+          },
+          sourceHash: "a".repeat(64),
+          roleCandidates: [],
+          couponFieldCandidates: {
+            promotionMode: [
+              candidate("promotionMode", "推广途径", "公开自动推广"),
+            ],
+            publicPromotionChannels: [
+              candidate("publicPromotionChannels", "公开推广渠道", "领券中心"),
+            ],
+          },
+          listCandidates: [],
+          issues: [],
+        },
+      },
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+    // 2026-10-17 case3 重放实测：渠道已由表列识别时，卡片不渲染该字段、
+    // owner 也不会提交它；预检必须沿卡片级联读到表值，而不是误判缺失。
+    expect(() =>
+      assertMappingFormReady(
+        {
+          ownerFieldValues: {
+            businessMode: "pop",
+            activityName: "活动",
+            activityBackground: "背景",
+            activityStartAt: "2030-01-01",
+            activityEndAt: "2030-01-02",
+            overDeduction: "否",
+          },
+        },
+        draft,
+      ),
+    ).not.toThrow();
+  });
+});

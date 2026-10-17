@@ -518,15 +518,16 @@ export function assertMappingFormReady(
   // 与领域规则镜像（calculation.ts superRefine）的表单预检：合并提交值后
   // 的生效推广途径决定公开推广渠道必填/禁填，失败留在原卡可改，不产生
   // revision 死局。判定值级联复用 cards 的 ownerDefaultValue 单一来源。
+  // 生效值与卡片/领域确认同一条级联：owner 提交值 → 表内识别候选
+  // （ownerDefaultValue 含文案/AI/确定性候选回退）。只看 owner 值会把
+  // 渠道已从表列识别的材料误判为缺失（case3 重放实测）。
   const effectivePromotionMode =
     stringValue(merged.promotionMode) ??
     ownerDefaultValue(draft, "promotionMode");
-  const channelsRaw = merged.publicPromotionChannels;
-  const channels = (
-    Array.isArray(channelsRaw)
-      ? channelsRaw.join("、")
-      : String(channelsRaw ?? "")
-  ).trim();
+  const channelsRaw =
+    stringValue(merged.publicPromotionChannels) ??
+    ownerDefaultValue(draft, "publicPromotionChannels");
+  const channels = (channelsRaw ?? "").trim();
   if (effectivePromotionMode === "公开自动推广" && !channels) {
     throw new Error(
       "推广途径为「公开自动推广」时，公开推广渠道为必填（全网推广、单品页购物车、领券中心、公开券池）",

@@ -85,7 +85,14 @@ export async function verifyP0DeploymentIdentity({
       "P0 Preview 缺少 OA 测试稿 Base 配置",
     );
   }
-  if (body?.result?.readiness?.couponOaNativeSubmitDisabled !== true) {
+  // 受控例外窗口：仅在 P0_ALLOW_NATIVE_SUBMIT_WINDOW=true 且测试消费者
+  // 全部关闭时，允许原生提交开关短暂开启（单次真实提报演练，Owner 授权 +
+  // Owner 撤回兜底）。窗口结束必须翻回关闭态并正常重部署。默认仍然强制
+  // 关闭——没有这个环境变量时行为与原来完全一致。
+  if (
+    process.env.P0_ALLOW_NATIVE_SUBMIT_WINDOW !== "true" &&
+    body?.result?.readiness?.couponOaNativeSubmitDisabled !== true
+  ) {
     throw new P0DeploymentIdentityError(
       "coupon_oa_native_submit_not_disabled",
       "P0 Preview 原生 OA 提交开关未关闭，拒绝启动测试消费者",

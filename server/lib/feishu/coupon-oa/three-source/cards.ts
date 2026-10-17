@@ -1,3 +1,4 @@
+import { normalizeCouponEnumInput } from "../../../coupon-oa/calculation";
 import { isPlaceholderActivityName } from "../../../coupon-oa/three-source/activity-copy";
 import { canonicalCouponBusinessDate } from "../../../coupon-oa/three-source/business-date";
 import type {
@@ -598,6 +599,33 @@ function unresolvedIdentifierDimension(
  * 覆盖合法表值。select_static 不支持 default_value（真发 200621）无法客
  * 户端预选，默认值经此在 dispatcher 提交合并时兜底，卡片占位文案同步告知。
  */
+const enumDisclosureKeys = [
+  "claimRule",
+  "allowGift",
+  "promotionMode",
+  "businessMode",
+] as const;
+
+function enumNormalizationNotes(draft: CouponThreeSourcePilotDraft): string[] {
+  const coupon = draft.recognitions.couponTable;
+  const notes: string[] = [];
+  for (const key of enumDisclosureKeys) {
+    const label = fieldLabels[key] ?? key;
+    const seen = new Set<string>();
+    for (const candidate of coupon?.couponFieldCandidates[key] ?? []) {
+      for (const sample of candidate.sampleValues) {
+        const raw = sample.trim();
+        if (!raw) continue;
+        const normalized = normalizeCouponEnumInput(key, raw);
+        if (normalized === raw || seen.has(raw)) continue;
+        seen.add(raw);
+        notes.push(`「${label}」的“${raw}”已按标准值「${normalized}」处理`);
+      }
+    }
+  }
+  return notes;
+}
+
 export function mappingCardEnumDefaults(
   draft: CouponThreeSourcePilotDraft,
 ): Partial<Record<CouponFieldKey, string>> {
@@ -690,6 +718,17 @@ export function buildCouponThreeSourceMappingCard(
           : []),
       ].join("\n"),
     },
+    ...(enumNormalizationNotes(draft).length
+      ? [
+          {
+            tag: "markdown",
+            content: [
+              "**以下表内用词已按系统标准值处理（可在下方下拉中修改）：**",
+              ...enumNormalizationNotes(draft).map((note) => `- ${note}`),
+            ].join("\n"),
+          },
+        ]
+      : []),
     ...(draft.task.confirmedCalcImages.length &&
     draft.task.pendingCalcImages.length
       ? [

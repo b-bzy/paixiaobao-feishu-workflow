@@ -415,7 +415,7 @@ describe("single coupon confirmation", () => {
 
   it("explains enum mismatches with provenance and legal options in Chinese", async () => {
     const row = couponRow("活动A", "100", "20").map((value, index) =>
-      index === 19 ? "是" : value,
+      index === 19 ? "赠送" : value,
     );
     const recognition = await inspectThreeSourceWorkbook(
       await couponSource([row]),
@@ -436,7 +436,7 @@ describe("single coupon confirmation", () => {
       "「是否允许转赠」只能填「允许」或「不允许」",
     );
     expect(issue?.message).toContain(
-      "当前取值“是”（来自你上传配券表的「优惠券赠送」列）",
+      "当前取值“赠送”（来自你上传配券表的「优惠券赠送」列）",
     );
     expect(issue?.message).toContain("该字段已加入下方表单");
     expect(fieldError.message).not.toContain("Invalid option");
@@ -453,7 +453,7 @@ describe("single coupon confirmation", () => {
       revision: 1,
       ownerFieldValues: {
         activityPointPercent: 6,
-        allowGift: "是",
+        allowGift: "赠送",
       },
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RegularFullReductionFieldError);
@@ -461,7 +461,7 @@ describe("single coupon confirmation", () => {
     const issue = fieldError.fieldIssues.find(
       (item) => item.key === "allowGift",
     );
-    expect(issue?.message).toContain("当前取值“是”（来自你在表单中的填写）");
+    expect(issue?.message).toContain("当前取值“赠送”（来自你在表单中的填写）");
   });
 
   it("confirms multiple full-reduction rows as one ordered tier set", async () => {
@@ -971,5 +971,41 @@ describe("multi-sheet identifier list", () => {
       ["100减1", "00123"],
       ["2000减20", "00123"],
     ]);
+  });
+});
+
+describe("lenient enum normalization (soft gate)", () => {
+  it("accepts dialect values that map unambiguously to the canonical enum", async () => {
+    const row = couponRow("活动A", "100", "20").map((value, index) =>
+      index === 19 ? "是" : value,
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row]),
+    );
+    await discoverRegularFullReductionCoupons({ recognition });
+    const confirmed = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      ownerFieldValues: { activityPointPercent: 6 },
+    });
+    expect(confirmed.tiers[0].input.allowGift).toBe("允许");
+  });
+
+  it("normalises claim rule wording without rejecting the submission", async () => {
+    const row = couponRow("活动A", "100", "20").map((value, index) =>
+      index === 18 ? "每天可领一次" : value,
+    );
+    const recognition = await inspectThreeSourceWorkbook(
+      await couponSource([row]),
+    );
+    await discoverRegularFullReductionCoupons({ recognition });
+    const confirmed = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "owner-1",
+      revision: 1,
+      ownerFieldValues: { activityPointPercent: 6 },
+    });
+    expect(confirmed.tiers[0].input.claimRule).toBe("活动期间每天可领一次");
   });
 });

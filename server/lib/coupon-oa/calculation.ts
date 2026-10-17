@@ -7,6 +7,58 @@ const positiveAmount = z.number().positive().finite();
 const ratio = z.number().min(0).max(1).finite();
 const nonZeroRatio = z.number().positive().max(1).finite();
 
+/**
+ * 封闭枚举的宽容归一（软门禁）：表内用词只要能**无歧义**映射到唯一标准值，
+ * 就自动采用标准值继续流程，不整单退回；映射不动的保持原样走严格校验。
+ * 归一只改写进入校验的候选值，不改源单元格；归一结果会随确认快照留痕，
+ * 且映射卡片会明示「已按标准值处理」。2026-10-18 Owner 裁定：宁可通过
+ * +留痕，不要高频退回。
+ */
+const enumCanonicalRules: ReadonlyArray<{
+  field: "claimRule" | "allowGift" | "promotionMode" | "businessMode";
+  test: RegExp;
+  canonical: string;
+}> = [
+  {
+    field: "claimRule",
+    test: /每天可领|每日可领/,
+    canonical: "活动期间每天可领一次",
+  },
+  {
+    field: "claimRule",
+    test: /仅可领一次|仅限一次|只能领一次/,
+    canonical: "活动期间仅可领一次",
+  },
+  { field: "allowGift", test: /^(是|可以|能|允许赠送)$/, canonical: "允许" },
+  { field: "allowGift", test: /^(否|不可以|不能)$/, canonical: "不允许" },
+  { field: "promotionMode", test: /非公开/, canonical: "非公开推广" },
+  { field: "promotionMode", test: /公开/, canonical: "公开自动推广" },
+  { field: "businessMode", test: /^pop$/i, canonical: "pop" },
+];
+
+export function normalizeCouponEnumInput(
+  field: "claimRule" | "allowGift" | "promotionMode" | "businessMode",
+  raw: unknown,
+): string {
+  if (typeof raw !== "string") return String(raw ?? "");
+  const folded = foldFullWidth(raw).replace(/\s+/g, "");
+  for (const rule of enumCanonicalRules) {
+    if (rule.field !== field) continue;
+    if (rule.test.test(folded)) return rule.canonical;
+  }
+  return raw.trim();
+}
+
+function withEnumNormalize<T extends z.ZodType<string>>(
+  field: "claimRule" | "allowGift" | "promotionMode" | "businessMode",
+  schema: T,
+) {
+  return z.preprocess(
+    (raw) => normalizeCouponEnumInput(field, raw),
+    schema,
+  ) as unknown as T;
+}
+
 export const regularFullReductionChannelSchema = z.enum(["JD", "PAIPAI"]);
 export type RegularFullReductionChannel = z.infer<
   typeof regularFullReductionChannelSchema
@@ -16,7 +68,10 @@ export const regularFullReductionInputSchema = z
   .object({
     activityName: requiredText.max(200),
     activityBackground: requiredText.max(4000),
-    businessMode: z.enum(["严选", "寄卖", "pop"]),
+    businessMode: withEnumNormalize(
+      "businessMode",
+      z.enum(["严选", "寄卖", "pop"]),
+    ),
     applicantName: requiredText.max(200),
     activityStartAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     activityEndAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -35,9 +90,15 @@ export const regularFullReductionInputSchema = z
     couponType: z.literal("东券").default("东券"),
     productLimitType: z.literal("限SKU").default("限SKU"),
     claimRiskControl: z.literal("0级以下用户可领").default("0级以下用户可领"),
-    claimRule: z.enum(["活动期间仅可领一次", "活动期间每天可领一次"]),
-    allowGift: z.enum(["允许", "不允许"]),
-    promotionMode: z.enum(["公开自动推广", "非公开推广"]),
+    claimRule: withEnumNormalize(
+      "claimRule",
+      z.enum(["活动期间仅可领一次", "活动期间每天可领一次"]),
+    ),
+    allowGift: withEnumNormalize("allowGift", z.enum(["允许", "不允许"])),
+    promotionMode: withEnumNormalize(
+      "promotionMode",
+      z.enum(["公开自动推广", "非公开推广"]),
+    ),
     publicPromotionChannels: z.array(requiredText).max(4).default([]),
     overDeduction: z.enum(["是", "否"]),
     overDeductionReason: z.string().trim().max(4000).default(""),

@@ -845,21 +845,71 @@ export function createCouponThreeSourceDispatcher(
     fileName?: string;
     idempotencyKey?: string;
   }): Promise<CouponThreeSourceDispatchResult> {
-    if (!dependencies.isPilotEnabled()) return { handled: false };
+    if (!dependencies.isPilotEnabled()) {
+      console.warn(
+        JSON.stringify({
+          event: "file_ignored",
+          reason: "pilot_disabled",
+          messageId: input.messageId,
+        }),
+      );
+      return { handled: false };
+    }
     try {
-      if (!dependencies.isCouponOaEnabled()) return { handled: false };
+      if (!dependencies.isCouponOaEnabled()) {
+        console.warn(
+          JSON.stringify({
+            event: "file_ignored",
+            reason: "coupon_oa_disabled",
+            messageId: input.messageId,
+          }),
+        );
+        return { handled: false };
+      }
       dependencies.assertUserAllowed(input.openId);
-    } catch {
+    } catch (error) {
+      // 静默丢弃文件会让业务员完全失去线索（2026-10-18 夜间回归）：
+      // 每个忽略分支都必须留下可检索的诊断日志。
+      console.warn(
+        JSON.stringify({
+          event: "file_ignored",
+          reason: "user_allowed_check_failed",
+          detail:
+            error instanceof Error
+              ? error.message.slice(0, 160)
+              : String(error),
+          messageId: input.messageId,
+        }),
+      );
       return { handled: false };
     }
     let active: CouponThreeSourcePilotDraft[];
     try {
       active = await dependencies.listActiveThreeSource(input.openId);
-    } catch {
-      // A partially configured pilot must not steal files from existing routes.
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          event: "file_ignored",
+          reason: "list_active_failed",
+          detail:
+            error instanceof Error
+              ? error.message.slice(0, 200)
+              : String(error),
+          messageId: input.messageId,
+        }),
+      );
       return { handled: false };
     }
-    if (!active.length) return { handled: false };
+    if (!active.length) {
+      console.warn(
+        JSON.stringify({
+          event: "file_ignored",
+          reason: "no_active_draft",
+          messageId: input.messageId,
+        }),
+      );
+      return { handled: false };
+    }
     if (active.length > 1) {
       await dependencies.sendCard(
         input.openId,

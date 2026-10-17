@@ -988,11 +988,25 @@ export class CouponThreeSourcePilotService {
   }): Promise<CouponThreeSourcePilotDraft> {
     assertOwnerAndRevision(input);
     if (!input.operationId) throw new Error("三源提报操作 ID 不能为空");
+    if (input.draft.task.status === "DraftOnlyConfirmed") {
+      // 已完成草稿上的旧终审卡被再次点击（卡片不会自动作废）：给友好
+      // 结论而不是兜底错误文案（2026-10-18 真实使用误报"系统未完成"）。
+      throw new CouponThreeSourceError({
+        code: "STALE_REVISION",
+        message: "final confirm on already-confirmed draft",
+        userMessage:
+          "本次提报已完成，OA 测试稿已创建，无需重复确认；如需重新提报请发送 /OA优惠券提报。",
+      });
+    }
     if (
       input.draft.task.status !== "AwaitingFinalConfirmation" ||
       !input.draft.oaPrefill
     ) {
-      throw new Error("当前三源提报尚不能生成 OA 测试稿");
+      throw new CouponThreeSourceError({
+        code: "STALE_REVISION",
+        message: "当前三源提报尚不能生成 OA 测试稿",
+        userMessage: "当前状态还不能创建 OA 测试稿，请以最新卡片为准重新操作。",
+      });
     }
     const oaDraft = await this.dependencies.handoff({
       ownerOpenId: input.ownerOpenId,

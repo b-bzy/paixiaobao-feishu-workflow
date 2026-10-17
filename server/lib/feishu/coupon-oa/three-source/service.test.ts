@@ -3,6 +3,7 @@ import { join } from "node:path";
 import ExcelJS from "exceljs";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
+import { CouponThreeSourceError } from "../../../coupon-oa/three-source/errors";
 import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/task";
 import {
   type CouponThreeSourcePilotDependencies,
@@ -875,5 +876,45 @@ describe("pending source queue promotion", () => {
     expect(next.pendingSources?.length).toBe(1);
     expect(next.pendingRecognition?.source.fileName).toBe("名单B.xlsx");
     expect(next.task.sources.blacklist?.fileName).toBe("名单A.xlsx");
+  });
+});
+
+describe("final confirm on already-confirmed draft", () => {
+  it("returns a friendly completion notice instead of a generic failure", async () => {
+    const service = new CouponThreeSourcePilotService({
+      updateDraft: vi.fn(),
+    } as unknown as CouponThreeSourcePilotDependencies);
+    const draft: CouponThreeSourcePilotDraft = {
+      recordId: "rec-done",
+      pilotId: "CTS-done",
+      ownerOpenId: "ou_owner",
+      task: {
+        ...createCouponThreeSourceTask({
+          taskId: "CTS-done",
+          ownerOpenId: "ou_owner",
+        }),
+        revision: 5,
+        status: "DraftOnlyConfirmed",
+      },
+      schemaVersion: "coupon-three-source-pilot-v2",
+      recognitions: {},
+      selections: {},
+      artifacts: [],
+      processedMessageIds: [],
+      validationIssues: [],
+    };
+    const error = await service
+      .confirmFinalPreview({
+        draft,
+        ownerOpenId: "ou_owner",
+        expectedRevision: 5,
+        operationId: "op-stale-final",
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CouponThreeSourceError);
+    expect((error as CouponThreeSourceError).code).toBe("STALE_REVISION");
+    expect((error as CouponThreeSourceError).userMessage).toContain(
+      "本次提报已完成",
+    );
   });
 });

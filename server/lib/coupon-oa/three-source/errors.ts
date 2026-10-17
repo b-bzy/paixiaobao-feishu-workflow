@@ -53,6 +53,11 @@ const knownErrors: Array<{
     code: "STALE_REVISION",
   },
   {
+    pattern: /尚不能生成 OA 测试稿/iu,
+    code: "STALE_REVISION",
+    userMessage: "当前状态还不能创建 OA 测试稿，请以最新卡片为准重新操作。",
+  },
+  {
     pattern: /只有当前三源提报创建人|不能确认其他业务员/iu,
     code: "OWNER_FORBIDDEN",
     userMessage: "只有当前提报创建人可以继续操作。",

@@ -290,8 +290,9 @@ function composeForm(fields: FormField[], plan: CasePlan): Record<string, string
       case "owner_activityBackground": form[field.name] = "本地自动测试R2：全流程回归，不创建真实 OA"; break;
       case "owner_activityStartAt": form[field.name] = plan.startAt; break;
       case "owner_activityEndAt": form[field.name] = plan.endAt; break;
-      case "owner_claimRule": form[field.name] = "活动期间每天可领一次"; break;
-      case "owner_allowGift": form[field.name] = "不允许"; break;
+      // claimRule/allowGift 不预填：真实用户不会抄标准词，留空交给
+      // 软门禁归一表内方言值（2026-10-18 教训：预填标准值等于带着答案
+      // 考试，会掩盖真实用户被退回的路径）。
       case "owner_promotionMode": form[field.name] = "公开自动推广"; break;
       case "owner_publicPromotionChannels": form[field.name] = "单品页购物车"; break;
       case "owner_useWindow": form[field.name] = `${plan.startAt} 至 ${plan.endAt}`; break;

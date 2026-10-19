@@ -1,8 +1,8 @@
 # 优惠券 OA 当前功能结构与重构基线 v1
 
 > **状态**：持续维护的技术基线；用于指导后续迭代与重构拆分
-> **版本**：v1.12（与第 12 节变更记录轨道对齐）
-> **建立日期**：2026-10-08；最近更新：2026-10-16（补记 11310 name 超限修复与卡片长度门禁）
+> **版本**：v1.13（与第 12 节变更记录轨道对齐）
+> **建立日期**：2026-10-08；最近更新：2026-10-19（补记 Base 活跃草稿查询未翻页修复与共享翻页助手）
 > **代码快照**：当前工作区中默认关闭的三源 POC 实现；不代表已部署或已获 Gate 批准
 > **适用范围**：飞书 Bot、优惠券 Excel 试点、系统 OA 草稿、飞书原生审批提交，以及它们之间的文件与状态交接
 > **不替代**：[P1 Excel 试点 PRD v1.6](../product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 的产品范围，也不将[对话式一轮确认改造 PRD](../../proposals/conversational-single-confirm/coupon-oa-conversational-single-confirm-prd-v1.3.md)视为已获批实现。
@@ -428,6 +428,7 @@ Feishu transport
 
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-19 | v1.13 | 修复四处 Feishu Base 列表查询只读第一页 100 条、不跟随 `page_token` 的截断缺陷（2026-10-19 E2E「文件静默丢弃」根因，诊断记录见 `records/diagnostics/coupon-three-source-unpaged-active-lookup-2026-10-19.md`）：试点表过百条后，三源活跃草稿（Collecting）落在第 2 页 → 活跃草稿查询恒返回空 → `/clear` 误报"没有未完成提报"、`/OA优惠券提报` 重复建稿、文件消息走 `no_active_draft` 分支静默丢弃。修复：新增共享翻页助手 `server/lib/feishu/bitable-pagination.ts`（跟随 `page_token` 至 `has_more=false`；缺 token/token 不前进/超 100 页一律抛错 fail-loud），接入三源试点 store、OA 草稿 store（互斥检查）、`base-store`（报销模板/实例）、Excel 试点 store；`VALIDATION_REQUIRED` 错误映射追加「请先上传配券表和商品白名单」「请先确认无法唯一识别的材料角色」，不再落入"系统未完成本次处理"兜底卡。已知取舍：`listActive*` 为全量翻页（当前 2 次请求），记录持续增长后需服务端 filter 或归档 | 修复存量截断缺陷；自动化回归（翻页助手 + 四 store 第 2 页场景 + 错误映射）已过，Preview 部署与线上 `/clear` 恢复验证待执行 |
 | 2026-10-16 | v1.12 | 修复飞书卡片组件 name 100 字符上限拒收（ErrCode 11310，2026-10-16 E2E 卡死根因）：`907c9a6` 把 mapping 确认按钮 name 的上下文哈希写成全量 64 hex（~119 字符），飞书整卡拒收、发卡 effect 烧完死信、用户停在"AI 识别中"。修复：新增 `action-name.ts` 作为三源版本化动作 name 的唯一编解码点（wire 侧哈希截为 24 hex/96 bit；构建期断言 ≤100 fail-closed；解析器同时接受无哈希历史卡、拒绝已废止的 64 hex 格式），dispatcher 对称改造；语义幂等键与 Base `mappingCardDelivery.contextHash` 保持全量 64 hex 不变。同批加固：input `default_value` 预填超 800 字符丢弃（不截断——default_value 会原样进入确认值/OA 预填）并回横幅提示手填，AI 展示位 200 字符展示级截断；cards-schema walker 与 `audit:cards` 干跑增加 name/default_value 长度门禁；补 dispatcher 哈希比对路径测试（此前零覆盖）。同批在领域层 `owner-input.ts` 增设自由文本长度上限（活动名称 100/活动背景 500/领取规则 500/超扣原因 200，超限丢弃不截断、走「输入校验」回流），产品合同同步 [MVP PRD v1.6](../product/coupon-oa-mvp-prd-v1.6.md) §7 | 修复 907c9a6 引入的投递类回归；自动化用例（schema/dispatcher/action-name）与真发审计待随本版验证 |
 | 2026-10-15 | v1.11 | 三源识别链路加固：AI proposal 分区容错、AI-primary 不再混入规则行、部分 AI 名单区域与未覆盖 Sheet 合并、旧 Base 状态规范化、安全错误投影和附件显式分类 | 当前为本地代码与自动化回归；尚未完成 Preview/飞书 E2E，不表示能力已上线 |
 | 2026-10-14 | v1.10 | 本地测试轮驱动的第二轮卡 UX 与链路收敛：超扣改表单内下拉（去 PATCH 刷新）、补充说明改选填、生成确认后卡片立即变"生成中"防连点、提交先中文预校验再推版本（缺项原地可重试，格式错误仍走 AI 修复）、日期输入常驻表单；生成失败自动回退 GeneratingArtifacts 并重发表单（`recoverFailedGeneration`）；试点链第 5 步确认后直达「第 6 步提交确认卡」（去掉中间预填确认），已完成提报旧卡重击幂等重发该卡；**确认身份降级为尽力而为**（空壳通讯录档案/部门歧义 → openId-only 快照，表单省略身份控件，实例申请人仍由 create 请求的 open_id 指定） | 代码在工作区、自动化用例全过；尚未部署。**canary 前验证项**：目标定义的「部门」「申请人」控件为 required=true——开 Gate 后需验证飞书对省略的必填身份控件是自动填充还是拒绝；若拒绝则补 `contact:user.base:readonly` + `contact:user.department:readonly` 并发布应用版本（代码将自动恢复全量身份快照），失败为干净拒绝无副作用 |

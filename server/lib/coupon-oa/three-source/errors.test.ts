@@ -45,6 +45,23 @@ describe("coupon three-source errors", () => {
       code: "VALIDATION_REQUIRED",
       message: "配券表字段不符合常规满减券规则：未识别到「申请总数量」的取值",
     });
+    // 2026-10-19 事故：这两条可执行文案此前落入 UNEXPECTED_FAILURE 兜底。
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error("请先上传配券表和商品白名单，再开始统一识别"),
+      ),
+    ).toEqual({
+      code: "VALIDATION_REQUIRED",
+      message: "请先上传配券表和商品白名单，再开始统一识别",
+    });
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error("请先确认无法唯一识别的材料角色"),
+      ),
+    ).toEqual({
+      code: "VALIDATION_REQUIRED",
+      message: "请先确认无法唯一识别的材料角色",
+    });
     expect(
       toCouponThreeSourceUserFailure(
         new Error("三源提报源文件必须大于 0 且不超过 10 MB"),

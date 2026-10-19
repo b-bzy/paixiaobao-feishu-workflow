@@ -30,6 +30,7 @@ describe("coupon OA configuration", () => {
     process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS;
   const originalCouponOaAllowedOpenIds =
     process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
+  const originalCouponOaOpenAccess = process.env.FEISHU_COUPON_OA_OPEN_ACCESS;
   const originalBaseAppToken = process.env.FEISHU_BASE_APP_TOKEN;
   const originalDraftTableId = process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
 
@@ -47,6 +48,10 @@ describe("coupon OA configuration", () => {
     restoreEnvironment(
       "FEISHU_COUPON_OA_ALLOWED_OPEN_IDS",
       originalCouponOaAllowedOpenIds,
+    );
+    restoreEnvironment(
+      "FEISHU_COUPON_OA_OPEN_ACCESS",
+      originalCouponOaOpenAccess,
     );
     restoreEnvironment("FEISHU_BASE_APP_TOKEN", originalBaseAppToken);
     restoreEnvironment("FEISHU_COUPON_DRAFT_TABLE_ID", originalDraftTableId);
@@ -138,6 +143,7 @@ describe("coupon OA configuration", () => {
 
   it("denies stateful coupon operations without a general tester allowlist", () => {
     delete process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
+    delete process.env.FEISHU_COUPON_OA_OPEN_ACCESS;
     expect(() => assertCouponOaUserAllowed("ou_submitter")).toThrow(
       "Coupon OA is not allowed for this user",
     );
@@ -147,6 +153,38 @@ describe("coupon OA configuration", () => {
       "Coupon OA is not allowed for this user",
     );
     expect(() => assertCouponOaUserAllowed("ou_allowed")).not.toThrow();
+  });
+
+  it("lets any user run coupon workflows when open access is enabled", () => {
+    delete process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS;
+    process.env.FEISHU_COUPON_OA_OPEN_ACCESS = "true";
+    expect(() => assertCouponOaUserAllowed("ou_anyone")).not.toThrow();
+
+    process.env.FEISHU_COUPON_OA_OPEN_ACCESS = "false";
+    expect(() => assertCouponOaUserAllowed("ou_anyone")).toThrow(
+      "Coupon OA is not allowed for this user",
+    );
+  });
+
+  it("rejects a malformed open access flag", () => {
+    process.env.FEISHU_COUPON_OA_ALLOWED_OPEN_IDS = "ou_allowed";
+    process.env.FEISHU_COUPON_OA_OPEN_ACCESS = "yes";
+    expect(() => assertCouponOaUserAllowed("ou_allowed")).toThrow(
+      "FEISHU_COUPON_OA_OPEN_ACCESS must be true or false",
+    );
+  });
+
+  it("keeps native submit restricted to its allowlist under open access", () => {
+    process.env.FEISHU_COUPON_OA_MODE = "native-submit";
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED = "true";
+    process.env.FEISHU_COUPON_OA_OPEN_ACCESS = "true";
+    delete process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS;
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_anyone")).toThrow(
+      "native submit is not allowed for this user",
+    );
+
+    process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS = "ou_anyone";
+    expect(() => assertCouponOaNativeSubmitAllowed("ou_anyone")).not.toThrow();
   });
 
   it("rejects malformed native submit configuration", () => {

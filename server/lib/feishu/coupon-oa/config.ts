@@ -85,8 +85,21 @@ function configuredOpenIds(name: string): Set<string> {
   return new Set(openIds);
 }
 
-/** Applies to all coupon-OA stateful operations, including draft-only. */
+function couponOaOpenAccessEnabled(): boolean {
+  const value = process.env.FEISHU_COUPON_OA_OPEN_ACCESS?.trim();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error("FEISHU_COUPON_OA_OPEN_ACCESS must be true or false");
+}
+
+/**
+ * Applies to all coupon-OA stateful operations, including draft-only. Open
+ * access delegates usage authorization to the Feishu app availability scope;
+ * it never bypasses the native-submit mode gate, kill switch, or submit
+ * allowlist checked separately by assertCouponOaNativeSubmitAllowed.
+ */
 export function assertCouponOaUserAllowed(openId: string): void {
+  if (couponOaOpenAccessEnabled()) return;
   if (!configuredOpenIds("FEISHU_COUPON_OA_ALLOWED_OPEN_IDS").has(openId)) {
     throw new Error("Coupon OA is not allowed for this user");
   }

@@ -10,6 +10,7 @@ import { createCouponThreeSourceTask } from "../../../coupon-oa/three-source/tas
 import { getTenantAccessToken } from "../../client";
 import {
   createCouponThreeSourcePilotDraft,
+  listActiveCouponThreeSourcePilotDrafts,
   normalizeCouponThreeSourcePilotDraftState,
   toStoredWorkbookRecognition,
   updateCouponThreeSourcePilotDraft,
@@ -343,5 +344,93 @@ describe("three-source pilot Base store", () => {
     expect(normalizeCouponThreeSourcePilotDraftState(normalized)).toEqual(
       normalized,
     );
+  });
+});
+
+describe("listActiveCouponThreeSourcePilotDrafts pagination", () => {
+  beforeEach(() => {
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  function storedFields(recordId: string, ownerOpenId: string): BaseFields {
+    const task = createCouponThreeSourceTask({
+      taskId: `CTS-${recordId}`,
+      ownerOpenId,
+    });
+    return {
+      "Pilot ID": `CTS-${recordId}`,
+      "Owner Open ID": ownerOpenId,
+      Status: task.status,
+      Revision: task.revision,
+      "Schema Version": "coupon-three-source-r2-v2",
+      "Task ID": task.taskId,
+      "State JSON": JSON.stringify({
+        task,
+        recognitions: {},
+        pendingSources: [],
+        selections: {},
+        artifacts: [],
+        processedMessageIds: [],
+        validationIssues: [],
+      }),
+    };
+  }
+
+  type ListRecord = { record_id: string; fields: BaseFields };
+
+  function pagedFake(pages: Array<{ items: ListRecord[] }>) {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      const token = new URL(url).searchParams.get("page_token");
+      const index = token ? Number(token) : 0;
+      const page = pages[index] ?? { items: [] };
+      const hasMore = index + 1 < pages.length;
+      return {
+        ok: true,
+        json: async () => ({
+          code: 0,
+          msg: "success",
+          data: {
+            items: page.items,
+            has_more: hasMore,
+            ...(hasMore ? { page_token: String(index + 1) } : {}),
+          },
+        }),
+      };
+    });
+    return { fetchMock, urls };
+  }
+
+  // 2026-10-19 事故回归：表超过 100 条后，活跃草稿落在第 2 页，
+  // 旧实现只读第一页导致文件被静默丢弃、/clear 误报没有未完成提报。
+  it("finds an active draft hiding on page 2 of a >100-record table", async () => {
+    const fillers = Array.from({ length: 100 }, (_, index) => ({
+      record_id: `rec-filler-${index}`,
+      fields: storedFields(`filler-${index}`, "ou_someone_else"),
+    }));
+    const active = {
+      record_id: "rec-page2",
+      fields: storedFields("page2", "ou_test"),
+    };
+    const { fetchMock, urls } = pagedFake([
+      { items: fillers },
+      { items: [active] },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const activeDrafts =
+      await listActiveCouponThreeSourcePilotDrafts("ou_test");
+
+    expect(activeDrafts.map((draft) => draft.recordId)).toEqual(["rec-page2"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(urls[0]).toContain("page_size=100");
+    expect(urls[0]).not.toContain("page_token");
+    expect(urls[1]).toContain("page_token=1");
   });
 });

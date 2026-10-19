@@ -9,6 +9,7 @@ import { getTenantAccessToken } from "../client";
 import {
   type CouponExcelPilotDraft,
   createCouponExcelPilotDraft,
+  listActiveCouponExcelPilotDrafts,
   sourceFileMetadata,
   updateCouponExcelPilotDraft,
 } from "./excel-pilot-store";
@@ -177,5 +178,72 @@ describe("coupon Excel pilot Base store", () => {
         "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
       candidates: undefined,
     });
+  });
+});
+
+describe("listActiveCouponExcelPilotDrafts pagination", () => {
+  beforeEach(() => {
+    process.env.FEISHU_BASE_APP_TOKEN = "app-pilot";
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalBaseAppToken === undefined) {
+      delete process.env.FEISHU_BASE_APP_TOKEN;
+    } else {
+      process.env.FEISHU_BASE_APP_TOKEN = originalBaseAppToken;
+    }
+  });
+
+  function pilotFields(recordId: string, ownerOpenId: string) {
+    return {
+      "Pilot ID": `CEP-${recordId}`,
+      "Owner Open ID": ownerOpenId,
+      Status: "Collecting",
+      Revision: 1,
+      "Schema Version": "coupon-excel-pilot-v1",
+      "Generated Files JSON": "[]",
+      "Processed Message IDs JSON": "[]",
+      "Validation Issues JSON": "[]",
+    };
+  }
+
+  // 2026-10-19 事故回归：试点表过百条后，第 2 页的活跃草稿不能失明。
+  it("finds an active pilot draft on page 2", async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      const token = new URL(url).searchParams.get("page_token");
+      const index = token ? Number(token) : 0;
+      const hasMore = index === 0;
+      return {
+        ok: true,
+        json: async () => ({
+          code: 0,
+          msg: "success",
+          data: {
+            items: [
+              {
+                record_id: index === 0 ? "rec-p1" : "rec-p2",
+                fields: pilotFields(
+                  index === 0 ? "p1" : "p2",
+                  index === 0 ? "ou_other" : "ou_test",
+                ),
+              },
+            ],
+            has_more: hasMore,
+            ...(hasMore ? { page_token: "1" } : {}),
+          },
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const drafts = await listActiveCouponExcelPilotDrafts("ou_test");
+
+    expect(drafts.map((draft) => draft.recordId)).toEqual(["rec-p2"]);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain("page_token=1");
   });
 });

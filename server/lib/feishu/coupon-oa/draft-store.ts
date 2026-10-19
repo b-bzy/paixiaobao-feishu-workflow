@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  bitableRecordsPath,
+  listAllBitableRecords,
+} from "../bitable-pagination";
 import { getTenantAccessToken } from "../client";
 import type { CouponOaDraftValues } from "./approval-schema";
 import {
@@ -77,7 +81,12 @@ interface BaseRecord {
 interface BaseResponse {
   code: number;
   msg: string;
-  data?: { record?: BaseRecord; items?: BaseRecord[] };
+  data?: {
+    record?: BaseRecord;
+    items?: BaseRecord[];
+    page_token?: string;
+    has_more?: boolean;
+  };
 }
 
 function scalar(value: unknown): string {
@@ -216,22 +225,36 @@ export async function getCouponOaDraft(
   return parseRecord(record);
 }
 
+/**
+ * List requests must not go through `request`, which unwraps a single
+ * `data.record`; this returns one raw page so pagination can walk it.
+ */
+async function requestRecordsPage(
+  path: string,
+): Promise<Exclude<BaseResponse["data"], undefined>> {
+  assertCouponOaDraftStoreConfigured();
+  const token = await getTenantAccessToken();
+  const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const result = (await response.json()) as BaseResponse;
+  if (!response.ok || result.code !== 0) {
+    throw new Error(`Feishu coupon draft request failed: ${result.msg}`);
+  }
+  return result.data ?? {};
+}
+
 export async function listActiveCouponOaDrafts(
   ownerOpenId: string,
 ): Promise<CouponOaDraft[]> {
   assertCouponOaDraftStoreConfigured();
   const tableId = getCouponOaDraftTableId();
   const appToken = process.env.FEISHU_BASE_APP_TOKEN;
-  const token = await getTenantAccessToken();
-  const response = await fetch(
-    `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?page_size=100`,
-    { headers: { Authorization: `Bearer ${token}` } },
+  if (!appToken) throw new Error("Feishu Base POC is not configured");
+  const items = await listAllBitableRecords<BaseRecord>(async (pageToken) =>
+    requestRecordsPage(bitableRecordsPath({ appToken, tableId, pageToken })),
   );
-  const result = (await response.json()) as BaseResponse;
-  if (!response.ok || result.code !== 0) {
-    throw new Error(`Feishu coupon draft request failed: ${result.msg}`);
-  }
-  return (result.data?.items ?? [])
+  return items
     .map(parseRecord)
     .filter(
       (draft) =>

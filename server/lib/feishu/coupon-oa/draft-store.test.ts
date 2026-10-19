@@ -6,6 +6,7 @@ import { getTenantAccessToken } from "../client";
 import {
   type CouponOaDraft,
   type CouponOaDraftStatus,
+  listActiveCouponOaDrafts,
   persistCouponOaSubmissionOutcome,
   saveCouponOaDraft,
   updateCouponOaDraft,
@@ -262,5 +263,57 @@ describe("persistCouponOaSubmissionOutcome", () => {
     ).resolves.toMatchObject({ status: "CreatedNeedsReview" });
 
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "PUT" });
+  });
+});
+
+describe("listActiveCouponOaDrafts pagination", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+    process.env.FEISHU_BASE_APP_TOKEN = "appCouponDraft";
+    process.env.FEISHU_COUPON_DRAFT_TABLE_ID = "tblCouponDraft";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FEISHU_BASE_APP_TOKEN;
+    delete process.env.FEISHU_COUPON_DRAFT_TABLE_ID;
+  });
+
+  function pagedResponse(index: number, pageCount: number) {
+    const hasMore = index + 1 < pageCount;
+    return {
+      ok: true,
+      json: async () => ({
+        code: 0,
+        msg: "ok",
+        data: {
+          items: hasMore || index === 1 ? [record(fields())] : [],
+          has_more: hasMore,
+          ...(hasMore ? { page_token: String(index + 1) } : {}),
+        },
+      }),
+    };
+  }
+
+  // 2026-10-19 事故回归：OA 草稿表过百条后，互斥检查不能对第 2 页失明。
+  it("sees an active draft on page 2 when the table exceeds one page", async () => {
+    const urls: string[] = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      urls.push(String(url));
+      const token = new URL(url).searchParams.get("page_token");
+      return pagedResponse(token ? Number(token) : 0, 2);
+    });
+
+    const drafts = await listActiveCouponOaDrafts("ou_submitter");
+
+    expect(drafts).toHaveLength(2);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain("page_size=100");
+    expect(urls[0]).not.toContain("page_token");
+    expect(urls[1]).toContain("page_token=1");
   });
 });

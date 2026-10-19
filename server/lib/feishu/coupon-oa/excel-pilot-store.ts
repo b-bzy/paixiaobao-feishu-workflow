@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  bitableRecordsPath,
+  listAllBitableRecords,
+} from "../bitable-pagination";
 import { getTenantAccessToken } from "../client";
 import type { CouponOaAttachment } from "./draft-store";
 import { getCouponExcelPilotTableId } from "./excel-pilot-config";
@@ -88,7 +92,12 @@ interface BaseRecord {
 interface BaseResponse {
   code: number;
   msg: string;
-  data?: { record?: BaseRecord; items?: BaseRecord[] };
+  data?: {
+    record?: BaseRecord;
+    items?: BaseRecord[];
+    page_token?: string;
+    has_more?: boolean;
+  };
 }
 
 function scalar(value: unknown): string {
@@ -273,10 +282,13 @@ export async function listActiveCouponExcelPilotDrafts(
   const tableId = getCouponExcelPilotTableId();
   const appToken = process.env.FEISHU_BASE_APP_TOKEN;
   if (!appToken) throw new Error("Feishu Base POC is not configured");
-  const result = await request(
-    `/bitable/v1/apps/${appToken}/tables/${tableId}/records?page_size=100`,
-  );
-  return (result.data?.items ?? [])
+  const items = await listAllBitableRecords<BaseRecord>(async (pageToken) => {
+    const result = await request(
+      bitableRecordsPath({ appToken, tableId, pageToken }),
+    );
+    return result.data ?? {};
+  });
+  return items
     .map(parseRecord)
     .filter(
       (draft) =>

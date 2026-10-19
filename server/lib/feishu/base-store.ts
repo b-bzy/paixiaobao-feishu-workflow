@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  bitableRecordsPath,
+  listAllBitableRecords,
+} from "./bitable-pagination";
 import { getTenantAccessToken } from "./client";
 import {
   type AdminWorkflowTemplate,
@@ -20,7 +24,12 @@ interface BaseRecord {
 interface BaseResponse {
   code: number;
   msg: string;
-  data?: { items?: BaseRecord[]; record?: BaseRecord };
+  data?: {
+    items?: BaseRecord[];
+    record?: BaseRecord;
+    page_token?: string;
+    has_more?: boolean;
+  };
 }
 
 type TemplateStatus = AdminWorkflowTemplate["status"];
@@ -148,10 +157,12 @@ function toWorkflowInstance(record: BaseRecord): WorkflowInstance {
 
 async function listRecords(tableId: string): Promise<BaseRecord[]> {
   const { appToken } = config();
-  const result = await request(
-    `/bitable/v1/apps/${appToken}/tables/${tableId}/records?page_size=100`,
-  );
-  return result.data?.items ?? [];
+  return listAllBitableRecords<BaseRecord>(async (pageToken) => {
+    const result = await request(
+      bitableRecordsPath({ appToken, tableId, pageToken }),
+    );
+    return result.data ?? {};
+  });
 }
 
 async function getRecord(

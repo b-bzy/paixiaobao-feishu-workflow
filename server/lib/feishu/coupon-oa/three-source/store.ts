@@ -23,6 +23,10 @@ import type {
   ValidatedAiRecognition,
   WorkbookRecognition,
 } from "../../../coupon-oa/three-source/types";
+import {
+  bitableRecordsPath,
+  listAllBitableRecords,
+} from "../../bitable-pagination";
 import { getTenantAccessToken } from "../../client";
 import type { FrozenThreeSourceArtifact } from "./handoff";
 import {
@@ -184,7 +188,12 @@ interface BaseRecord {
 interface BaseResponse {
   code: number;
   msg: string;
-  data?: { record?: BaseRecord; items?: BaseRecord[] };
+  data?: {
+    record?: BaseRecord;
+    items?: BaseRecord[];
+    page_token?: string;
+    has_more?: boolean;
+  };
 }
 
 function scalar(value: unknown): string {
@@ -453,10 +462,13 @@ export async function listActiveCouponThreeSourcePilotDrafts(
 ): Promise<CouponThreeSourcePilotDraft[]> {
   const tableId = getCouponThreeSourcePilotTableId();
   const appToken = getCouponThreeSourcePilotBaseAppToken();
-  const result = await request(
-    `/bitable/v1/apps/${appToken}/tables/${tableId}/records?page_size=100`,
-  );
-  return (result.data?.items ?? [])
+  const items = await listAllBitableRecords<BaseRecord>(async (pageToken) => {
+    const result = await request(
+      bitableRecordsPath({ appToken, tableId, pageToken }),
+    );
+    return result.data ?? {};
+  });
+  return items
     .map(parseRecord)
     .filter((draft) => draft.ownerOpenId === ownerOpenId && isActive(draft))
     .sort((left, right) =>

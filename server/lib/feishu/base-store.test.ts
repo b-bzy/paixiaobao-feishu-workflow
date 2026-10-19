@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./client", () => ({ getTenantAccessToken: vi.fn() }));
 
@@ -106,5 +106,49 @@ describe("Feishu Base administrator template store", () => {
       status: "Draft",
     });
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+  });
+});
+
+describe("base-store pagination", () => {
+  beforeEach(() => {
+    vi.stubEnv("FEISHU_BASE_APP_TOKEN", "app-token");
+    vi.stubEnv("FEISHU_TEMPLATE_TABLE_ID", "tbl-template");
+    vi.stubEnv("FEISHU_INSTANCE_TABLE_ID", "tbl-instance");
+    vi.mocked(getTenantAccessToken).mockResolvedValue("tenant-token");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // 2026-10-19 事故回归：模板表过百条后，Published 查找与版本号计算
+  // 不能只看第一页。
+  it("aggregates page 2 when the template table exceeds one page", async () => {
+    const olderDraft = {
+      ...existingTemplate,
+      record_id: "rec-draft-v9",
+      fields: { ...existingTemplate.fields, Status: "Draft", Version: 9 },
+    };
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      const token = new URL(url).searchParams.get("page_token");
+      const index = token ? Number(token) : 0;
+      return baseResponse({
+        items: index === 0 ? [olderDraft] : [existingTemplate],
+        has_more: index === 0,
+        ...(index === 0 ? { page_token: "1" } : {}),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const templates = await listExpenseTemplates();
+
+    expect(templates.map((item) => item.recordId)).toEqual([
+      "rec-draft-v9",
+      "rec-v3",
+    ]);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain("page_token=1");
   });
 });

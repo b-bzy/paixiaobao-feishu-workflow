@@ -15,6 +15,7 @@
 │   └── miaoda-admin/              # 妙搭管理员控制台（独立 Vite 包）
 ├── docs/                          # 架构、产品、运行与参考资产
 │   ├── adr/                       # 架构决策记录（ADR）
+│   ├── demo/                      # 内网试点流程演示录像
 │   └── oa-ticket-reimbursement-materials/
 │       ├── current/               # 当前生效的产品、实现和运行基线
 │       ├── proposals/             # 尚未启用的待评审方案
@@ -72,6 +73,11 @@
 ## 优惠券 OA 文档库
 
 产品需求、实施方案、模板调研、脱敏演练和本地案例的数据边界统一见[优惠券 OA 文档库](docs/oa-ticket-reimbursement-materials/README.md)。P1-1 在保留其受限 Excel 生成范围的同时，将确认后的两份输出接入既有系统 OA 草稿；`draft-only` 阶段不创建原生 OA，后续服务端创建必须遵循当前 revision、明确确认、allowlist、幂等与回读门禁。
+
+## 演示与试点手册
+
+- [优惠券 OA 提报演示录像（2026-10-21）](docs/demo/2026-10-21-coupon-oa-demo.mp4)：86 秒录屏，展示飞书对话发起、AI 识别、表单自动填充与卡片确认的内网试点提报流程。录像包含真实试点数据，仅限本私有仓库内查看，不得外发或复制到公开仓库。
+- [OA 优惠券自动提报使用说明（PDF）](docs/oa-ticket-reimbursement-materials/reference/coupon-oa-auto-submit-user-guide-v1.pdf)：面向试点用户的 5 页分发版手册，覆盖材料要求、提报步骤与常见问题。
 
 ## 系统与数据边界
 

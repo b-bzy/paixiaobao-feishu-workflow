@@ -1,8 +1,8 @@
 # 优惠券 OA 当前功能结构与重构基线 v1
 
 > **状态**：持续维护的技术基线；用于指导后续迭代与重构拆分
-> **版本**：v1.13（与第 12 节变更记录轨道对齐）
-> **建立日期**：2026-10-08；最近更新：2026-10-19（补记 Base 活跃草稿查询未翻页修复与共享翻页助手）
+> **版本**：v1.16（与第 12 节变更记录轨道对齐；v1.13 头部漂移一并校正）
+> **建立日期**：2026-10-08；最近更新：2026-10-21（bug-fix-6：多维度名单选路）
 > **代码快照**：当前工作区中默认关闭的三源 POC 实现；不代表已部署或已获 Gate 批准
 > **适用范围**：飞书 Bot、优惠券 Excel 试点、系统 OA 草稿、飞书原生审批提交，以及它们之间的文件与状态交接
 > **不替代**：[P1 Excel 试点 PRD v1.6](../product/coupon-oa-p1-excel-pilot-prd-v1.5.md) 的产品范围，也不将[对话式一轮确认改造 PRD](../../proposals/conversational-single-confirm/coupon-oa-conversational-single-confirm-prd-v1.3.md)视为已获批实现。
@@ -428,6 +428,7 @@ Feishu transport
 
 | 日期 | 版本 | 变更 | 责任说明 |
 | --- | --- | --- | --- |
+| 2026-10-21 | v1.16 | **bug-fix-6**（双列白名单确认回弹，诊断记录 `records/2026-10-21-mapping-confirm-whitelist-merchant-column-bounce.md`，PRD v1.8）：①领域层新增 `detectIdentifierDimensionEvidence`（`lists.ts`）——标识维度证据统一取 AI 区域候选与确定性表头候选（新增 `店铺id/店铺编号` 商家 ID 别名）的并集，卡片渲染、提交校验与解析守卫三处共享同一结论，消除"提交能过=生成必炸"的三套判定漂移；②`parseMultiSheetTieredIdentifierList` 多维度来源改「选路」语义——owner 选定维度后只采所选列、未选列记非阻塞 notes（经 service 并入最终 `validationIssues`），多列场景禁用维度改写（杜绝两列混采污染），未选择时整体阻断并给出可执行文案；单列场景（无表头确认/单列改写）语义零变化；③`VALIDATION_REQUIRED` 映射增补「存在未解决的数据问题/标识类型未确认/请重新确认标识类型/请先选择本单使用的标识类型」——确定性数据拒绝不再落入「系统未完成本次处理」兜底（本次回弹体感的直接成因）；④确认块增加多列文案分支（"同时检测到多种标识列…未选择的列不会进入名单"）；⑤`threeSourceRuleVersion` 升 v3；e2e 矩阵新增 S18（未选维度→needs_clarification）/S19（选 SKU 生成）共 67 用例，分类器新增 `IDENTIFIER_DIMENSION_SELECTION_REQUIRED` | 代码在工作区；全量测试（841 例）、fast 矩阵（67 case）、lint（改动文件）、typecheck:server 通过；rule v3 使在途草稿 fail closed 需重传；尚未部署 Preview，待部署后重传双列白名单真发验证 |
 | 2026-10-21 | v1.15 | 新商真实提报五项 bug-fix 同批实施（诊断记录见 records/2026-10-21 两份）：**bug-fix-1** OA 创建后回读金额比对按「分」归一化（`estimatedCostYuan/estimatedRoi/estimatedGmvYuan` 在值定稿处归一到 2 位小数，比对器 cents 容错 + `value.currency` 嵌套取值），提交结果卡改「创建成功（绿）+ 核对提示次级块」且差异条目结构化为「控件名：提交 X / OA 实际 Y」；**bug-fix-2** 重复 `recognition_start`（双击/旧卡重击）在草稿状态未变化时跳过重复发卡，保留幂等重激活作卡滞恢复通道；**bug-fix-3/4（ADR-0015，PRD v1.7）** AI 合同升 v7（标识维度封闭集 SKU/MERCHANT_ID 判定+依据），无表头/非 SKU 名单 owner「商家 ID / SKU」二选一确认（删除 ≥2 字确认依据），名单解析按确认维度化（可推翻重判），商家 ID 忠实产物（表头 `商家id`、前缀「商家ID白名单/黑名单」、模板 id `coupon-dynamic-merchant-*-v1`）+ 配券表「限商家ID」（来自 owner 确认，非 AI）；`threeSourceRuleVersion` 升 v2（在途草稿 fail closed）；P1-1 独立 schema 不动，e2e 矩阵新增 S17（65 用例） | 代码在工作区、全量回归过（单元/离线/service/dispatcher/e2e）；rule v2 使在途草稿作废需重传（rollout 已记）；尚未部署 Preview，待真发验证 |
 | 2026-10-21 | v1.14 | 活动文案合同升级 v4/facts v2，修复 OA 活动名称格式（bug-fix-5）：旧 v3 名称由 AI 自由拼装，混入渠道（如 `2026-03-24至2026-03-26 京东商城优惠券申请`）或重复后缀。新合同：AI 仅返回品类/ID类型组件且必须逐字回溯于确定性提取的 nameHints（文件名/Sheet 名/优惠券名称、限品类型、优惠券类型列值），服务端按“日期+品类+ID类型+优惠券申请”拼装，日期仅月日无年份；组件不可回溯按告警丢弃并透出 issues；主识别通道的活动名称候选同步增加无年份/不重复后缀结构校验 | 本地单元/回归全过（含 case7 真实文件冒烟：`3.24-3.26平板SKU优惠券申请`）；尚未部署 Preview，待三源链路真发验证 |
 | 2026-10-19 | v1.13 | 修复四处 Feishu Base 列表查询只读第一页 100 条、不跟随 `page_token` 的截断缺陷（2026-10-19 E2E「文件静默丢弃」根因，诊断记录见 `records/diagnostics/coupon-three-source-unpaged-active-lookup-2026-10-19.md`）：试点表过百条后，三源活跃草稿（Collecting）落在第 2 页 → 活跃草稿查询恒返回空 → `/clear` 误报"没有未完成提报"、`/OA优惠券提报` 重复建稿、文件消息走 `no_active_draft` 分支静默丢弃。修复：新增共享翻页助手 `server/lib/feishu/bitable-pagination.ts`（跟随 `page_token` 至 `has_more=false`；缺 token/token 不前进/超 100 页一律抛错 fail-loud），接入三源试点 store、OA 草稿 store（互斥检查）、`base-store`（报销模板/实例）、Excel 试点 store；`VALIDATION_REQUIRED` 错误映射追加「请先上传配券表和商品白名单」「请先确认无法唯一识别的材料角色」，不再落入"系统未完成本次处理"兜底卡。已知取舍：`listActive*` 为全量翻页（当前 2 次请求），记录持续增长后需服务端 filter 或归档 | 修复存量截断缺陷；自动化回归（翻页助手 + 四 store 第 2 页场景 + 错误映射）已过，Preview 部署与线上 `/clear` 恢复验证待执行 |

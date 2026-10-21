@@ -3,11 +3,15 @@ import type {
   SingleCouponSkuListWorkbookManifest,
 } from "~/lib/excel-template-engine/template-manifests";
 import type {
+  CouponSetSummaryValues,
   RegularFullReductionComputedValues,
   RegularFullReductionInput,
 } from "../calculation";
 
-export const threeSourceRuleVersion = "three-source-offline-v2";
+// v3 (bug-fix-6): 多维度名单（如 店铺id+sku 双列）改为“选择式解析”——
+// owner 选定一种标识维度后只采所选列,未选列不进名单。解析结果集随版本
+// 区分,旧冻结快照仍按 v2 规则可追溯。
+export const threeSourceRuleVersion = "three-source-offline-v3";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
 export type SourceRoleResolution = SourceRole | "unknown";
@@ -355,6 +359,8 @@ export interface ParsedTieredIdentifierList {
   entries: TieredIdentifierEntry[];
   sheetOrder?: string[];
   issues: string[];
+  /** 非阻塞注记（如多维度名单按选择忽略的列），不参与可用性断言。 */
+  notes?: string[];
 }
 
 export interface MultiSheetListSelection {
@@ -407,6 +413,9 @@ export interface CanonicalPackage {
   coupon: ConfirmedCouponSource;
   couponSet?: ConfirmedCouponSetSource;
   computed: RegularFullReductionComputedValues;
+  /** bug-fix-7：多券档 OA 汇总口径（ΣGMV/Σ费用/ROI）。仅在 couponSet
+   * 存在时填充；缺省时消费方回落到单券 computed/input 口径。 */
+  summary?: CouponSetSummaryValues;
   couponName?: string;
   whitelist?: ParsedSingleCouponIdentifierList;
   blacklist?: ParsedSingleCouponIdentifierList;

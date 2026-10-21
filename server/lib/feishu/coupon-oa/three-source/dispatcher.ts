@@ -418,7 +418,7 @@ function mappingSelections(
   const identifierDimensionConfirmations = Object.fromEntries(
     (["whitelist", "blacklist"] as const).flatMap((role) => {
       const recognition = draft.recognitions[role];
-      const choice = identifierDimensionChoice(recognition);
+      const choice = identifierDimensionChoice(recognition, role);
       if (!recognition || !choice?.requiresChoice) return [];
       const submitted = stringValue(form[`${role}_identifierDimension`]);
       if (submitted !== "SKU" && submitted !== "MERCHANT_ID") {

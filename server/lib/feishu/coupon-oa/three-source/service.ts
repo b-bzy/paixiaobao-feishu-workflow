@@ -776,6 +776,12 @@ export class CouponThreeSourcePilotService {
             : undefined,
         })
       : undefined;
+    // bug-fix-6：多维度名单按选择忽略的列以非阻塞注记透出（进 State JSON
+    // 与任何后续表单卡;不参与可用性断言）。
+    const identifierDimensionNotes = [
+      ...(whitelist.notes ?? []),
+      ...(blacklist?.notes ?? []),
+    ];
     const overlapIds = blacklist
       ? whitelist.entries
           .map((entry) => entry.id)
@@ -980,7 +986,7 @@ export class CouponThreeSourcePilotService {
         package: undefined,
         artifacts: frozenArtifacts,
         oaPrefill,
-        validationIssues: [],
+        validationIssues: identifierDimensionNotes,
         failureReason: undefined,
       },
       draftForGeneration.task.revision,

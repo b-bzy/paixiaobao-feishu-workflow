@@ -299,6 +299,86 @@ export interface IdentifierDimensionConfirmation {
   confirmedAs: "SKU" | "MERCHANT_ID";
 }
 
+export interface IdentifierDimensionEvidenceColumn {
+  dimension: "SKU" | "MERCHANT_ID";
+  source: "ai" | "deterministic";
+  header: string;
+  column?: string;
+  sheetName?: string;
+  rowCount?: number;
+}
+
+export interface IdentifierDimensionEvidence {
+  /** 去重后的标识维度集合（只统计受支持的 SKU / 商家 ID）。 */
+  dimensions: Array<"SKU" | "MERCHANT_ID">;
+  /** 同一来源同时存在 ≥2 种受支持标识维度（如 店铺id+sku 双列）。 */
+  multiDimension: boolean;
+  columns: IdentifierDimensionEvidenceColumn[];
+}
+
+/**
+ * bug-fix-6 的唯一判定源：把 AI 区域候选与确定性列候选的标识维度证据取并集。
+ * 卡片渲染（要不要出二选一确认）、提交校验（拦不拦）与解析守卫（选路）
+ * 三处必须消费同一份探测结果,保证"提交能过 = 生成能过"。
+ */
+export function detectIdentifierDimensionEvidence(input: {
+  listCandidates: ListColumnCandidate[];
+  aiRegions?: AiSkuRegionCandidate[];
+  role?: "whitelist" | "blacklist";
+}): IdentifierDimensionEvidence {
+  const columns: IdentifierDimensionEvidenceColumn[] = [];
+  for (const candidate of input.listCandidates) {
+    if (candidate.kind !== "identifier") continue;
+    if (candidate.dimension !== "SKU" && candidate.dimension !== "MERCHANT_ID")
+      continue;
+    columns.push({
+      dimension: candidate.dimension,
+      source: "deterministic",
+      header: candidate.header,
+      column: candidate.column,
+      sheetName: candidate.sheetName,
+    });
+  }
+  for (const region of input.aiRegions ?? []) {
+    if (input.role && region.role !== input.role) continue;
+    if (region.dimension !== "SKU" && region.dimension !== "MERCHANT_ID")
+      continue;
+    const bounds = region.evidence?.region;
+    const startRow = Number(bounds?.startCell?.match(/\d+$/)?.[0]);
+    const endRow = Number(bounds?.endCell?.match(/\d+$/)?.[0]);
+    columns.push({
+      dimension: region.dimension,
+      source: "ai",
+      header: region.headerCell?.match(/^[A-Z]+/)?.[0] ?? region.headerCell,
+      column: region.headerCell?.match(/^[A-Z]+/)?.[0],
+      sheetName: region.evidence?.sheetName,
+      rowCount:
+        Number.isInteger(startRow) &&
+        Number.isInteger(endRow) &&
+        endRow >= startRow
+          ? endRow - startRow + 1
+          : undefined,
+    });
+  }
+  const dimensions = [
+    ...new Set(columns.map((column) => column.dimension)),
+  ] as Array<"SKU" | "MERCHANT_ID">;
+  return {
+    dimensions,
+    multiDimension: dimensions.length >= 2,
+    columns,
+  };
+}
+
+function dimensionLabel(
+  dimension: "SKU" | "MERCHANT_ID" | "SPU" | "UNKNOWN",
+): string {
+  if (dimension === "MERCHANT_ID") return "商家 ID";
+  if (dimension === "SPU") return "SPU";
+  if (dimension === "UNKNOWN") return "未知";
+  return "SKU";
+}
+
 /**
  * Resolves the effective parse dimension for one detected dimension: a
  * matching owner confirmation overrides it in either direction (including
@@ -352,7 +432,45 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   );
   const aiCoveredSheets = new Set<string>();
   let listDimension: "SKU" | "MERCHANT_ID" | undefined;
+  // bug-fix-6：多维度来源（如 店铺id+sku 双列）走“选择式解析”——owner 的
+  // 确认是选择而非改写：只采所选维度的列,其余列忽略并记入 notes。选择
+  // 模式下不落 resolveListDimension 的改写路径,从结构上杜绝两列混采。
+  const evidence = detectIdentifierDimensionEvidence({
+    listCandidates: identifierCandidates,
+    aiRegions: input.aiSkuRegions,
+    role: input.role,
+  });
+  const dimensionSelection = !evidence.multiDimension
+    ? ({ mode: "single" } as const)
+    : input.identifierDimensionConfirmation?.sourceSha256 === sourceHashValue
+      ? ({
+          mode: "selection",
+          dimension: input.identifierDimensionConfirmation.confirmedAs,
+        } as const)
+      : ({ mode: "blocked" } as const);
+  if (dimensionSelection.mode === "blocked") {
+    return {
+      role: input.role,
+      sourceHash: sourceHashValue,
+      dimension: "UNKNOWN",
+      entries: [],
+      sheetOrder: [],
+      issues: [
+        `同一来源同时检测到多种标识列（${evidence.dimensions
+          .map(dimensionLabel)
+          .join("、")}），请先选择本单使用的标识类型`,
+      ],
+    };
+  }
+  const notes: string[] = [];
   const dimensionGate = (detected: string, headerless: boolean) => {
+    if (dimensionSelection.mode === "selection") {
+      // 到达守卫的区域/候选已按选择过滤；owner 的选择本身就是显式确认,
+      // 不再要求 headerless 二次确认,也不会出现维度冲突。
+      if (detected !== dimensionSelection.dimension) return undefined;
+      listDimension = dimensionSelection.dimension;
+      return dimensionSelection.dimension;
+    }
     const resolved = resolveListDimension({
       detected,
       headerless,
@@ -377,6 +495,28 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       const bounds = region.evidence.region;
       if (!worksheet || !bounds) {
         issues.push("系统识别的名单区域已失效，请重新上传材料");
+        continue;
+      }
+      if (
+        dimensionSelection.mode === "selection" &&
+        region.dimension !== dimensionSelection.dimension
+      ) {
+        const regionColumn = region.headerCell.match(/^[A-Z]+/)?.[0];
+        const regionRows = (() => {
+          const startRow = Number(bounds.startCell.match(/\d+$/)?.[0]);
+          const endRow = Number(bounds.endCell.match(/\d+$/)?.[0]);
+          return Number.isInteger(startRow) &&
+            Number.isInteger(endRow) &&
+            endRow >= startRow
+            ? endRow - startRow + 1
+            : undefined;
+        })();
+        const headerText =
+          worksheet.getCell(region.headerCell).text.trim() ||
+          `${regionColumn ?? "?"} 列`;
+        notes.push(
+          `已按【${dimensionLabel(dimensionSelection.dimension)}】生成：忽略 ${worksheet.name} 的 ${headerText} 列（${dimensionLabel(region.dimension)}${regionRows ? `，${regionRows} 行` : ""}）`,
+        );
         continue;
       }
       // Headerless regions anchor on the first data cell, so headerCell and
@@ -459,10 +599,45 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   for (const worksheet of workbook.worksheets) {
     if (aiCoveredSheets.has(worksheet.name)) continue;
     const seenIds = new Set<string>();
-    const sheetCandidates = identifierCandidates.filter(
+    let sheetCandidates = identifierCandidates.filter(
       (candidate) => candidate.sheetName === worksheet.name,
     );
     if (!sheetCandidates.length) continue;
+    if (dimensionSelection.mode === "selection") {
+      // 选择模式：候选集先按 owner 选定的维度过滤;被过滤掉的受支持维度列
+      // （以及整表无匹配的 Sheet）记入 notes,不注册空券档,也避免 sku 优先
+      // 的候选挑选逻辑在 MERCHANT_ID 选择下误采错误列。
+      const supported = sheetCandidates.filter(
+        (candidate) =>
+          candidate.dimension === "SKU" ||
+          candidate.dimension === "MERCHANT_ID",
+      );
+      const matching = supported.filter(
+        (candidate) => candidate.dimension === dimensionSelection.dimension,
+      );
+      const skippedHeaders = [
+        ...new Set(
+          supported
+            .filter(
+              (candidate) =>
+                candidate.dimension !== dimensionSelection.dimension,
+            )
+            .map(
+              (candidate) =>
+                `${candidate.header || `${candidate.column} 列`} 列（${dimensionLabel(candidate.dimension ?? "UNKNOWN")}）`,
+            ),
+        ),
+      ];
+      if (skippedHeaders.length) {
+        notes.push(
+          `已按【${dimensionLabel(dimensionSelection.dimension)}】生成：忽略 ${worksheet.name} 的 ${skippedHeaders.join("、")} 列`,
+        );
+      }
+      if (!matching.length) {
+        continue;
+      }
+      sheetCandidates = matching;
+    }
     const selected = input.selection?.sheets?.[worksheet.name];
     const resolvedTier = selected?.templateTier?.trim() || worksheet.name;
     if (seenTiers.has(resolvedTier)) {
@@ -552,6 +727,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     entries,
     sheetOrder,
     issues,
+    ...(notes.length ? { notes } : {}),
   };
 }
 

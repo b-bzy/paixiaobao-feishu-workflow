@@ -91,7 +91,16 @@ const IDENTIFIER_ALIASES: Array<{
   { dimension: "SPU", aliases: ["spu", "spuid", "商品spu", "spu编号"] },
   {
     dimension: "MERCHANT_ID",
-    aliases: ["商家id", "商家编号", "merchantid", "merchant_id"],
+    // bug-fix-6：补「店铺id/店铺编号」别名——真实双列白名单（店铺id+sku）
+    // 的店铺列此前只有 AI 能识别,确定性层缺失是多维度判定漂移的成因之一。
+    aliases: [
+      "商家id",
+      "商家编号",
+      "店铺id",
+      "店铺编号",
+      "merchantid",
+      "merchant_id",
+    ],
   },
 ];
 

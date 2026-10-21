@@ -315,6 +315,18 @@ const skuCases: CatalogSeed[] = [
     title: "无表头商家ID名单（owner 确认商家 ID）",
     recipe: "merchant-id-headerless",
   },
+  {
+    id: "S18",
+    title: "双列名单未选标识维度（店铺id+sku，需澄清）",
+    recipe: "merchant-id-sku-two-column",
+    classification: "needs_clarification",
+    code: "IDENTIFIER_DIMENSION_SELECTION_REQUIRED",
+  },
+  {
+    id: "S19",
+    title: "双列名单选 SKU 生成（忽略店铺id 列）",
+    recipe: "merchant-id-sku-two-column",
+  },
 ];
 
 const businessCases: CatalogSeed[] = [

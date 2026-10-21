@@ -864,6 +864,34 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("whitelist_identifierDimension");
   });
 
+  it("asks for a dimension selection when both 店铺id and sku columns exist (bug-fix-6)", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    whitelist.source.fileName = "平板常规店铺SKU优惠券 (2).xlsx";
+    whitelist.listCandidates.push({
+      id: "merchant",
+      kind: "identifier",
+      dimension: "MERCHANT_ID",
+      score: 1,
+      header: "店铺id",
+      headerRow: 1,
+      column: "A",
+      sheetName: "Sheet1",
+      sampleValues: [],
+      reasons: [],
+    });
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("同时检测到多种标识列");
+    expect(rendered).toContain("店铺id 列【商家 ID】");
+    expect(rendered).toContain("SKU 列【SKU】");
+    expect(rendered).toContain("未选择的列不会进入名单");
+    expect(rendered).toContain("whitelist_identifierDimension");
+    expect(rendered).toContain('"value":"MERCHANT_ID"');
+    expect(rendered).toContain('"value":"SKU"');
+  });
+
   it("asks a single replace-white-or-use-as-black question for a third ambiguous list", () => {
     const current = draft();
     const whitelist = current.recognitions.whitelist;

@@ -12,7 +12,11 @@ import {
   singleCouponSkuBlacklistManifest,
   singleCouponSkuWhitelistManifest,
 } from "../../excel-template-engine/template-manifests";
-import { computeRegularFullReductionValues } from "../calculation";
+import {
+  type CouponSetSummaryValues,
+  computeCouponSetSummaryValues,
+  computeRegularFullReductionValues,
+} from "../calculation";
 import {
   applyOverlapDecision,
   computeOverlap,
@@ -270,6 +274,11 @@ export function createCouponSetCanonicalPackage(input: {
   });
   const coupon = input.couponSet.tiers[0];
   const computed = computeRegularFullReductionValues(coupon.input);
+  // bug-fix-7：OA 预填的预估GMV/预估费用/ROI 按全档合计；computed 仍保留
+  // 第一档的券名/折扣比口径，供逐档产物与单券路径使用。
+  const summary = computeCouponSetSummaryValues(
+    input.couponSet.tiers.map((tier) => tier.input),
+  );
   return {
     ownerId: input.ownerId,
     revision: input.revision,
@@ -293,6 +302,7 @@ export function createCouponSetCanonicalPackage(input: {
     coupon,
     couponSet: input.couponSet,
     computed,
+    summary,
     whitelistByTier: groupIdentifiersByTier(resolved.whitelist),
     whitelistDimension: listDimensionOf(resolved.whitelist),
     blacklistByTier: resolved.blacklist
@@ -609,6 +619,13 @@ export function buildOaPrefillSnapshot(
   }
 
   const { coupon, computed } = input.package;
+  // bug-fix-7：多券档时预估GMV/费用/ROI 必须跨档合计；单券/兼容路径
+  // 缺省回落到首档口径，行为与历史一致。
+  const summary: CouponSetSummaryValues = input.package.summary ?? {
+    estimatedGmvYuan: coupon.input.estimatedGmvYuan,
+    estimatedCostYuan: computed.estimatedCostYuan,
+    estimatedRoi: computed.estimatedRoi,
+  };
   const screenshotRequired = coupon.input.businessMode !== "严选";
   const couponArtifact = input.artifacts.find(
     (artifact) => artifact.role === "couponTable",
@@ -709,9 +726,9 @@ export function buildOaPrefillSnapshot(
       platformBearingPercent: coupon.input.platformBearingRatio * 100,
       overDeduction: coupon.input.overDeduction,
       overDeductionReason: coupon.input.overDeductionReason || undefined,
-      estimatedGmvYuan: coupon.input.estimatedGmvYuan,
-      estimatedCostYuan: computed.estimatedCostYuan,
-      estimatedRoi: computed.estimatedRoi,
+      estimatedGmvYuan: summary.estimatedGmvYuan,
+      estimatedCostYuan: summary.estimatedCostYuan,
+      estimatedRoi: summary.estimatedRoi,
       channels: coupon.input.channels,
       activityStartAt: coupon.input.activityStartAt,
       activityEndAt: coupon.input.activityEndAt,

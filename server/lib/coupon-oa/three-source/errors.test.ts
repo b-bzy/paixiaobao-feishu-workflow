@@ -70,6 +70,30 @@ describe("coupon three-source errors", () => {
       code: "FILE_TOO_LARGE",
       message: "文件超过 10 MB，当前自动流程无法处理，请转人工提报。",
     });
+    // 2026-10-21 bug-fix-6：名单数据问题是确定性业务拒绝,必须原样透出,
+    // 不能落入「系统未完成本次处理…请稍后重试」的暂时性故障兜底。
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error(
+          "白名单存在未解决的数据问题：同一来源同时检测到多种标识列（SKU、商家 ID），请先选择本单使用的标识类型",
+        ),
+      ),
+    ).toEqual({
+      code: "VALIDATION_REQUIRED",
+      message:
+        "白名单存在未解决的数据问题：同一来源同时检测到多种标识列（SKU、商家 ID），请先选择本单使用的标识类型",
+    });
+    expect(
+      toCouponThreeSourceUserFailure(
+        new Error(
+          "白名单存在未解决的数据问题：当前只支持 SKU 或商家 ID 名单，请先确认标识类型",
+        ),
+      ),
+    ).toEqual({
+      code: "VALIDATION_REQUIRED",
+      message:
+        "白名单存在未解决的数据问题：当前只支持 SKU 或商家 ID 名单，请先确认标识类型",
+    });
   });
 
   it("never exposes unknown internal exception text", () => {

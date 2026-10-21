@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import {
+  detectIdentifierDimensionEvidence,
   parseMultiSheetTieredIdentifierList,
   parseSingleCouponIdentifierList,
 } from "./lists";
@@ -1007,5 +1008,189 @@ describe("lenient enum normalization (soft gate)", () => {
       ownerFieldValues: { activityPointPercent: 6 },
     });
     expect(confirmed.tiers[0].input.claimRule).toBe("活动期间每天可领一次");
+  });
+});
+
+describe("multi-dimension identifier list (bug-fix-6)", () => {
+  async function twoColumnSource() {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    sheet.addRow(["店铺id", "sku"]);
+    sheet.addRow(["20062984", "10145806204275"]);
+    sheet.addRow(["20062985", "10145806204279"]);
+    const source: OfflineSourceFile = {
+      fileName: "平板常规店铺SKU优惠券.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    return inspectThreeSourceWorkbook(source);
+  }
+
+  it("detects the multi-dimension evidence from deterministic candidates", async () => {
+    const recognition = await twoColumnSource();
+    const evidence = detectIdentifierDimensionEvidence({
+      listCandidates: recognition.listCandidates,
+      role: "whitelist",
+    });
+    expect(evidence.multiDimension).toBe(true);
+    expect(evidence.dimensions).toEqual(
+      expect.arrayContaining(["SKU", "MERCHANT_ID"]),
+    );
+  });
+
+  it("blocks the whole list without an owner dimension selection", async () => {
+    const recognition = await twoColumnSource();
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+    expect(parsed.entries).toEqual([]);
+    expect(parsed.dimension).toBe("UNKNOWN");
+    expect(parsed.issues).toHaveLength(1);
+    expect(parsed.issues[0]).toContain("请先选择本单使用的标识类型");
+  });
+
+  it("treats a stale confirmation (source hash mismatch) as no selection", async () => {
+    const recognition = await twoColumnSource();
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: "0".repeat(64),
+        detectedDimension: "SKU",
+        confirmedAs: "SKU",
+      },
+    });
+    expect(parsed.entries).toEqual([]);
+    expect(parsed.issues[0]).toContain("请先选择本单使用的标识类型");
+  });
+
+  it("parses only the selected SKU column and notes the ignored merchant column", async () => {
+    const recognition = await twoColumnSource();
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "SKU",
+        confirmedAs: "SKU",
+      },
+    });
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.dimension).toBe("SKU");
+    expect(parsed.entries.map((entry) => entry.id)).toEqual([
+      "10145806204275",
+      "10145806204279",
+    ]);
+    expect(parsed.notes).toHaveLength(1);
+    expect(parsed.notes?.[0]).toContain("忽略 Sheet1 的 店铺id 列（商家 ID");
+  });
+
+  it("parses only the selected merchant column when MERCHANT_ID is chosen", async () => {
+    const recognition = await twoColumnSource();
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "SKU",
+        confirmedAs: "MERCHANT_ID",
+      },
+    });
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.dimension).toBe("MERCHANT_ID");
+    expect(parsed.entries.map((entry) => entry.id)).toEqual([
+      "20062984",
+      "20062985",
+    ]);
+    expect(parsed.notes?.[0]).toContain("忽略 Sheet1 的 sku 列（SKU");
+  });
+
+  it("detects multi-dimension from AI regions even when deterministic aliases miss the column", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    sheet.addRow(["门店ID", "sku"]);
+    sheet.addRow(["20062984", "10145806204275"]);
+    const source: OfflineSourceFile = {
+      fileName: "任意双列白名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+    const evidence = detectIdentifierDimensionEvidence({
+      listCandidates: recognition.listCandidates,
+      aiRegions: [
+        {
+          id: "ai-region-merchant",
+          role: "whitelist",
+          dimension: "MERCHANT_ID",
+          headerCell: "A1",
+          confidence: 0.9,
+          reason: "AI 识别为商家 ID 数据区域",
+          evidence: {
+            sourceHash: recognition.sourceHash,
+            sheetName: "Sheet1",
+            cells: ["A1", "A2"],
+            region: { startCell: "A2", endCell: "A2" },
+          },
+        },
+      ],
+      role: "whitelist",
+    });
+    expect(evidence.multiDimension).toBe(true);
+
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      aiSkuRegions: [
+        {
+          id: "ai-region-merchant",
+          role: "whitelist",
+          dimension: "MERCHANT_ID",
+          headerCell: "A1",
+          confidence: 0.9,
+          reason: "AI 识别为商家 ID 数据区域",
+          evidence: {
+            sourceHash: recognition.sourceHash,
+            sheetName: "Sheet1",
+            cells: ["A1", "A2"],
+            region: { startCell: "A2", endCell: "A2" },
+          },
+        },
+      ],
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "SKU",
+        confirmedAs: "SKU",
+      },
+    });
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.dimension).toBe("SKU");
+    expect(parsed.entries.map((entry) => entry.id)).toEqual(["10145806204275"]);
+    expect(parsed.notes?.[0]).toContain("忽略 Sheet1 的 门店ID 列（商家 ID");
+  });
+
+  it("keeps the single-column override semantics untouched (regression)", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("商家名单");
+    sheet.addRow(["商家ID"]);
+    sheet.addRow(["162203631"]);
+    const source: OfflineSourceFile = {
+      fileName: "商家ID名单.xlsx",
+      bytes: new Uint8Array(await workbook.xlsx.writeBuffer()),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    // 单列有表头：不触发选择模式,owner 改写为 SKU 仍按 SKU 解析。
+    const overridden = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "MERCHANT_ID",
+        confirmedAs: "SKU",
+      },
+    });
+    expect(overridden.issues).toEqual([]);
+    expect(overridden.dimension).toBe("SKU");
+    expect(overridden.entries.map((entry) => entry.id)).toEqual(["162203631"]);
   });
 });

@@ -1,6 +1,10 @@
 import { normalizeCouponEnumInput } from "../../../coupon-oa/calculation";
 import { isPlaceholderActivityName } from "../../../coupon-oa/three-source/activity-copy";
 import { canonicalCouponBusinessDate } from "../../../coupon-oa/three-source/business-date";
+import {
+  detectIdentifierDimensionEvidence,
+  type IdentifierDimensionEvidenceColumn,
+} from "../../../coupon-oa/three-source/lists";
 import type {
   CouponCandidate,
   CouponFieldKey,
@@ -584,6 +588,11 @@ export interface IdentifierDimensionChoice {
   /** Headerless identifier candidates and any non-SKU detection must be
    * confirmed by the owner even when the AI already judged SKU. */
   requiresChoice: boolean;
+  /** bug-fix-6：同一来源存在 ≥2 种受支持标识维度（如 店铺id+sku 双列）。
+   * owner 的确认此时是“选路”（只采所选列），不是维度改写。 */
+  multiDimension?: boolean;
+  /** 多维度场景下供确认卡文案展示的列证据（表头 + 维度 + 来源）。 */
+  evidenceColumns?: IdentifierDimensionEvidenceColumn[];
   aiJudgment?: {
     dimension: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
     reason: string;
@@ -596,11 +605,19 @@ export interface IdentifierDimensionChoice {
  */
 export function identifierDimensionChoice(
   recognition: StoredWorkbookRecognition | undefined,
+  role?: "whitelist" | "blacklist",
 ): IdentifierDimensionChoice | undefined {
   if (!recognition) return undefined;
   const identifier = recognition.listCandidates.find(
     (candidate) => candidate.kind === "identifier",
   );
+  // bug-fix-6：维度证据统一走领域层探测（AI 区域 ∪ 确定性候选），
+  // 卡片、提交校验与解析守卫共享同一结论。
+  const evidence = detectIdentifierDimensionEvidence({
+    listCandidates: recognition.listCandidates,
+    aiRegions: recognition.ai?.result?.skuRegionCandidates,
+    role,
+  });
   const aiRegion =
     recognition.ai?.result?.skuRegionCandidates?.find(
       (candidate) =>
@@ -614,10 +631,15 @@ export function identifierDimensionChoice(
         ? aiRegion.dimension
         : (identifier?.dimension ?? "SKU");
   const requiresChoice =
-    Boolean(identifier && identifier.header === "") || detected !== "SKU";
+    Boolean(identifier && identifier.header === "") ||
+    detected !== "SKU" ||
+    evidence.multiDimension;
   return {
     detected,
     requiresChoice,
+    ...(evidence.multiDimension
+      ? { multiDimension: true, evidenceColumns: evidence.columns }
+      : {}),
     aiJudgment: aiRegion
       ? { dimension: aiRegion.dimension, reason: aiRegion.reason }
       : undefined,
@@ -639,15 +661,23 @@ function identifierDimensionConfirmBlock(input: {
   choice: IdentifierDimensionChoice;
 }): Array<Record<string, unknown>> {
   const roleLabel = input.role === "whitelist" ? "白名单" : "黑名单";
-  const judgmentLine = input.choice.aiJudgment
-    ? `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】（依据：${input.choice.aiJudgment.reason}）。`
-    : input.choice.detected === "UNKNOWN"
-      ? "系统未能判定该名单的标识类型。"
-      : `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】。`;
+  // bug-fix-6：多列并存（如 店铺id+sku）与单列无表头是两种不同的事实,
+  // 文案分开——前者是“选路”（未选列不进名单）,后者是“确认类型”。
+  const introLine = input.choice.multiDimension
+    ? (() => {
+        const columns = (input.choice.evidenceColumns ?? [])
+          .map(
+            (column) =>
+              `${column.header || `${column.column ?? "?"} 列`} 列【${identifierDimensionLabel(column.dimension)}】`,
+          )
+          .join("、");
+        return `**${roleLabel}标识类型确认：** ${input.fileName} 同时检测到多种标识列（${columns || "SKU 与 商家 ID"}）。当前标准产物按单一标识维度生成，请选择本单使用的标识类型；未选择的列不会进入名单。`;
+      })()
+    : `**${roleLabel}标识类型确认：** ${input.fileName} 是无表头或标识含义不明确的单列数据。${input.choice.aiJudgment ? `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】（依据：${input.choice.aiJudgment.reason}）。` : input.choice.detected === "UNKNOWN" ? "系统未能判定该名单的标识类型。" : `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】。`}请确认实际类型后按该类型生成；系统不会改写任何原值。`;
   return [
     {
       tag: "markdown",
-      content: `**${roleLabel}标识类型确认：** ${input.fileName} 是无表头或标识含义不明确的单列数据。${judgmentLine}请确认实际类型后按该类型生成；系统不会改写任何原值。`,
+      content: introLine,
     },
     {
       tag: "select_static",
@@ -730,8 +760,14 @@ export function buildCouponThreeSourceMappingCard(
   const coupon = draft.recognitions.couponTable;
   const whitelist = draft.recognitions.whitelist;
   const blacklist = draft.recognitions.blacklist;
-  const whitelistDimensionChoice = identifierDimensionChoice(whitelist);
-  const blacklistDimensionChoice = identifierDimensionChoice(blacklist);
+  const whitelistDimensionChoice = identifierDimensionChoice(
+    whitelist,
+    "whitelist",
+  );
+  const blacklistDimensionChoice = identifierDimensionChoice(
+    blacklist,
+    "blacklist",
+  );
   const coupons = combinedCouponCandidates(coupon);
   const hasUnknownCoupon = coupons.some(
     (candidate) => candidate.couponType === "unknown",

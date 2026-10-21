@@ -3,7 +3,7 @@
 - **状态**：已评审通过（需求方 2026-10-16 确认识别思路；2026-10-21 需求方反馈 bug-fix-3/4 后按下方修订记录修正 D2 并批准实施，ADR 见 [ADR-0015](../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md)）
 - **日期**：2026-10-16（v1）/ 2026-10-21（修订）
 - **决策 Owner**：优惠券流程 Owner（需求方）、工程 Owner
-- **关联**：[ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) · [ADR-0012](../../../adr/0012-make-ai-primary-for-p0-three-source-recognition.md) · [ADR-0015](../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md) · [MVP PRD v1.7](../../current/product/coupon-oa-mvp-prd-v1.7.md) · [本地长连接 POC runbook v1](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)
+- **关联**：[ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) · [ADR-0012](../../../adr/0012-make-ai-primary-for-p0-three-source-recognition.md) · [ADR-0015](../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md) · [MVP PRD v1.8](../../current/product/coupon-oa-mvp-prd-v1.8.md) · [本地长连接 POC runbook v1](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)
 - **实施计划**：[2026-10-16-coupon-three-source-merchant-id-whitelist.md](../../../../docs/superpowers/plans/2026-10-16-coupon-three-source-merchant-id-whitelist.md)
 
 ## 修订记录

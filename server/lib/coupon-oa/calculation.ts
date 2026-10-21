@@ -204,6 +204,39 @@ export function computeRegularFullReductionValues(
   };
 }
 
+export interface CouponSetSummaryValues {
+  estimatedGmvYuan: number;
+  estimatedCostYuan: number;
+  estimatedRoi: number;
+}
+
+/**
+ * 多券档 OA 汇总口径：配券表每行是一个券档，OA 表单上的
+ * 预估GMV/预估费用/ROI 必须跨档合计，而不是沿用第一档的值。
+ * 费用合计复用单档公式并保持逐档校验（任何一档非法在此抛出）。
+ */
+export function computeCouponSetSummaryValues(
+  inputs: readonly RegularFullReductionInput[],
+): CouponSetSummaryValues {
+  if (!inputs.length) throw new Error("至少需要一个优惠券档位才能合计");
+  let estimatedGmvYuan = 0;
+  let estimatedCostYuan = 0;
+  for (const input of inputs) {
+    estimatedGmvYuan += input.estimatedGmvYuan;
+    estimatedCostYuan +=
+      computeRegularFullReductionValues(input).estimatedCostYuan;
+  }
+  const estimatedRoi = roundYuanToCents(estimatedGmvYuan / estimatedCostYuan);
+  if (!Number.isFinite(estimatedRoi) || estimatedRoi <= 0) {
+    throw new Error("预估 ROI 无法计算");
+  }
+  return {
+    estimatedGmvYuan: roundYuanToCents(estimatedGmvYuan),
+    estimatedCostYuan: roundYuanToCents(estimatedCostYuan),
+    estimatedRoi,
+  };
+}
+
 export function roundYuanToCents(value: number): number {
   if (!Number.isFinite(value)) return value;
   return Math.round(value * 100) / 100;

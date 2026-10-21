@@ -2001,6 +2001,113 @@ describe("three-source Bot dispatcher", () => {
     expect(updateSelections).not.toHaveBeenCalled();
   });
 
+  it("blocks a multi-dimension (店铺id+sku) confirm until the owner selects a dimension (bug-fix-6)", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    current.task.sources = {
+      couponTable: { ...source, role: "couponTable" },
+      whitelist: { ...source, role: "whitelist" },
+    };
+    current.recognitions = {
+      ...current.recognitions,
+      whitelist: {
+        source: { ...source },
+        sourceHash: "b".repeat(64),
+        roleCandidates: [],
+        couponFieldCandidates: {},
+        listCandidates: [
+          {
+            id: "identifier-sku",
+            kind: "identifier" as const,
+            dimension: "SKU" as const,
+            score: 100,
+            header: "sku",
+            headerRow: 1,
+            column: "B",
+            sheetName: "Sheet1",
+            sampleValues: ["10145806204275"],
+            reasons: ["表头 sku 匹配 SKU 别名"],
+          },
+          {
+            id: "identifier-merchant",
+            kind: "identifier" as const,
+            dimension: "MERCHANT_ID" as const,
+            score: 100,
+            header: "店铺id",
+            headerRow: 1,
+            column: "A",
+            sheetName: "Sheet1",
+            sampleValues: ["20062984"],
+            reasons: ["表头 店铺id 匹配商家 ID 别名"],
+          },
+        ],
+        issues: [],
+      },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn();
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+    const baseForm = {
+      activityPointPercent: "6",
+      owner_businessMode: "寄卖",
+      owner_activityName: "测试活动",
+      owner_activityBackground: "测试背景",
+      owner_activityStartAt: "2026-09-30",
+      owner_activityEndAt: "2026-10-10",
+      owner_overDeduction: "否",
+    };
+
+    // 未选择 → 提交被拦,不能放行到生成阶段（本次事故的回弹根因）。
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: { ...baseForm },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: expect.stringContaining(
+        "白名单标识类型请从商家 ID 或 SKU 中选择",
+      ),
+    });
+    expect(updateSelections).not.toHaveBeenCalled();
+
+    // 选择 SKU → 确认持久化,进入生成。
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: { ...baseForm, whitelist_identifierDimension: "SKU" },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+    expect(updateSelections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selections: expect.objectContaining({
+          identifierDimensionConfirmations: {
+            whitelist: {
+              sourceSha256: "b".repeat(64),
+              detectedDimension: "SKU",
+              confirmedAs: "SKU",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
   it("requires the over-deduction reason when the owner chooses yes", async () => {
     const current = draft();
     current.task.revision = 5;

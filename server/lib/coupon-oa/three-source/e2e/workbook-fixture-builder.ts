@@ -363,6 +363,25 @@ function addListSheets(
       }
       continue;
     }
+    if (base === "merchant-id-sku-two-column") {
+      // bug-fix-6：真实「平板常规店铺SKU优惠券」形态——店铺id+sku 双列
+      // 有表头,同一来源存在两种标识维度,必须由 owner 选路。
+      sheet.getRow(1).getCell(1).value = "店铺id";
+      sheet.getRow(1).getCell(2).value = "sku";
+      const rows: Array<[string, string]> = [
+        ["20062984", "10145806204275"],
+        ["20062984", "10145806204279"],
+        ["20062985", "10145806204281"],
+      ];
+      for (const [index, [shopId, sku]] of rows.entries()) {
+        const row = sheet.getRow(index + 2);
+        row.getCell(1).value = shopId;
+        row.getCell(1).numFmt = "@";
+        row.getCell(2).value = sku;
+        row.getCell(2).numFmt = "@";
+      }
+      continue;
+    }
     const column = skuColumn(base, variant);
     sheet.getRow(1).getCell(column).value = "sku";
     sheet.getRow(1).getCell(column + 1).value = "券档";

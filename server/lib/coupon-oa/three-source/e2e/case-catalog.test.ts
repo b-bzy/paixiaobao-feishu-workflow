@@ -6,15 +6,15 @@ const categoryCounts = {
   F: 8,
   L: 14,
   C: 16,
-  S: 17,
+  S: 19,
   B: 10,
 } as const;
 
 describe("coupon three-source E2E case catalog", () => {
-  it("contains the complete approved 65-case matrix", () => {
-    expect(couponThreeSourceE2eCases).toHaveLength(65);
+  it("contains the complete approved 67-case matrix", () => {
+    expect(couponThreeSourceE2eCases).toHaveLength(67);
     expect(new Set(couponThreeSourceE2eCases.map((item) => item.id)).size).toBe(
-      65,
+      67,
     );
     for (const [prefix, count] of Object.entries(categoryCounts)) {
       expect(

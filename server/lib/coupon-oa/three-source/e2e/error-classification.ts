@@ -113,6 +113,17 @@ const classifications: Array<{
     },
   },
   {
+    // bug-fix-6：双列名单（如 店铺id+sku）未选择标识维度时的确定性拒绝。
+    // 注意措辞不能含「最新卡片」——那会先命中 STALE_REVISION 分类。
+    pattern: /同时检测到多种标识列|请先选择本单使用的标识类型/iu,
+    result: {
+      stage: "recognition",
+      code: "IDENTIFIER_DIMENSION_SELECTION_REQUIRED",
+      userMessage: "同一来源同时包含多种标识列，请选择本单使用的标识类型。",
+      retryable: false,
+    },
+  },
+  {
     pattern: /白黑名单存在重叠 SKU/iu,
     result: {
       stage: "recognition",

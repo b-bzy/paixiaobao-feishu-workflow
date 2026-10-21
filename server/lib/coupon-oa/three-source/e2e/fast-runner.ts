@@ -346,7 +346,9 @@ export async function runFastE2eCase(
       noBlacklistConfirmed: !blacklist,
       templates: await templates(),
       activityPointPercent: 5,
-      listMode: ["L14", "S07", "S16", "S17", "B02"].includes(caseValue.id)
+      listMode: ["L14", "S07", "S16", "S17", "S18", "S19", "B02"].includes(
+        caseValue.id,
+      )
         ? "dynamic-multi-sheet"
         : "legacy-column",
       // S17 mirrors the owner's 商家 ID / SKU two-option confirmation
@@ -357,6 +359,16 @@ export async function runFastE2eCase(
               sourceSha256: sha256(whitelist.bytes),
               detectedDimension: "UNKNOWN" as const,
               confirmedAs: "MERCHANT_ID" as const,
+            },
+          }
+        : {}),
+      // S19 (bug-fix-6)：双列名单的“选路”——owner 选 SKU,只采 sku 列。
+      ...(caseValue.id === "S19"
+        ? {
+            whitelistDimensionConfirmation: {
+              sourceSha256: sha256(whitelist.bytes),
+              detectedDimension: "SKU" as const,
+              confirmedAs: "SKU" as const,
             },
           }
         : {}),

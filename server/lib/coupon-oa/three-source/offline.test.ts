@@ -17,13 +17,16 @@ import {
 } from "./lists";
 import { runOfflineThreeSourceWorkflow } from "./offline";
 import {
+  confirmRegularFullReductionCouponSet,
   extractRegularFullReductionInput,
   inspectThreeSourceWorkbook,
 } from "./recognition";
 import type { OfflineSourceFile } from "./types";
 import {
   assertExpectedRevision,
+  buildOaPrefillSnapshot,
   createCanonicalPackage,
+  createCouponSetCanonicalPackage,
   generateOfflineArtifacts,
 } from "./workflow";
 
@@ -507,6 +510,143 @@ describe("three-source coupon OA offline workflow", () => {
     expect(parsed.issues.join("；")).toContain("15 位有效数字");
     expect(parsed.issues.join("；")).toContain("包含多个名单 ID");
     expect(parsed.issues.join("；")).not.toContain("为空");
+  });
+
+  it("sums estimated GMV/cost/ROI across coupon tiers for the OA prefill (bug-fix-7)", async () => {
+    // 两档配券表复刻线上案例形态：卡片曾只显示第一档的 GMV/费用。
+    // 每档费用 = 数量×面额×使用率×承担比例：两档各 25,200，合计 50,400。
+    const couponWorkbook = new ExcelJS.Workbook();
+    const couponSheet = couponWorkbook.addWorksheet("多档配券表");
+    couponSheet.getCell("A1").value = "本地多档合计口径回归用合成配券表";
+    const couponHeaders = [
+      "活动名称",
+      "活动背景",
+      "业务模式",
+      "申请人",
+      "活动开始日期",
+      "活动结束日期",
+      "用券渠道",
+      "满减门槛",
+      "优惠面额",
+      "总申请数量",
+      "单次发放到账张数",
+      "每日领取次数",
+      "可领时间",
+      "可用时间",
+      "预计领用率",
+      "预计使用率",
+      "拍拍平台承担比例",
+      "预计引入GMV",
+      "用户领券规则",
+      "优惠券赠送",
+      "推广途径",
+      "公开推广渠道",
+      "是否超扣点",
+      "超扣点原因",
+    ];
+    couponSheet.getRow(4).values = couponHeaders;
+    couponSheet.getRow(5).values = [
+      "多档合计活动",
+      "离线测试活动背景",
+      "严选",
+      "测试提报人",
+      "2030-01-01",
+      "2030-01-03",
+      "拍拍二手",
+      "999",
+      "60",
+      "2800",
+      "1",
+      "1",
+      "2030-01-01 00:00:00 至 2030-01-03 23:59:59",
+      "2030-01-01 00:00:00 至 2030-01-10 23:59:59",
+      "80%",
+      "30%",
+      "50%",
+      "50000",
+      "活动期间仅可领一次",
+      "不允许",
+      "公开自动推广",
+      "领券中心",
+      "否",
+      "",
+    ];
+    couponSheet.getRow(6).values = [
+      "多档合计活动",
+      "离线测试活动背景",
+      "严选",
+      "测试提报人",
+      "2030-01-01",
+      "2030-01-03",
+      "拍拍二手",
+      "1999",
+      "120",
+      "1400",
+      "1",
+      "1",
+      "2030-01-01 00:00:00 至 2030-01-03 23:59:59",
+      "2030-01-01 00:00:00 至 2030-01-10 23:59:59",
+      "80%",
+      "30%",
+      "50%",
+      "240000",
+      "活动期间仅可领一次",
+      "不允许",
+      "公开自动推广",
+      "领券中心",
+      "否",
+      "",
+    ];
+    const couponSourceFile: OfflineSourceFile = {
+      fileName: "任意格式-多档合成配券表.xlsx",
+      bytes: await workbookBytes(couponWorkbook),
+    };
+    const recognition = await inspectThreeSourceWorkbook(couponSourceFile);
+    const couponSet = await confirmRegularFullReductionCouponSet({
+      recognition,
+      ownerId: "offline-owner-001",
+      revision: 1,
+      ownerFieldValues: { activityPointPercent: 6 },
+    });
+    const whitelistRecognition = await inspectThreeSourceWorkbook(
+      await listSource({
+        role: "白名单",
+        rows: [
+          ["第一档商品", "00123", "满999减60"],
+          ["第二档商品", "00124", "满1999减120"],
+        ],
+      }),
+    );
+    const whitelist = await parseTieredIdentifierList({
+      recognition: whitelistRecognition,
+      role: "whitelist",
+    });
+    const packageValue = createCouponSetCanonicalPackage({
+      ownerId: "offline-owner-001",
+      revision: 1,
+      couponSet,
+      whitelist,
+      blacklistStatus: "absent_confirmed",
+    });
+    expect(packageValue.summary).toEqual({
+      estimatedGmvYuan: 290_000,
+      estimatedCostYuan: 50_400,
+      estimatedRoi: 5.75,
+    });
+    const artifacts = await generateOfflineArtifacts({
+      package: packageValue,
+      templates: await templates(),
+    });
+    const snapshot = buildOaPrefillSnapshot({
+      package: packageValue,
+      artifacts,
+      screenshots: [],
+      activityPointPercent: 6,
+    });
+    expect(snapshot.values.estimatedGmvYuan).toBe(290_000);
+    expect(snapshot.values.estimatedCostYuan).toBe(50_400);
+    expect(snapshot.values.estimatedRoi).toBe(5.75);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("applies the business-selected blacklist-wins decision without changing tiers", async () => {

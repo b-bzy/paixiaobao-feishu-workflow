@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const caseIdPattern =
-  /^(?:F0[1-8]|L(?:0[1-9]|1[0-4])|C(?:0[1-9]|1[0-6])|S(?:0[1-9]|1[0-7])|B(?:0[1-9]|10))$/u;
+  /^(?:F0[1-8]|L(?:0[1-9]|1[0-4])|C(?:0[1-9]|1[0-6])|S(?:0[1-9]|1[0-9])|B(?:0[1-9]|10))$/u;
 
 const workbookInputSchema = z.object({
   role: z.enum(["couponTable", "whitelist", "blacklist"]),

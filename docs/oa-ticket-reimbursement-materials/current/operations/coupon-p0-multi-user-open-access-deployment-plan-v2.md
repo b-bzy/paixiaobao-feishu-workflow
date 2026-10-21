@@ -102,7 +102,7 @@ canary 值守逐笔核对(回读 instance code、申请人=发起人、附件=�
 
 | 时间 | 操作人 | 变更(变量/开关/可用范围) | 部署 revision | 验证 | 复核 |
 | --- | --- | --- | --- | --- | --- |
-| 2026-10-21 | b-bzy(Owner 授权,agent 执行) | 决策:提交层开放(ADR-0016),`FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS=true`;同日飞书可用范围已由 b-bzy 发版打开 | ___(部署时回填) | `couponOaNativeSubmitOpenAccess:true` 回读 + 首批提交逐笔核对 | 待架构 Owner 追认 |
+| 2026-10-21 11:58 | b-bzy(Owner 授权,agent 执行) | 决策:提交层开放(ADR-0016),`FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS=true`;同日飞书可用范围已由 b-bzy 发版打开(实查=8 具名成员,非全员);提交具名名单同步扩至同一 8 人作为回滚基线 | palwjn3xf @ f574132 | 回读 `couponOaNativeSubmitOpenAccess:true`、`couponOaNativeSubmitDisabled:false`;bridge/worker 已挂新部署;首批提交逐笔核对待办 | 待架构 Owner 追认 |
 | ___ | ___ | ___ | ___ | ___ | ___ |
 
 ## 7. 已知边界

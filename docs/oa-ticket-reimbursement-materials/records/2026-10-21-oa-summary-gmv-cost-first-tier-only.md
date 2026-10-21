@@ -1,6 +1,6 @@
 # 2026-10-21 多券档 OA 汇总值只取第一档：预估GMV/预估费用未跨档合计 (bug-fix-7)
 
-> **状态：已实施（离线验证通过；Preview 部署与真发重放未执行，见第 7 节）。**
+> **状态：已实施并部署 Preview（`e2y910v4t`@`3132257`，2026-10-21 15:39 本地；身份回读 SHA 一致、bridge/worker 在线）；真发重放待用户以 6 档表核对合计值。**
 > 环境：P0 Preview（`palwjn3xf`@`f574132`），bridge/worker 本机常驻；用户桌面截图 `~/Movies/CleanShot 2026-10-21 at 14.37.35@2x.png`（卡片）、`14.38.38@2x.png`、`14.38.59@2x.png`（源配券表）。
 > 编号说明：用户口述为「bug-fix-6」，但同日编号 6 已被 [双列白名单回弹修复](2026-10-21-mapping-confirm-whitelist-merchant-column-bounce.md) 占用（其方案文档与本修复分属不同问题）。按 AGENTS.md「bug-fix-x 编号全局只增不改」，本问题编为 **bug-fix-7**。
 
@@ -92,5 +92,5 @@
 
 未验证项及原因：
 
-- **Preview 部署 + 真发重放**：部署与真发属于外部副作用，需用户确认后执行（部署闸：原生提交开关开启时需 `P0_ALLOW_NATIVE_SUBMIT_WINDOW=true`）。建议部署后用本案例 6 档表重放，核对卡片 预估GMV=523,000、预估费用=各档计算值合计、ROI=合计口径。
+- **飞书真发重放**：Preview 已部署 `e2y910v4t`@`3132257`（down→up 全新部署；身份端点回读 SHA `3132257ba8…` 与本地一致，`couponOaNativeSubmitOpenAccess=true` 保持开放线基线，bridge/worker 在线且 worker 自校验 revision 通过）。真发属于用户侧操作：用本案例 6 档表重走三源流程，核对卡片 预估GMV=523,000、预估费用=各档计算值合计（业务表口径 324,800）、ROI=合计口径。
 - **已存在的旧 OA 草稿**：历史快照不重算，属设计取舍（第 5 节），不回改。

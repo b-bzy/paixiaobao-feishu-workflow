@@ -1,6 +1,6 @@
 # 2026-10-21 第 3 步确认"无限回弹":双列白名单(店铺id+sku)的多维度区域毒化生成 + 错误映射缺失(bug-fix-6)
 
-> **状态:已实施(本地全量回归通过;待部署 Preview 后真发验证)。**
+> **状态:已实施并部署 Preview(`e2y910v4t`@`3132257`,2026-10-21 15:39 本地;身份回读 SHA 一致、openAccess=true、bridge/worker 在线);真发验证待用户重传双列白名单。**
 > 环境:P0 Preview 部署(诊断时 `8imclli2n`@`0f36c73`;复核时 `palwjn3xf`@`f574132`),bridge/worker 本机常驻,时间均为 UTC(北京时间 = UTC+8)。
 > 触发:用户报告"填写不了,一直回弹这个页面"(截图 `~/Movies/CleanShot 2026-10-21 at 10.04.06@2x.png`,即本地 10:04 = 02:04 UTC)。
 > 与同日 [bug-fix-3(单列商家ID识别)](2026-10-21-whitelist-id-dimension-recognition-and-reason-field.md) 同族但**不同案例**:那次是单列无表头文件的识别期问题;本案例是**双列(店铺id+sku)有表头文件**的确认/生成期问题,`f574132` 的维度化改造未覆盖它(下文有复核证据)。
@@ -116,4 +116,4 @@
 | typecheck | `pnpm typecheck:server` | 通过(`typecheck:admin` 存量 @types/react 缺失,与本修复无关) |
 | 真实材料重放 | `scripts/coupon-three-source-confirm-failure-repro.mts`(事故草稿 State + bot 下载的原文件) | 无确认→阻断且文案可执行;确认 SKU→2872 条 sku + 忽略店铺id 注记;确认 MERCHANT_ID→124 个店铺 + 忽略 sku 注记 |
 
-**未验证项**:Preview 部署与飞书真发(待用户授权执行;rule v3 使在途草稿 fail closed,双列白名单需重传后按新流程走)。
+**已部署**:Preview `e2y910v4t`@`3132257`(2026-10-21 15:39,down→up 全新部署;身份端点回读 SHA 一致、`couponOaNativeSubmitOpenAccess=true`、bridge/worker 在线)。**未验证项**:飞书真发(rule v3 使在途草稿 fail closed,双列白名单需重传后按新流程走)。

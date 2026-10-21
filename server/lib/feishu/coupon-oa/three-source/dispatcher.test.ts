@@ -905,7 +905,7 @@ describe("three-source Bot dispatcher", () => {
     };
     const startAiRecognition: CouponThreeSourcePilotService["startAiRecognition"] =
       vi.fn(async () => current);
-    const { values, sendCard } = dependencies({
+    const { values, sendCard, deliverMappingCard } = dependencies({
       activeThreeSource: [current],
       service: { startAiRecognition },
     });
@@ -930,6 +930,76 @@ describe("three-source Bot dispatcher", () => {
         operationId: "event-start-ai",
       }),
     );
+    // Double click or a stale intake card click: recognition is already
+    // prepared for the current revision (service returns the draft
+    // unchanged), so the idempotent re-activation runs but no second
+    // recognizing card is delivered.
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(deliverMappingCard).not.toHaveBeenCalled();
+  });
+
+  it("delivers the recognizing card only for the first recognition start", async () => {
+    const current = draft();
+    const couponSource = {
+      role: "couponTable" as const,
+      messageId: "om-coupon",
+      fileKey: "file-coupon",
+      fileName: "coupon.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    const whitelistSource = {
+      role: "whitelist" as const,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "whitelist.xlsx",
+      bytes: 10,
+      sha256: "b".repeat(64),
+    };
+    current.task.sources = {
+      couponTable: couponSource,
+      whitelist: whitelistSource,
+    };
+    const prepared = {
+      ...current,
+      recognitions: {
+        couponTable: {
+          source: couponSource,
+          sourceHash: "a".repeat(64),
+          roleCandidates: [],
+          couponFieldCandidates: {},
+          listCandidates: [],
+          issues: [],
+          ai: {
+            runId: "run-coupon",
+            revision: current.task.revision,
+            sourceSha256: "a".repeat(64),
+            status: "pending" as const,
+          },
+        },
+      },
+    };
+    const startAiRecognition: CouponThreeSourcePilotService["startAiRecognition"] =
+      vi.fn(async () => prepared);
+    const { values, sendCard } = dependencies({
+      activeThreeSource: [current],
+      service: { startAiRecognition },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: "coupon_three_source_recognition_start",
+        value: {
+          pilotRecordId: current.recordId,
+          revision: current.task.revision,
+        },
+        idempotencyKey: "event-first-click",
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(startAiRecognition).toHaveBeenCalledOnce();
     expect(JSON.stringify(sendCard.mock.calls[0]?.[1])).toContain("AI 识别中");
   });
 
@@ -1728,6 +1798,207 @@ describe("three-source Bot dispatcher", () => {
         }),
       }),
     );
+  });
+
+  it("records the owner identifier-dimension choice without a reason field", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    current.task.sources = {
+      couponTable: { ...source, role: "couponTable" },
+      whitelist: { ...source, role: "whitelist" },
+    };
+    current.recognitions = {
+      ...current.recognitions,
+      whitelist: {
+        source: { ...source },
+        sourceHash: "b".repeat(64),
+        roleCandidates: [],
+        couponFieldCandidates: {},
+        listCandidates: [
+          {
+            id: "identifier-1",
+            kind: "identifier" as const,
+            dimension: "UNKNOWN" as const,
+            score: 40,
+            header: "",
+            headerRow: 0,
+            column: "A",
+            sheetName: "Sheet1",
+            sampleValues: ["162203631"],
+            reasons: ["识别到无表头单列数字区域"],
+          },
+        ],
+        issues: [],
+      },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn(async (input) => ({
+        ...current,
+        task: { ...current.task, revision: 6 },
+        selections: input.selections,
+      }));
+    const confirmSourcesAndGenerate: CouponThreeSourcePilotService["confirmSourcesAndGenerate"] =
+      vi.fn(async () => ({
+        ...current,
+        task: {
+          ...current.task,
+          revision: 7,
+          status: "AwaitingFinalConfirmation" as const,
+        },
+      }));
+    const confirmFinalPreview: CouponThreeSourcePilotService["confirmFinalPreview"] =
+      vi.fn(async () => ({
+        ...current,
+        task: { ...current.task, status: "DraftOnlyConfirmed" as const },
+        oaDraftRecordId: "rec-oa-merged",
+      }));
+    const getOaDraft = vi.fn(async () => ({
+      recordId: "rec-oa-merged",
+      draftId: "COA-merged",
+      values: {
+        applicationType: "优惠券申请",
+        businessMode: "寄卖",
+        activityName: "测试活动",
+        activityBackground: "测试背景",
+        overDeduction: "否",
+        estimatedGmvYuan: 10_000,
+        estimatedCostYuan: 100,
+        channels: ["京东渠道"],
+        activityStartAt: "2030-01-01",
+        activityEndAt: "2030-01-01",
+        calcImageFileCodes: ["img"],
+        couponTableFileCodes: ["coupon"],
+        productWhitelistFileCodes: ["white"],
+      },
+      attachments: [],
+    })) as unknown as CouponThreeSourceDispatcherDependencies["getOaDraft"];
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: {
+        updateSelections,
+        confirmSourcesAndGenerate,
+        confirmFinalPreview,
+      },
+      getOaDraft,
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
+          whitelist_identifierDimension: "MERCHANT_ID",
+        },
+      }),
+    ).resolves.toMatchObject({ handled: true });
+
+    expect(updateSelections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRevision: 5,
+        selections: expect.objectContaining({
+          identifierDimensionConfirmations: {
+            whitelist: {
+              sourceSha256: "b".repeat(64),
+              detectedDimension: "UNKNOWN",
+              confirmedAs: "MERCHANT_ID",
+            },
+          },
+        }),
+      }),
+    );
+    const selectionJson = JSON.stringify(
+      vi.mocked(updateSelections).mock.calls[0]?.[0].selections,
+    );
+    expect(selectionJson).not.toContain("reason");
+  });
+
+  it("rejects an identifier-dimension value outside the two options", async () => {
+    const current = draft();
+    current.task.revision = 5;
+    current.task.status = "AwaitingSourceConfirmation";
+    const source = {
+      messageId: "om-source",
+      fileKey: "file-source",
+      fileName: "source.xlsx",
+      bytes: 10,
+      sha256: "a".repeat(64),
+    };
+    current.task.blacklistStatus = "absent_confirmed";
+    current.task.sources = {
+      couponTable: { ...source, role: "couponTable" },
+      whitelist: { ...source, role: "whitelist" },
+    };
+    current.recognitions = {
+      ...current.recognitions,
+      whitelist: {
+        source: { ...source },
+        sourceHash: "b".repeat(64),
+        roleCandidates: [],
+        couponFieldCandidates: {},
+        listCandidates: [
+          {
+            id: "identifier-1",
+            kind: "identifier" as const,
+            dimension: "UNKNOWN" as const,
+            score: 40,
+            header: "",
+            headerRow: 0,
+            column: "A",
+            sheetName: "Sheet1",
+            sampleValues: ["162203631"],
+            reasons: ["识别到无表头单列数字区域"],
+          },
+        ],
+        issues: [],
+      },
+    };
+    const updateSelections: CouponThreeSourcePilotService["updateSelections"] =
+      vi.fn();
+    const { values } = dependencies({
+      activeThreeSource: [current],
+      service: { updateSelections },
+    });
+    const dispatcher = createCouponThreeSourceDispatcher(values);
+
+    await expect(
+      dispatcher.dispatchCallback({
+        openId: "ou_owner",
+        action: `coupon_three_source_mapping_confirm:${current.recordId}:5`,
+        form: {
+          activityPointPercent: "6",
+          owner_businessMode: "寄卖",
+          owner_activityName: "测试活动",
+          owner_activityBackground: "测试背景",
+          owner_activityStartAt: "2026-09-30",
+          owner_activityEndAt: "2026-10-10",
+          owner_overDeduction: "否",
+          whitelist_identifierDimension: "SPU",
+        },
+      }),
+    ).resolves.toMatchObject({
+      handled: true,
+      message: expect.stringContaining(
+        "白名单标识类型请从商家 ID 或 SKU 中选择",
+      ),
+    });
+    expect(updateSelections).not.toHaveBeenCalled();
   });
 
   it("requires the over-deduction reason when the owner chooses yes", async () => {

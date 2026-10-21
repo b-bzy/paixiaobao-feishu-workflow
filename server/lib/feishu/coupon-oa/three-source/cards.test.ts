@@ -710,7 +710,7 @@ describe("three-source Bot cards", () => {
     expect(rendered).toContain("不会自动取消当前提报");
   });
 
-  it("explains a headerless numeric list and requires an auditable SKU confirmation", () => {
+  it("asks the owner to choose merchant ID or SKU for a headerless list without a reason box", () => {
     const current = draft();
     const whitelist = current.recognitions.whitelist;
     if (!whitelist) throw new Error("test whitelist missing");
@@ -718,12 +718,150 @@ describe("three-source Bot cards", () => {
     const identifier = whitelist.listCandidates[0];
     if (!identifier) throw new Error("test identifier missing");
     identifier.dimension = "UNKNOWN";
+    identifier.header = "";
     identifier.headerRow = 0;
 
     const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
-    expect(rendered).toContain("不能仅凭数字区分 SKU、SPU 或商家 ID");
-    expect(rendered).toContain("确认原值实际是 SKU");
-    expect(rendered).toContain("whitelist_dimensionReason");
+    expect(rendered).toContain("白名单标识类型确认");
+    expect(rendered).toContain("whitelist_identifierDimension");
+    expect(rendered).toContain('"value":"MERCHANT_ID"');
+    expect(rendered).toContain('"value":"SKU"');
+    expect(rendered).not.toContain("whitelist_dimensionReason");
+    expect(rendered).not.toContain("confirmAsSku");
+    expect(rendered).not.toContain("确认依据");
+  });
+
+  it("shows the AI merchant judgment with its evidence in the confirm block", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    whitelist.source.fileName = "商家ID_新商活动.xlsx";
+    const identifier = whitelist.listCandidates[0];
+    if (!identifier) throw new Error("test identifier missing");
+    identifier.dimension = "UNKNOWN";
+    identifier.header = "";
+    identifier.headerRow = 0;
+    whitelist.ai = {
+      runId: "run-ai",
+      revision: current.task.revision,
+      sourceSha256: whitelist.sourceHash,
+      status: "succeeded",
+      primary: true,
+      result: {
+        sourceHash: whitelist.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [],
+        listCandidates: [],
+        issues: [],
+        skuRegionCandidates: [
+          {
+            id: "region-1",
+            role: "whitelist",
+            dimension: "MERCHANT_ID",
+            tierDisplayName: undefined,
+            headerCell: "A1",
+            confidence: 0.92,
+            reason: "文件名标注商家ID，9 位数字符合商家 ID 位数",
+            evidence: {
+              sourceHash: whitelist.sourceHash,
+              sheetName: "Sheet1",
+              cells: ["A1", "A2"],
+              region: { startCell: "A1", endCell: "A2" },
+            },
+          },
+        ],
+      },
+      audit: {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        promptVersion: "coupon-three-source-p0-ai-primary-v7",
+        status: "succeeded",
+        startedAt: "2026-10-21T00:00:00.000Z",
+        completedAt: "2026-10-21T00:00:01.000Z",
+        durationMs: 1000,
+      },
+    };
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("系统判定该名单为【商家 ID】");
+    expect(rendered).toContain("文件名标注商家ID，9 位数字符合商家 ID 位数");
+    expect(rendered).toContain("whitelist_identifierDimension");
+  });
+
+  it("requires the dimension choice even when the AI judges a headerless list as SKU", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    const identifier = whitelist.listCandidates[0];
+    if (!identifier) throw new Error("test identifier missing");
+    identifier.dimension = "UNKNOWN";
+    identifier.header = "";
+    identifier.headerRow = 0;
+    whitelist.ai = {
+      runId: "run-ai",
+      revision: current.task.revision,
+      sourceSha256: whitelist.sourceHash,
+      status: "succeeded",
+      primary: true,
+      result: {
+        sourceHash: whitelist.sourceHash,
+        roleCandidates: [],
+        couponCandidates: [],
+        fieldCandidates: [],
+        listCandidates: [],
+        issues: [],
+        skuRegionCandidates: [
+          {
+            id: "region-1",
+            role: "whitelist",
+            dimension: "SKU",
+            tierDisplayName: undefined,
+            headerCell: "A1",
+            confidence: 0.9,
+            reason: "12 位数字符合 SKU 位数",
+            evidence: {
+              sourceHash: whitelist.sourceHash,
+              sheetName: "Sheet1",
+              cells: ["A1", "A2"],
+              region: { startCell: "A1", endCell: "A2" },
+            },
+          },
+        ],
+      },
+      audit: {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        promptVersion: "coupon-three-source-p0-ai-primary-v7",
+        status: "succeeded",
+        startedAt: "2026-10-21T00:00:00.000Z",
+        completedAt: "2026-10-21T00:00:01.000Z",
+        durationMs: 1000,
+      },
+    };
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("whitelist_identifierDimension");
+    expect(rendered).toContain("系统判定该名单为【SKU】");
+  });
+
+  it("omits the dimension choice for a headed sku column", () => {
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(draft()));
+    expect(rendered).not.toContain("whitelist_identifierDimension");
+    expect(rendered).not.toContain("标识类型确认");
+  });
+
+  it("still requires explicit confirmation for a headed spu column", () => {
+    const current = draft();
+    const whitelist = current.recognitions.whitelist;
+    if (!whitelist) throw new Error("test whitelist missing");
+    const identifier = whitelist.listCandidates[0];
+    if (!identifier) throw new Error("test identifier missing");
+    identifier.dimension = "SPU";
+    identifier.header = "SPU";
+
+    const rendered = JSON.stringify(buildCouponThreeSourceMappingCard(current));
+    expect(rendered).toContain("whitelist_identifierDimension");
   });
 
   it("asks a single replace-white-or-use-as-black question for a third ambiguous list", () => {

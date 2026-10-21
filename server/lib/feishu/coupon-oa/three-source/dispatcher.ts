@@ -61,6 +61,7 @@ import {
   buildCouponThreeSourceRoleCard,
   buildCouponThreeSourceRuntimeBlockedCard,
   buildCouponThreeSourceUnavailableCard,
+  identifierDimensionChoice,
   mappingCardEnumDefaults,
   ownerDefaultValue,
 } from "./cards";
@@ -417,21 +418,12 @@ function mappingSelections(
   const identifierDimensionConfirmations = Object.fromEntries(
     (["whitelist", "blacklist"] as const).flatMap((role) => {
       const recognition = draft.recognitions[role];
-      if (!recognition) return [];
-      const detectedDimension = recognition.listCandidates.find(
-        (candidate) =>
-          candidate.kind === "identifier" && candidate.dimension !== "SKU",
-      )?.dimension;
-      if (!detectedDimension || detectedDimension === "SKU") return [];
-      if (stringValue(form[`${role}_confirmAsSku`]) !== "SKU") {
+      const choice = identifierDimensionChoice(recognition);
+      if (!recognition || !choice?.requiresChoice) return [];
+      const submitted = stringValue(form[`${role}_identifierDimension`]);
+      if (submitted !== "SKU" && submitted !== "MERCHANT_ID") {
         throw new Error(
-          `${role === "whitelist" ? "白名单" : "黑名单"}标识类型无法唯一确定，请确认原值实际是 SKU`,
-        );
-      }
-      const reason = stringValue(form[`${role}_dimensionReason`])?.trim() ?? "";
-      if (reason.length < 2) {
-        throw new Error(
-          `${role === "whitelist" ? "白名单" : "黑名单"}按 SKU 使用时，请填写确认依据（至少 2 个字）`,
+          `${role === "whitelist" ? "白名单" : "黑名单"}标识类型请从商家 ID 或 SKU 中选择`,
         );
       }
       return [
@@ -439,9 +431,8 @@ function mappingSelections(
           role,
           {
             sourceSha256: recognition.sourceHash,
-            detectedDimension,
-            confirmedAs: "SKU" as const,
-            reason,
+            detectedDimension: choice.detected,
+            confirmedAs: submitted,
           },
         ],
       ];
@@ -1464,6 +1455,21 @@ export function createCouponThreeSourceDispatcher(
           break;
         default:
           return { handled: false };
+      }
+      // Every physical click of the start button is a distinct event, so a
+      // double click bypasses event-level dedup. When recognition is already
+      // prepared/running for the current revision the service call above is an
+      // idempotent re-activation (stalled-effect recovery), but the draft is
+      // returned unchanged — converge by not delivering another recognizing
+      // card for it.
+      if (
+        action === "coupon_three_source_recognition_start" &&
+        next === draft
+      ) {
+        return {
+          handled: true,
+          message: `Coupon three-source recognition already running for ${draft.pilotId}`,
+        };
       }
       await sendDraftState({
         openId: input.openId,

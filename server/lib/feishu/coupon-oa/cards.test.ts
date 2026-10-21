@@ -3,6 +3,7 @@ import {
   buildCouponOaActiveWorkflowCard,
   buildCouponOaPreviewCard,
   buildCouponOaSubmissionFailureCard,
+  buildCouponOaSubmissionResultCard,
   buildCouponOaSubmitCard,
 } from "./cards";
 import type { CouponOaDraft } from "./draft-store";
@@ -126,6 +127,34 @@ describe("coupon OA confirmation cards", () => {
     expect(text).toContain("正式 OA 未创建");
     expect(text).toContain("审批 → 已发起");
     expect(text).toContain("OA优惠券填报");
+  });
+
+  it("keeps a created submission green with readback findings as hints", () => {
+    const card = buildCouponOaSubmissionResultCard({
+      instanceLink: "https://example.test/approval",
+      verificationIssues: ["预估费用：提交 26,137.9 / OA 实际 26,100，请核对"],
+    });
+    const text = JSON.stringify(card);
+
+    expect(text).toContain("优惠券 OA 提报已完成");
+    expect(text).toContain("提交内容自动核对：发现 1 项不一致");
+    expect(text).toContain("已提报");
+    expect(text).toContain('"green"');
+    expect(text).not.toContain("需立即复核");
+    expect(text).toContain("预估费用：提交 26,137.9 / OA 实际 26,100");
+    expect(text).toContain("打开正式 OA");
+  });
+
+  it("shows the automatic readback pass line for a clean submission", () => {
+    const text = JSON.stringify(
+      buildCouponOaSubmissionResultCard({
+        verificationIssues: [],
+      }),
+    );
+
+    expect(text).toContain("优惠券 OA 提报已完成");
+    expect(text).toContain("提交内容与确认快照一致");
+    expect(text).not.toContain("自动核对：发现");
   });
 
   it("includes cancellation actions on active and conflicting workflows", () => {

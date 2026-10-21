@@ -23,7 +23,12 @@ function baseCard(
         {
           tag: "text_tag",
           text: plainText(status),
-          color: template === "red" ? "red" : "blue",
+          color:
+            template === "red"
+              ? "red"
+              : template === "green"
+                ? "green"
+                : "blue",
         },
       ],
     },
@@ -478,18 +483,27 @@ export function buildCouponOaSubmissionResultCard(input: {
   instanceLink?: string;
   verificationIssues: string[];
 }): FeishuCard {
-  const success = input.verificationIssues.length === 0;
+  // The approval instance exists as soon as creation returned, so the main
+  // status stays green even when the post-create readback found differences;
+  // those become a secondary review-hint block instead of a red card.
+  const verified = input.verificationIssues.length === 0;
   return baseCard(
-    success ? "优惠券 OA 已创建并核对" : "优惠券 OA 已创建但需立即复核",
-    success ? "正式审批已按原生流程发起" : "字段回读存在差异",
-    success ? "green" : "red",
-    success ? "已提交" : "需复核",
+    "优惠券 OA 提报已完成",
+    verified
+      ? "正式审批已按原生流程发起，自动核对通过"
+      : `提交内容自动核对：发现 ${input.verificationIssues.length} 项不一致`,
+    "green",
+    "已提报",
     [
       {
         tag: "markdown",
-        content: success
-          ? "系统已读取创建后的正式 OA，提交字段与确认快照一致。"
-          : `发现差异：\n${input.verificationIssues.map((item) => `- ${item}`).join("\n")}`,
+        content: verified
+          ? "系统已读取创建后的正式 OA，提交内容与确认快照一致。"
+          : [
+              "系统已读取创建后的正式 OA 并自动核对，发现以下不一致：",
+              ...input.verificationIssues.map((item) => `- ${item}`),
+              "金额类差异若仅小数位不同，飞书已按金额控件精度存储，业务上通常无需处理；其他差异请打开正式 OA 核对，如需修正请联系管理员。",
+            ].join("\n"),
       },
       ...(input.instanceLink
         ? [

@@ -747,6 +747,13 @@ export class CouponThreeSourcePilotService {
       aiRecognition: storedCoupon.ai?.primary
         ? storedCoupon.ai.result
         : undefined,
+      // The coupon-table 限品类型 mirrors the owner-confirmed whitelist
+      // dimension (ADR-0015); the AI never decides it.
+      productLimitType:
+        input.draft.selections.identifierDimensionConfirmations?.whitelist
+          ?.confirmedAs === "MERCHANT_ID"
+          ? ("限商家ID" as const)
+          : ("限SKU" as const),
     });
     const coupon = couponSet.tiers[0];
     const whitelist = await parseMultiSheetTieredIdentifierList({

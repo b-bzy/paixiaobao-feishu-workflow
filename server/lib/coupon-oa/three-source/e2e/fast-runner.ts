@@ -346,9 +346,20 @@ export async function runFastE2eCase(
       noBlacklistConfirmed: !blacklist,
       templates: await templates(),
       activityPointPercent: 5,
-      listMode: ["L14", "S07", "S16", "B02"].includes(caseValue.id)
+      listMode: ["L14", "S07", "S16", "S17", "B02"].includes(caseValue.id)
         ? "dynamic-multi-sheet"
         : "legacy-column",
+      // S17 mirrors the owner's 商家 ID / SKU two-option confirmation
+      // (ADR-0015): headerless lists fail closed without it.
+      ...(caseValue.id === "S17"
+        ? {
+            whitelistDimensionConfirmation: {
+              sourceSha256: sha256(whitelist.bytes),
+              detectedDimension: "UNKNOWN" as const,
+              confirmedAs: "MERCHANT_ID" as const,
+            },
+          }
+        : {}),
     });
     if (caseValue.id === "B08") {
       assertExpectedRevision(

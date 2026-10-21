@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import {
   normalizeRegularRatio,
   regularFullReductionInputSchema,
+  roundYuanToCents,
 } from "../calculation";
 import { parseFlexibleNumber } from "../number-text";
 import { canonicalCouponBusinessDate } from "./business-date";
@@ -585,6 +586,8 @@ function number(value: string): number | undefined {
 export interface ExtractRegularFullReductionInput {
   recognition: WorkbookRecognition;
   fieldCandidateIds?: Partial<Record<CouponFieldKey, string>>;
+  /** From the owner-confirmed whitelist dimension (ADR-0015), not AI. */
+  productLimitType?: "限SKU" | "限商家ID";
 }
 
 export interface RegularFullReductionFieldIssue {
@@ -951,11 +954,18 @@ function normalizedOwnerValue(key: CouponFieldKey, value: unknown): unknown {
       "totalQuantity",
       "grantQuantityPerClaim",
       "dailyClaimLimit",
-      "estimatedGmvYuan",
       "activityPointPercent",
     ].includes(key)
   ) {
     return typeof value === "number" ? value : number(String(value ?? ""));
+  }
+  if (key === "estimatedGmvYuan") {
+    // Feishu amount controls store cent precision; finalize the GMV at the
+    // same precision so the confirmed snapshot and the created approval do
+    // not differ by sub-cent tails copied from Excel or AI calculations.
+    const parsed =
+      typeof value === "number" ? value : number(String(value ?? ""));
+    return parsed === undefined ? undefined : roundYuanToCents(parsed);
   }
   if (
     ["expectedClaimRate", "expectedUseRate", "platformBearingRatio"].includes(
@@ -990,6 +1000,8 @@ export interface ConfirmRegularFullReductionCouponInput {
   ownerFieldValues?: Partial<Record<CouponFieldKey, unknown>>;
   overrideReasons?: Partial<Record<CouponFieldKey, string>>;
   aiRecognition?: ValidatedAiRecognition;
+  /** From the owner-confirmed whitelist dimension (ADR-0015), not AI. */
+  productLimitType?: "限SKU" | "限商家ID";
 }
 
 export class MultipleCouponCandidatesError extends Error {
@@ -1157,7 +1169,7 @@ export async function confirmRegularFullReductionCoupon(
   const parsed = regularFullReductionInputSchema.safeParse({
     ...values,
     couponType: "东券",
-    productLimitType: "限SKU",
+    productLimitType: input.productLimitType ?? "限SKU",
     claimRiskControl: "0级以下用户可领",
   });
   if (!parsed.success) {
@@ -1349,7 +1361,7 @@ export async function extractRegularFullReductionInput(
     platformBearingRatio: normalizeRegularRatio(value("platformBearingRatio")),
     estimatedGmvYuan: number(value("estimatedGmvYuan")),
     couponType: "东券",
-    productLimitType: "限SKU",
+    productLimitType: input.productLimitType ?? "限SKU",
     claimRiskControl: "0级以下用户可领",
     claimRule: value("claimRule"),
     allowGift: value("allowGift"),

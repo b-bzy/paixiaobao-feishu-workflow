@@ -579,18 +579,88 @@ function aiStatusContent(draft: CouponThreeSourcePilotDraft): string[] {
   return lines;
 }
 
-function unresolvedIdentifierDimension(
+export interface IdentifierDimensionChoice {
+  detected: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
+  /** Headerless identifier candidates and any non-SKU detection must be
+   * confirmed by the owner even when the AI already judged SKU. */
+  requiresChoice: boolean;
+  aiJudgment?: {
+    dimension: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
+    reason: string;
+  };
+}
+
+/**
+ * Single source of truth for identifier-dimension confirmation triggers;
+ * the dispatcher reuses it so the card and the form parsing cannot drift.
+ */
+export function identifierDimensionChoice(
   recognition: StoredWorkbookRecognition | undefined,
-): "SPU" | "MERCHANT_ID" | "UNKNOWN" | undefined {
-  const deterministic = recognition?.listCandidates.find(
-    (candidate) =>
-      candidate.kind === "identifier" && candidate.dimension !== "SKU",
-  )?.dimension;
-  if (deterministic && deterministic !== "SKU") return deterministic;
-  const ai = recognition?.ai?.result?.skuRegionCandidates?.find(
-    (candidate) => candidate.dimension !== "SKU",
-  )?.dimension;
-  return ai && ai !== "SKU" ? ai : undefined;
+): IdentifierDimensionChoice | undefined {
+  if (!recognition) return undefined;
+  const identifier = recognition.listCandidates.find(
+    (candidate) => candidate.kind === "identifier",
+  );
+  const aiRegion =
+    recognition.ai?.result?.skuRegionCandidates?.find(
+      (candidate) =>
+        candidate.dimension === "SKU" || candidate.dimension === "MERCHANT_ID",
+    ) ?? recognition.ai?.result?.skuRegionCandidates?.[0];
+  const detected =
+    identifier?.dimension && identifier.dimension !== "UNKNOWN"
+      ? identifier.dimension
+      : aiRegion &&
+          (aiRegion.dimension === "SKU" || aiRegion.dimension === "MERCHANT_ID")
+        ? aiRegion.dimension
+        : (identifier?.dimension ?? "SKU");
+  const requiresChoice =
+    Boolean(identifier && identifier.header === "") || detected !== "SKU";
+  return {
+    detected,
+    requiresChoice,
+    aiJudgment: aiRegion
+      ? { dimension: aiRegion.dimension, reason: aiRegion.reason }
+      : undefined,
+  };
+}
+
+function identifierDimensionLabel(
+  dimension: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN",
+): string {
+  if (dimension === "MERCHANT_ID") return "商家 ID";
+  if (dimension === "SKU") return "SKU";
+  if (dimension === "SPU") return "SPU";
+  return "无法判定";
+}
+
+function identifierDimensionConfirmBlock(input: {
+  role: "whitelist" | "blacklist";
+  fileName: string;
+  choice: IdentifierDimensionChoice;
+}): Array<Record<string, unknown>> {
+  const roleLabel = input.role === "whitelist" ? "白名单" : "黑名单";
+  const judgmentLine = input.choice.aiJudgment
+    ? `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】（依据：${input.choice.aiJudgment.reason}）。`
+    : input.choice.detected === "UNKNOWN"
+      ? "系统未能判定该名单的标识类型。"
+      : `系统判定该名单为【${identifierDimensionLabel(input.choice.detected)}】。`;
+  return [
+    {
+      tag: "markdown",
+      content: `**${roleLabel}标识类型确认：** ${input.fileName} 是无表头或标识含义不明确的单列数据。${judgmentLine}请确认实际类型后按该类型生成；系统不会改写任何原值。`,
+    },
+    {
+      tag: "select_static",
+      name: `${input.role}_identifierDimension`,
+      placeholder: plainText(`请确认${roleLabel}标识类型`),
+      required: true,
+      width: "fill",
+      options: [
+        { text: plainText("商家 ID"), value: "MERCHANT_ID" },
+        { text: plainText("SKU"), value: "SKU" },
+      ],
+    },
+  ];
 }
 
 /**
@@ -660,8 +730,8 @@ export function buildCouponThreeSourceMappingCard(
   const coupon = draft.recognitions.couponTable;
   const whitelist = draft.recognitions.whitelist;
   const blacklist = draft.recognitions.blacklist;
-  const unresolvedWhitelistDimension = unresolvedIdentifierDimension(whitelist);
-  const unresolvedBlacklistDimension = unresolvedIdentifierDimension(blacklist);
+  const whitelistDimensionChoice = identifierDimensionChoice(whitelist);
+  const blacklistDimensionChoice = identifierDimensionChoice(blacklist);
   const coupons = combinedCouponCandidates(coupon);
   const hasUnknownCoupon = coupons.some(
     (candidate) => candidate.couponType === "unknown",
@@ -1127,34 +1197,12 @@ export function buildCouponThreeSourceMappingCard(
                 content:
                   "**商品白名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
               },
-              ...(unresolvedWhitelistDimension
-                ? [
-                    {
-                      tag: "markdown",
-                      content: `**白名单识别困难：** ${whitelist.source.fileName} 是无表头或标识含义不明确的单列数据，系统只能判断它是名单，不能仅凭数字区分 SKU、SPU 或商家 ID。当前生成只支持 SKU，请确认这些原单元格实际是 SKU；系统不会改写任何值。`,
-                    },
-                    {
-                      tag: "select_static",
-                      name: "whitelist_confirmAsSku",
-                      placeholder: plainText("请确认白名单标识类型"),
-                      required: true,
-                      width: "fill",
-                      options: [
-                        {
-                          text: plainText("确认原值实际是 SKU"),
-                          value: "SKU",
-                        },
-                      ],
-                    },
-                    {
-                      tag: "input",
-                      name: "whitelist_dimensionReason",
-                      label: plainText("确认依据（至少 2 个字）"),
-                      input_type: "text",
-                      required: true,
-                      width: "fill",
-                    },
-                  ]
+              ...(whitelistDimensionChoice?.requiresChoice
+                ? identifierDimensionConfirmBlock({
+                    role: "whitelist",
+                    fileName: whitelist.source.fileName,
+                    choice: whitelistDimensionChoice,
+                  })
                 : []),
             ]
           : []),
@@ -1165,34 +1213,12 @@ export function buildCouponThreeSourceMappingCard(
                 content:
                   "**商品黑名单：** 已由系统识别；如摘要不正确，请重新上传源文件。",
               },
-              ...(unresolvedBlacklistDimension
-                ? [
-                    {
-                      tag: "markdown",
-                      content: `**黑名单识别困难：** ${blacklist.source.fileName} 的标识类型不能唯一确定。当前生成只支持 SKU，请确认这些原单元格实际是 SKU；系统不会改写任何值。`,
-                    },
-                    {
-                      tag: "select_static",
-                      name: "blacklist_confirmAsSku",
-                      placeholder: plainText("请确认黑名单标识类型"),
-                      required: true,
-                      width: "fill",
-                      options: [
-                        {
-                          text: plainText("确认原值实际是 SKU"),
-                          value: "SKU",
-                        },
-                      ],
-                    },
-                    {
-                      tag: "input",
-                      name: "blacklist_dimensionReason",
-                      label: plainText("确认依据（至少 2 个字）"),
-                      input_type: "text",
-                      required: true,
-                      width: "fill",
-                    },
-                  ]
+              ...(blacklistDimensionChoice?.requiresChoice
+                ? identifierDimensionConfirmBlock({
+                    role: "blacklist",
+                    fileName: blacklist.source.fileName,
+                    choice: blacklistDimensionChoice,
+                  })
                 : []),
             ]
           : []),

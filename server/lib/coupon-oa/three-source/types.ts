@@ -7,7 +7,7 @@ import type {
   RegularFullReductionInput,
 } from "../calculation";
 
-export const threeSourceRuleVersion = "three-source-offline-v1";
+export const threeSourceRuleVersion = "three-source-offline-v2";
 
 export type SourceRole = "couponTable" | "whitelist" | "blacklist";
 export type SourceRoleResolution = SourceRole | "unknown";
@@ -411,7 +411,10 @@ export interface CanonicalPackage {
   whitelist?: ParsedSingleCouponIdentifierList;
   blacklist?: ParsedSingleCouponIdentifierList;
   whitelistByTier: Record<string, string[]>;
+  /** Owner-confirmed identifier dimension of the tiered whitelist. */
+  whitelistDimension: "SKU" | "MERCHANT_ID";
   blacklistByTier?: Record<string, string[]>;
+  blacklistDimension?: "SKU" | "MERCHANT_ID";
   blacklistStatus: BlacklistStatus;
   overlap: OverlapSnapshot;
 }

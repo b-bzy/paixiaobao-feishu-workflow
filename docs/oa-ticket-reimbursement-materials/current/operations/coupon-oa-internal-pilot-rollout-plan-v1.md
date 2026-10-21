@@ -107,3 +107,7 @@
 ## 5. 当前未完成项
 
 当前仓库的本地桥、Vercel ingress、Base 状态并发、文件安全、DeepSeek 数据治理、审批生命周期同步、生产管理端身份与完整可观测性均不是本计划的“已完成”前提。它们必须在对应 Gate 提交证据后才可被视为具备能力。
+
+## 6. 变更记录
+
+- **2026-10-21（bug-fix 批次，[ADR-0015](../../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md)）**：与新商真实提报 bug-fix 1–5 同批部署。`threeSourceRuleVersion` 升为 `three-source-offline-v2`：在途三源草稿的识别候选、确认快照与产物全部失效（fail closed），试点用户重新上传即可，不做迁移。AI 识别合同升 v7（标识维度封闭集判定）；确认卡改为「商家 ID / SKU」二选一并删除「确认依据」必填。回滚：prompt 版本与 rule version 常量回退即恢复 v6/v1 语义；「限商家ID」被审批侧拒绝时单点改回「限SKU」。

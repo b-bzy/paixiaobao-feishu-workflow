@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
@@ -916,5 +917,139 @@ describe("final confirm on already-confirmed draft", () => {
     expect((error as CouponThreeSourceError).userMessage).toContain(
       "本次提报已完成",
     );
+  });
+  it("honors a merchant-id dimension confirmation with faithful artifacts and 限商家ID", async () => {
+    const coupon = await strictCouponBytes();
+    const whitelistWorkbook = new ExcelJS.Workbook();
+    const whitelistSheet = whitelistWorkbook.addWorksheet("Sheet1");
+    whitelistSheet.getColumn(1).numFmt = "@";
+    whitelistSheet.getCell("A1").value = "162203631";
+    whitelistSheet.getCell("A2").value = "147993477";
+    whitelistSheet.getCell("A3").value = "20062984";
+    const whitelist = await workbookBytes(whitelistWorkbook);
+    const sources = new Map([
+      ["om-coupon:file-coupon", coupon],
+      ["om-whitelist:file-whitelist", whitelist],
+    ]);
+    let draft: CouponThreeSourcePilotDraft | undefined;
+    const updateDraft = vi.fn(
+      async (
+        current: CouponThreeSourcePilotDraft,
+        updates: Partial<CouponThreeSourcePilotDraft>,
+        expectedRevision?: number,
+      ) => {
+        if (draft && expectedRevision !== undefined) {
+          if (draft.task.revision !== expectedRevision) {
+            throw new Error("stale revision");
+          }
+          draft = { ...draft, ...updates };
+          return draft;
+        }
+        draft = { ...current, ...updates };
+        return draft;
+      },
+    );
+    const dependencies: CouponThreeSourcePilotDependencies = {
+      downloadSource: async (source) => {
+        const bytes = sources.get(`${source.messageId}:${source.fileKey}`);
+        if (!bytes) throw new Error("unexpected source download");
+        return bytes;
+      },
+      renderScreenshots: vi.fn(),
+      uploadArtifact: vi.fn(async (input: { name: string }) => ({
+        fileToken: `drive-${input.name}`,
+      })),
+      grantArtifactPreview: vi.fn(),
+      folderToken: () => "fld-three-source",
+      loadTemplates,
+      createDraft: async (input) => {
+        draft = {
+          recordId: "rec-three-source",
+          pilotId: "CTS-pilot",
+          ownerOpenId: input.ownerOpenId,
+          task: input.task,
+          schemaVersion: "coupon-three-source-pilot-v2",
+          recognitions: {},
+          selections: {},
+          artifacts: [],
+          processedMessageIds: [],
+          validationIssues: [],
+        };
+        return draft;
+      },
+      getDraft: async () => {
+        if (!draft) throw new Error("missing draft");
+        return draft;
+      },
+      listActive: async () =>
+        draft && !["DraftOnlyConfirmed", "Canceled"].includes(draft.task.status)
+          ? [draft]
+          : [],
+      updateDraft,
+      handoff: vi.fn(async () => ({ recordId: "rec-oa-test-draft" }) as never),
+    };
+    const service = new CouponThreeSourcePilotService(dependencies);
+
+    let current = await service.startOrResume("ou_owner");
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-coupon",
+      fileKey: "file-coupon",
+      fileName: "严选配券表.xlsx",
+      bytes: coupon,
+    });
+    current = await service.receiveSource({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      messageId: "om-whitelist",
+      fileKey: "file-whitelist",
+      fileName: "商家ID_白名单.xlsx",
+      bytes: whitelist,
+    });
+    current = await service.confirmNoBlacklist({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "no-blacklist",
+    });
+    current = await service.updateSelections({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "set-dimension",
+      selections: {
+        activityPointPercent: 6,
+        ownerFieldValues: { overDeduction: "否" },
+        identifierDimensionConfirmations: {
+          whitelist: {
+            sourceSha256: createHash("sha256").update(whitelist).digest("hex"),
+            detectedDimension: "UNKNOWN",
+            confirmedAs: "MERCHANT_ID",
+          },
+        },
+      },
+    });
+    current = await service.confirmSourcesAndGenerate({
+      draft: current,
+      ownerOpenId: "ou_owner",
+      expectedRevision: current.task.revision,
+      operationId: "generate",
+    });
+
+    expect(current.task.status).toBe("AwaitingFinalConfirmation");
+    const whitelistArtifact = current.artifacts.find(
+      (artifact) => artifact.role === "productWhitelist",
+    );
+    if (!whitelistArtifact) throw new Error("missing whitelist artifact");
+    expect(whitelistArtifact.fileName.startsWith("商家ID白名单_")).toBe(true);
+    expect(whitelistArtifact.templateId).toBe(
+      "coupon-dynamic-merchant-whitelist-v1",
+    );
+
+    // The coupon-table “限品类型” column value is asserted end-to-end on the
+    // real workbook bytes in three-source/offline.test.ts.
   });
 });

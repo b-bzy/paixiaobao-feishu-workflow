@@ -88,7 +88,7 @@ export const regularFullReductionInputSchema = z
     platformBearingRatio: ratio,
     estimatedGmvYuan: positiveAmount,
     couponType: z.literal("东券").default("东券"),
-    productLimitType: z.literal("限SKU").default("限SKU"),
+    productLimitType: z.enum(["限SKU", "限商家ID"]).default("限SKU"),
     claimRiskControl: z.literal("0级以下用户可领").default("0级以下用户可领"),
     claimRule: withEnumNormalize(
       "claimRule",
@@ -175,17 +175,24 @@ export interface RegularFullReductionComputedValues {
 export function computeRegularFullReductionValues(
   input: RegularFullReductionInput,
 ): RegularFullReductionComputedValues {
-  const estimatedCostYuan =
+  // Feishu amount controls store cent precision; rounding at the value
+  // finalization point keeps the confirmed snapshot, the submitted form and
+  // the readback comparable instead of differing by float-multiplication
+  // tails (e.g. 450000.00000000006).
+  const estimatedCostYuan = roundYuanToCents(
     input.totalQuantity *
-    input.discountAmountYuan *
-    input.expectedUseRate *
-    input.platformBearingRatio;
+      input.discountAmountYuan *
+      input.expectedUseRate *
+      input.platformBearingRatio,
+  );
   if (!Number.isFinite(estimatedCostYuan) || estimatedCostYuan <= 0) {
     throw new Error(
       "预计费用必须为正数；请检查总申请数量、面额、使用率和平台承担比例",
     );
   }
-  const estimatedRoi = input.estimatedGmvYuan / estimatedCostYuan;
+  const estimatedRoi = roundYuanToCents(
+    input.estimatedGmvYuan / estimatedCostYuan,
+  );
   if (!Number.isFinite(estimatedRoi) || estimatedRoi <= 0) {
     throw new Error("预估 ROI 无法计算");
   }
@@ -195,6 +202,11 @@ export function computeRegularFullReductionValues(
     estimatedCostYuan,
     estimatedRoi,
   };
+}
+
+export function roundYuanToCents(value: number): number {
+  if (!Number.isFinite(value)) return value;
+  return Math.round(value * 100) / 100;
 }
 
 export function normalizeRegularRatio(value: string): number | undefined {

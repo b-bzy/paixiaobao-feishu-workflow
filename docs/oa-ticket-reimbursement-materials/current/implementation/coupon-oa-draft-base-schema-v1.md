@@ -1,7 +1,7 @@
 # 优惠券 OA 系统草稿 Base 表结构 v1
 
 > **状态**：当前受控实现配置；仅描述系统业务草稿，不代表飞书存在可 API 写入的客户端 OA 草稿。
-> **适用范围**：[MVP PRD v1.6](../product/coupon-oa-mvp-prd-v1.6.md) 所定义的系统草稿路径；原生 OA 创建仍受 [rollout Gate](../operations/coupon-oa-internal-pilot-rollout-plan-v1.md) 约束。
+> **适用范围**：[MVP PRD v1.7](../product/coupon-oa-mvp-prd-v1.7.md) 所定义的系统草稿路径；原生 OA 创建仍受 [rollout Gate](../operations/coupon-oa-internal-pilot-rollout-plan-v1.md) 约束。
 > **关联配置**：[`coupon-oa-draft-base-fields-v1.json`](coupon-oa-draft-base-fields-v1.json)。
 
 > 表名建议：`优惠券提单草稿`

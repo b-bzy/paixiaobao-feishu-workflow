@@ -169,7 +169,7 @@ const classifications: Array<{
     },
   },
   {
-    pattern: /包含多个 SKU|多个 SKU 或分隔符/iu,
+    pattern: /包含多个 SKU|多个 SKU 或分隔符|包含多个名单 ID 或分隔符/iu,
     result: {
       stage: "workbook",
       code: "SKU_CELL_MULTIPLE_VALUES",
@@ -178,7 +178,8 @@ const classifications: Array<{
     },
   },
   {
-    pattern: /不能使用公式作为 SKU|不能以公式前缀开头/iu,
+    pattern:
+      /不能使用公式作为 SKU|不能使用公式作为名单 ID|不能以公式前缀开头/iu,
     result: {
       stage: "workbook",
       code: "SKU_FORMULA_UNSAFE",

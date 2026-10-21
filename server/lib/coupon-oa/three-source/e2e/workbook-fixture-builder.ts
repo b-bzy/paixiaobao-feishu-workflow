@@ -340,14 +340,29 @@ function addListSheets(
           ? sheetIndex === 0
             ? "满999减60"
             : "满2000减20"
-          : base === "arbitrary-sheet-names" || base === "dynamic-list-sheets"
-            ? `业务券档-${sheetIndex + 1}`
-            : count > 1
-              ? `满${(sheetIndex + 1) * 100}减${sheetIndex + 1}`
-              : role === "blacklist"
-                ? "商品黑名单"
-                : "商品白名单";
+          : base === "merchant-id-headerless"
+            ? "商家名单"
+            : base === "arbitrary-sheet-names" || base === "dynamic-list-sheets"
+              ? `业务券档-${sheetIndex + 1}`
+              : count > 1
+                ? `满${(sheetIndex + 1) * 100}减${sheetIndex + 1}`
+                : role === "blacklist"
+                  ? "商品黑名单"
+                  : "商品白名单";
     const sheet = workbook.addWorksheet(name);
+    if (base === "merchant-id-headerless") {
+      // A headerless single numeric column, mirroring real
+      // 「商家ID_*.xlsx」 uploads (ADR-0015).
+      sheet.getColumn(1).numFmt = "@";
+      for (const [index, id] of [
+        "162203631",
+        "147993477",
+        "20062984",
+      ].entries()) {
+        sheet.getRow(index + 1).getCell(1).value = id;
+      }
+      continue;
+    }
     const column = skuColumn(base, variant);
     sheet.getRow(1).getCell(column).value = "sku";
     sheet.getRow(1).getCell(column + 1).value = "券档";

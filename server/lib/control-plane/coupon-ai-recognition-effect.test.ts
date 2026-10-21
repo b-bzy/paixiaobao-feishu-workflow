@@ -23,6 +23,8 @@ async function sourceBytes(dateWindow?: string) {
   sheet.getCell("D1").value = "渠道";
   sheet.getCell("D2").value = "京东商城";
   sheet.getCell("D3").value = "拍拍二手";
+  sheet.getCell("E1").value = "优惠券名称";
+  sheet.getCell("E2").value = "平板优惠券";
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }
 
@@ -166,11 +168,15 @@ describe("coupon AI recognition effect", () => {
       async (facts) => ({
         ok: true as const,
         proposal: {
-          activityName: "满100减20优惠券申请",
+          nameComponents: { category: "平板" },
           activityBackground:
-            "本期申请满100减20优惠券，本期配置一档优惠券：满100减20。",
+            "本期申请9.30-10.10平板优惠券，本期配置一档优惠券：满100减20。",
           coveredTierIds: facts.tiers.map((tier) => tier.id),
-          usedFactIds: facts.tiers.map((tier) => tier.id),
+          usedFactIds: [
+            ...facts.tiers.map((tier) => tier.id),
+            "period",
+            "nameHints",
+          ],
         },
         requestSha256: "c".repeat(64),
         responseSha256: "d".repeat(64),
@@ -197,6 +203,7 @@ describe("coupon AI recognition effect", () => {
       expect.objectContaining({
         period: "2026-09-30至2026-10-10",
         productLabel: "京东商城、拍拍二手",
+        nameHints: expect.arrayContaining(["coupon", "配券", "平板优惠券"]),
       }),
     );
     expect(repo.saveTerminalResult).toHaveBeenCalledWith(
@@ -204,7 +211,10 @@ describe("coupon AI recognition effect", () => {
         status: "succeeded",
         result: expect.objectContaining({
           activityCopyCandidates: [
-            expect.objectContaining({ key: "activityName" }),
+            expect.objectContaining({
+              key: "activityName",
+              value: "9.30-10.10平板优惠券申请",
+            }),
             expect.objectContaining({ key: "activityBackground" }),
           ],
         }),

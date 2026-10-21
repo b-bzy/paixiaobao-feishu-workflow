@@ -11,7 +11,10 @@ import {
   encodeCouponOaForm,
   parseApprovalFormValues,
 } from "../../feishu/coupon-oa/approval-schema";
-import { parseTieredIdentifierList } from "./lists";
+import {
+  parseMultiSheetTieredIdentifierList,
+  parseTieredIdentifierList,
+} from "./lists";
 import { runOfflineThreeSourceWorkflow } from "./offline";
 import {
   extractRegularFullReductionInput,
@@ -119,6 +122,19 @@ async function listSource(input: {
   });
   return {
     fileName: `任意格式-合成${input.role}.xlsx`,
+    bytes: await workbookBytes(workbook),
+  };
+}
+
+async function headerlessMerchantIdSource(): Promise<OfflineSourceFile> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Sheet1");
+  sheet.getColumn(1).numFmt = "@";
+  sheet.getCell("A1").value = "162203631";
+  sheet.getCell("A2").value = "147993477";
+  sheet.getCell("A3").value = "20062984";
+  return {
+    fileName: "商家ID_白名单.xlsx",
     bytes: await workbookBytes(workbook),
   };
 }
@@ -489,7 +505,7 @@ describe("three-source coupon OA offline workflow", () => {
     expect(parsed.issues.join("；")).toContain("公式前缀");
     expect(parsed.issues.join("；")).not.toContain("与前序 SKU 重复");
     expect(parsed.issues.join("；")).toContain("15 位有效数字");
-    expect(parsed.issues.join("；")).toContain("包含多个 SKU");
+    expect(parsed.issues.join("；")).toContain("包含多个名单 ID");
     expect(parsed.issues.join("；")).not.toContain("为空");
   });
 
@@ -597,6 +613,152 @@ describe("three-source coupon OA offline workflow", () => {
       issues: [],
       needsReview: [],
     });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+  it("parses a headerless merchant-id list only with an owner confirmation", async () => {
+    const source = await headerlessMerchantIdSource();
+    const recognition = await inspectThreeSourceWorkbook(source);
+
+    const unconfirmed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+    });
+    expect(unconfirmed.dimension).toBe("UNKNOWN");
+    expect(unconfirmed.entries).toEqual([]);
+    expect(unconfirmed.issues).toContain(
+      "当前只支持 SKU 或商家 ID 名单，请先确认标识类型",
+    );
+
+    const confirmed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "UNKNOWN",
+        confirmedAs: "MERCHANT_ID",
+      },
+    });
+    expect(confirmed.issues).toEqual([]);
+    expect(confirmed.dimension).toBe("MERCHANT_ID");
+    expect(confirmed.entries.map((entry) => entry.id)).toEqual([
+      "162203631",
+      "147993477",
+      "20062984",
+    ]);
+
+    const overridden = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "UNKNOWN",
+        confirmedAs: "SKU",
+      },
+    });
+    expect(overridden.dimension).toBe("SKU");
+    expect(overridden.entries.map((entry) => entry.id)).toEqual([
+      "162203631",
+      "147993477",
+      "20062984",
+    ]);
+  });
+
+  it("still rejects formula, separator and duplicate merchant ids cell by cell", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    sheet.getColumn(1).numFmt = "@";
+    sheet.getCell("A1").value = "162203631";
+    sheet.getCell("A2").value = { formula: '"147993477"', result: "147993477" };
+    sheet.getCell("A3").value = "20062984,20062985";
+    sheet.getCell("A4").value = "162203631";
+    const source = {
+      fileName: "商家ID_白名单.xlsx",
+      bytes: await workbookBytes(workbook),
+    };
+    const recognition = await inspectThreeSourceWorkbook(source);
+    const parsed = await parseMultiSheetTieredIdentifierList({
+      recognition,
+      role: "whitelist",
+      // The deterministic headerless candidate requires every cell to be
+      // identifier-like, so mixed-invalid sources ride the AI region path.
+      aiSkuRegions: [
+        {
+          id: "region-1",
+          role: "whitelist",
+          dimension: "MERCHANT_ID",
+          headerCell: "A1",
+          confidence: 0.9,
+          reason: "文件名标注商家ID",
+          evidence: {
+            sourceHash: recognition.sourceHash,
+            sheetName: "Sheet1",
+            cells: ["A1", "A4"],
+            region: { startCell: "A1", endCell: "A4" },
+          },
+        },
+      ],
+      identifierDimensionConfirmation: {
+        sourceSha256: recognition.sourceHash,
+        detectedDimension: "UNKNOWN",
+        confirmedAs: "MERCHANT_ID",
+      },
+    });
+    expect(parsed.issues).toEqual([
+      "Sheet1!A2 不能使用公式作为名单 ID",
+      "Sheet1!A3 包含多个名单 ID 或分隔符",
+    ]);
+    expect(parsed.entries.map((entry) => entry.id)).toEqual(["162203631"]);
+  });
+
+  it("produces faithful merchant-id artifacts and 限商家ID coupon rows", async () => {
+    const workflowTemplates = await templates();
+    const merchantWhitelist = await headerlessMerchantIdSource();
+    const result = await runOfflineThreeSourceWorkflow({
+      ownerId: "offline-owner-001",
+      revision: 1,
+      couponTable: await couponSource({ businessMode: "pop" }),
+      whitelist: merchantWhitelist,
+      noBlacklistConfirmed: true,
+      listMode: "dynamic-multi-sheet",
+      whitelistDimensionConfirmation: {
+        sourceSha256: createHash("sha256")
+          .update(merchantWhitelist.bytes)
+          .digest("hex"),
+        detectedDimension: "UNKNOWN",
+        confirmedAs: "MERCHANT_ID",
+      },
+      screenshotRenderer,
+      templates: workflowTemplates,
+      activityPointPercent: 6,
+    });
+
+    expect(result.package.whitelistDimension).toBe("MERCHANT_ID");
+    expect(result.package.coupon.input.productLimitType).toBe("限商家ID");
+    const whitelistArtifact = result.artifacts.find(
+      (artifact) => artifact.role === "productWhitelist",
+    );
+    if (!whitelistArtifact) throw new Error("missing whitelist artifact");
+    expect(whitelistArtifact.fileName.startsWith("商家ID白名单_")).toBe(true);
+    expect(whitelistArtifact.template).toEqual({
+      id: "coupon-dynamic-merchant-whitelist-v1",
+      version: "v1",
+    });
+    await verifyDynamicSkuListWorkbook({
+      bytes: whitelistArtifact.bytes,
+      expectedTiers: result.package.whitelistByTier,
+      dimension: "MERCHANT_ID",
+    });
+
+    const couponWorkbook = new ExcelJS.Workbook();
+    await couponWorkbook.xlsx.load(
+      Buffer.from(
+        result.artifacts.find((artifact) => artifact.role === "couponTable")
+          ?.bytes ?? [],
+      ) as never,
+    );
+    const couponSheet = couponWorkbook.getWorksheet("满减券");
+    if (!couponSheet) throw new Error("missing coupon sheet");
+    expect(couponSheet.getCell("Y2").text).toBe("限商家ID");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -83,9 +83,8 @@ export interface CouponThreeSourcePilotSelections {
       "whitelist" | "blacklist",
       {
         sourceSha256: string;
-        detectedDimension: "SPU" | "MERCHANT_ID" | "UNKNOWN";
-        confirmedAs: "SKU";
-        reason: string;
+        detectedDimension: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
+        confirmedAs: "SKU" | "MERCHANT_ID";
       }
     >
   >;

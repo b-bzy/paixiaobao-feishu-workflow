@@ -347,8 +347,59 @@ describe("coupon OA approval schema", () => {
       ],
     );
 
+    expect(result.issues).toEqual(["活动名称：OA 表单中该控件重复出现"]);
+  });
+
+  it("treats float-tail and cent-rounding amount differences as equal", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        { id: "cost", type: "amount", value: 450000.00000000006 },
+        { id: "gmv", type: "amount", value: "1904761.8999999999" },
+      ],
+      [
+        { id: "cost", type: "amount", value: 450000 },
+        { id: "gmv", type: "amount", value: 1904761.9 },
+      ],
+    );
+
+    expect(result.issues).toEqual([]);
+  });
+
+  it("reports genuine amount differences with control names and both values", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [{ id: "cost", type: "amount", value: 26137.9 }],
+      [{ id: "cost", type: "amount", value: 26100 }],
+    );
+
     expect(result.issues).toEqual([
-      "activityName: duplicate from created approval",
+      "预估费用：提交 26,137.9 / OA 实际 26,100，请核对",
     ]);
+  });
+
+  it("accepts nested value.currency readback form", () => {
+    const schema = bindCouponApprovalSchema(definition);
+    const result = diffSubmittedApprovalForm(
+      schema,
+      [
+        {
+          id: "cost",
+          type: "amount",
+          value: { amount: 100, currency: "CNY" },
+        },
+      ],
+      [
+        {
+          id: "cost",
+          type: "amount",
+          value: { amount: 100, currency: "CNY" },
+        },
+      ],
+    );
+
+    expect(result.issues).toEqual([]);
   });
 });

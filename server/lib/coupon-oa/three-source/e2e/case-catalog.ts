@@ -310,6 +310,11 @@ const skuCases: CatalogSeed[] = [
     recipe: "dynamic-list-sheets",
     variants: 4,
   },
+  {
+    id: "S17",
+    title: "无表头商家ID名单（owner 确认商家 ID）",
+    recipe: "merchant-id-headerless",
+  },
 ];
 
 const businessCases: CatalogSeed[] = [

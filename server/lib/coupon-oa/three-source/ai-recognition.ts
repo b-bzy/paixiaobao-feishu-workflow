@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { z } from "zod";
-import { isPlaceholderActivityName } from "./activity-copy";
+import {
+  isPlaceholderActivityName,
+  oaActivityNameStructureIssue,
+} from "./activity-copy";
 import { canonicalCouponBusinessDate } from "./business-date";
 import { CouponThreeSourceError } from "./errors";
 import type {
@@ -23,7 +26,7 @@ import type {
 } from "./types";
 
 export const couponThreeSourceAiPromptVersion =
-  "coupon-three-source-p0-ai-primary-v6";
+  "coupon-three-source-p0-ai-primary-v7";
 
 export interface SerializedWorkbookCell {
   address: string;
@@ -863,12 +866,12 @@ export function validateCouponThreeSourceAiProposal(input: {
       issues.push("AI 活动名称仍是无业务含义的占位文字");
       continue;
     }
-    if (
-      candidate.key === "activityName" &&
-      !candidate.value.endsWith("优惠券申请")
-    ) {
-      issues.push("AI 活动名称不符合优惠券申请文案结构");
-      continue;
+    if (candidate.key === "activityName") {
+      const structureIssue = oaActivityNameStructureIssue(candidate.value);
+      if (structureIssue) {
+        issues.push(`AI ${structureIssue}`);
+        continue;
+      }
     }
     if (candidate.key === "activityBackground") {
       const requiredTierSummary = `本期配置${chineseCount(couponCandidates.length)}档优惠券`;
@@ -1021,9 +1024,9 @@ export function buildCouponThreeSourceAiRequest(
       "同一字段在多行存在不同真实值时不得只返回第一行；尤其 channels 必须用字符串数组返回全部去重渠道，或为每个不同渠道分别返回有证据的候选。",
       "每个疑似优惠券数据行都必须返回 couponCandidates；当前未开放的折扣券、兑换券、直减券、立减券或 PLUS 券也必须返回 couponType=unsupported，禁止只写入 warnings 后省略结构化候选。",
       "名单必须返回标识数据区域和所属券档，而不只返回表头；SKU、SPU、MERCHANT_ID 是互相独立的标识维度，不得混淆。",
-      "材料角色（whitelist/blacklist）与标识维度（SKU/SPU/MERCHANT_ID/UNKNOWN）是两个独立判断，不得因文件名含‘商家ID’就把名单角色判断为黑名单或把数字直接判断为 MERCHANT_ID。",
-      "文件名只可作为低权重角色线索：含‘白名单’时 role 可优先为 whitelist，含‘黑名单’时 role 可优先为 blacklist；工作簿内容证据优先。",
-      "无表头单列数字名单无法仅凭数值唯一判断 SKU、SPU 或 MERCHANT_ID，dimension 必须返回 UNKNOWN；headerCell 使用该列第一个真实数据单元格作为区域锚点，startCell 与 headerCell 相同。",
+      "材料角色（whitelist/blacklist）与标识维度是两个独立判断，不得混淆；不得因文件名含‘商家ID’就把名单角色判断为黑名单。",
+      "文件名只可作为低权重角色与维度线索：含‘白名单’时 role 可优先为 whitelist，含‘黑名单’时 role 可优先为 blacklist，含‘商家ID’提示维度为 MERCHANT_ID；工作簿内容证据优先，文件名不得单独决定判定。",
+      "无表头单列数字名单必须做意图判定，dimension 只能返回 SKU 或 MERCHANT_ID，不得返回 SPU 或 UNKNOWN；reason 必须引用可核验证据（数值位数与格式模式、Sheet 名、文件名标注、活动上下文）。headerCell 使用该列第一个真实数据单元格作为区域锚点，startCell 与 headerCell 相同。",
       "listCandidates 的每项必须逐项使用 outputContract.listCandidates 中示例的结构；skuRegionCandidates 必须使用独立的 headerCell、startCell、endCell，禁止返回 region、columns、headerRow 或 dataStartRow 等替代结构。",
       "skuRegionCandidates.endCell 必须是该标识列最后一个真实非空单元格，不能直接使用工作表 rowCount；其他列更长时也不得扩大标识区域。",
       "当前生成只开放 regular_full_reduction；其他模板可以识别，但必须标记 supported=false。",

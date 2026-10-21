@@ -3,7 +3,7 @@
 > **状态**：目标实现与上线前置条件；不是已完成能力声明。
 > **日期**：2026-10-08
 > **替代关系**：取代 v1.3 中“首期仅上传测算图片、券表/白名单由用户手工补传”的过期附件描述。
-> **关联**：[ADR-0004](../../../adr/0004-bot-confirmed-submit-for-coupon-oa.md) · [ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) · [MVP PRD v1.6](../product/coupon-oa-mvp-prd-v1.6.md)
+> **关联**：[ADR-0004](../../../adr/0004-bot-confirmed-submit-for-coupon-oa.md) · [ADR-0006](../../../adr/0006-use-managed-long-connection-bridge-for-internal-coupon-pilot.md) · [MVP PRD v1.7](../product/coupon-oa-mvp-prd-v1.7.md)
 
 ## 1. 目标
 

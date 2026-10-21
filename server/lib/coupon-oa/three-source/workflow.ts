@@ -51,9 +51,16 @@ function assertListIsUsable(
   if (!list.entries.length) {
     throw new Error(`${label}不能是空名单`);
   }
-  if (list.dimension !== "SKU") {
-    throw new Error(`${label}不是 SKU 维度，当前标准模板不支持`);
+  if (list.dimension !== "SKU" && list.dimension !== "MERCHANT_ID") {
+    throw new Error(`${label}标识类型未确认，当前只支持 SKU 或商家 ID 名单`);
   }
+}
+
+function listDimensionOf(
+  list: ParsedTieredIdentifierList,
+): "SKU" | "MERCHANT_ID" {
+  assertListIsUsable(list, list.role === "whitelist" ? "白名单" : "黑名单");
+  return list.dimension as "SKU" | "MERCHANT_ID";
 }
 
 function confirmationSnapshot(input: {
@@ -219,8 +226,12 @@ export function createCanonicalPackage(
     coupon: confirmation.coupon,
     computed,
     whitelistByTier: groupIdentifiersByTier(resolved.whitelist),
+    whitelistDimension: listDimensionOf(resolved.whitelist),
     blacklistByTier: resolved.blacklist
       ? groupIdentifiersByTier(resolved.blacklist)
+      : undefined,
+    blacklistDimension: resolved.blacklist
+      ? listDimensionOf(resolved.blacklist)
       : undefined,
     blacklistStatus: confirmation.blacklistStatus,
     overlap: resolved.overlap,
@@ -283,8 +294,12 @@ export function createCouponSetCanonicalPackage(input: {
     couponSet: input.couponSet,
     computed,
     whitelistByTier: groupIdentifiersByTier(resolved.whitelist),
+    whitelistDimension: listDimensionOf(resolved.whitelist),
     blacklistByTier: resolved.blacklist
       ? groupIdentifiersByTier(resolved.blacklist)
+      : undefined,
+    blacklistDimension: resolved.blacklist
+      ? listDimensionOf(resolved.blacklist)
       : undefined,
     blacklistStatus: input.blacklistStatus,
     overlap: { ...overlap, decision: input.overlapDecision },
@@ -315,6 +330,7 @@ export async function generateOfflineArtifacts(input: {
     activityName: input.package.coupon.input.activityName,
     revision: input.package.revision,
     role: "whitelist",
+    dimension: input.package.whitelistDimension,
   });
   const artifacts: OfflineArtifact[] = [
     {
@@ -331,7 +347,10 @@ export async function generateOfflineArtifacts(input: {
       bytes: whitelistWorkbook.bytes,
       sha256: whitelistWorkbook.sha256,
       rowCount: whitelistWorkbook.rowCount,
-      template: { id: "coupon-dynamic-sku-whitelist-v1", version: "v1" },
+      template:
+        input.package.whitelistDimension === "MERCHANT_ID"
+          ? { id: "coupon-dynamic-merchant-whitelist-v1", version: "v1" }
+          : { id: "coupon-dynamic-sku-whitelist-v1", version: "v1" },
     },
   ];
   if (input.package.blacklistByTier) {
@@ -340,6 +359,7 @@ export async function generateOfflineArtifacts(input: {
       activityName: input.package.coupon.input.activityName,
       revision: input.package.revision,
       role: "blacklist",
+      dimension: input.package.blacklistDimension,
     });
     artifacts.push({
       role: "productBlacklist",
@@ -347,7 +367,10 @@ export async function generateOfflineArtifacts(input: {
       bytes: blacklistWorkbook.bytes,
       sha256: blacklistWorkbook.sha256,
       rowCount: blacklistWorkbook.rowCount,
-      template: { id: "coupon-dynamic-sku-blacklist-v1", version: "v1" },
+      template:
+        input.package.blacklistDimension === "MERCHANT_ID"
+          ? { id: "coupon-dynamic-merchant-blacklist-v1", version: "v1" }
+          : { id: "coupon-dynamic-sku-blacklist-v1", version: "v1" },
     });
   }
   return artifacts;
@@ -467,7 +490,9 @@ export function createSingleCouponCanonicalPackage(input: {
     whitelist,
     blacklist,
     whitelistByTier: compatibilityTiers,
+    whitelistDimension: "SKU",
     blacklistByTier: compatibilityBlacklist,
+    blacklistDimension: blacklist ? "SKU" : undefined,
     blacklistStatus: input.blacklistStatus,
     overlap: { ...overlap, decision: input.overlapDecision },
   };

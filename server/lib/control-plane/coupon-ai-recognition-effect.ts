@@ -5,6 +5,7 @@ import {
 } from "../coupon-oa/three-source/activity-copy";
 import {
   couponThreeSourceAiPromptVersion,
+  type SerializedWorkbookForAi,
   serializeWorkbookForAi,
   validateCouponThreeSourceAiProposal,
 } from "../coupon-oa/three-source/ai-recognition";
@@ -95,8 +96,52 @@ function parseTier(display: string):
   return { thresholdYuan, discountAmountYuan };
 }
 
+const NAME_HINT_HEADER_PATTERN = /(优惠券名称|限品类型|优惠券类型)/u;
+
+/**
+ * Deterministically collects the grounded strings the activity-name
+ * components (品类 / ID类型) may be inferred from: the source file name, sheet
+ * names, and values under coupon-identity columns. Channels are deliberately
+ * excluded so they cannot leak into the OA activity name.
+ */
+function activityNameHints(workbook: SerializedWorkbookForAi): string[] {
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const value = raw.trim().slice(0, 80);
+    if (value && !seen.has(value)) seen.add(value);
+  };
+  push(workbook.fileName.replace(/\.(xlsx|xlsm|xls|csv)$/iu, ""));
+  for (const sheet of workbook.sheets) {
+    push(sheet.name);
+    const headerRow = sheet.rows[0];
+    if (!headerRow) continue;
+    const columns = headerRow.cells
+      .filter(
+        (cell) =>
+          typeof cell.value === "string" &&
+          NAME_HINT_HEADER_PATTERN.test(cell.value),
+      )
+      .map((cell) => cell.address.replace(/\d+$/u, ""));
+    if (!columns.length) continue;
+    for (const row of sheet.rows.slice(0, 12)) {
+      for (const cell of row.cells) {
+        if (!columns.includes(cell.address.replace(/\d+$/u, ""))) continue;
+        const value =
+          typeof cell.value === "string"
+            ? cell.value
+            : typeof cell.result === "string"
+              ? cell.result
+              : undefined;
+        if (value) push(value);
+      }
+    }
+  }
+  return [...seen].slice(0, 40);
+}
+
 function activityCopyFacts(input: {
   result: ReturnType<typeof validateCouponThreeSourceAiProposal>;
+  workbook: SerializedWorkbookForAi;
   campaignTheme?: string;
 }) {
   const seenTiers = new Set<string>();
@@ -131,6 +176,7 @@ function activityCopyFacts(input: {
     period: start && end ? `${start}至${end}` : (start ?? end),
     businessMode,
     productLabel: channels.length ? channels.join("、") : undefined,
+    nameHints: activityNameHints(input.workbook),
     campaignTheme:
       input.result.campaignThemeCandidates?.[0]?.value ?? input.campaignTheme,
     tiers,
@@ -274,6 +320,7 @@ export function createCouponAiRecognitionEffectHandler(input: {
         if (input.activityCopyGateway && run.sourceSlot === "couponTable") {
           const facts = activityCopyFacts({
             result,
+            workbook,
             campaignTheme: calendar?.ok
               ? calendar.candidates[0]?.name
               : undefined,
@@ -293,6 +340,7 @@ export function createCouponAiRecognitionEffectHandler(input: {
                 facts,
                 proposal: copyResponse.proposal,
               });
+              result.issues.push(...copy.warnings);
               if (
                 copy.status === "valid" &&
                 copy.activityName &&

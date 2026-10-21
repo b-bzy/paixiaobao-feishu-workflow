@@ -16,6 +16,15 @@ export {
   verifyDynamicSkuListWorkbook,
 } from "./dynamic-sku-list";
 
+/**
+ * The P1-1 pilot schema keeps `productLimitType` pinned to “限SKU”; the
+ * three-source route may carry the owner-confirmed “限商家ID” (ADR-0015), so
+ * the shared coupon-table writer accepts both without touching P1-1.
+ */
+export type CouponPilotRowInput = Omit<CouponPilotInput, "productLimitType"> & {
+  productLimitType: "限SKU" | "限商家ID";
+};
+
 const xlsxMimeType =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -103,7 +112,7 @@ function setFormula(
 function setCouponRow(
   worksheet: ExcelJS.Worksheet,
   rowNumber: number,
-  input: CouponPilotInput,
+  input: CouponPilotRowInput,
   computed: CouponPilotComputedValues,
   channel: CouponPilotChannel,
 ): void {
@@ -170,7 +179,7 @@ function removeInstructionRows(worksheet: ExcelJS.Worksheet): void {
 
 export async function generateRegularFullReductionWorkbook(input: {
   templateBytes: Uint8Array;
-  data: CouponPilotInput;
+  data: CouponPilotRowInput;
   computed: CouponPilotComputedValues;
   revision: number;
 }): Promise<GeneratedWorkbook> {
@@ -184,7 +193,7 @@ export async function generateRegularFullReductionWorkbook(input: {
 export async function generateRegularFullReductionWorkbookSet(input: {
   templateBytes: Uint8Array;
   tiers: Array<{
-    data: CouponPilotInput;
+    data: CouponPilotRowInput;
     computed: CouponPilotComputedValues;
   }>;
   revision: number;

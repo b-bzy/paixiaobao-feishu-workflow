@@ -1,10 +1,18 @@
 # 三源优惠券：商家 ID 名单封闭集判定与忠实产物 · 设计与审计 v1
 
-- **状态**：待评审（需求方已确认识别思路；按提升规则，评审通过前不改变 `current/` 任何行为）
-- **日期**：2026-10-16
+- **状态**：已评审通过（需求方 2026-10-16 确认识别思路；2026-10-21 需求方反馈 bug-fix-3/4 后按下方修订记录修正 D2 并批准实施，ADR 见 [ADR-0015](../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md)）
+- **日期**：2026-10-16（v1）/ 2026-10-21（修订）
 - **决策 Owner**：优惠券流程 Owner（需求方）、工程 Owner
-- **关联**：[ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) · [ADR-0012](../../../adr/0012-make-ai-primary-for-p0-three-source-recognition.md) · [MVP PRD v1.6](../../current/product/coupon-oa-mvp-prd-v1.6.md) · [本地长连接 POC runbook v1](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)
+- **关联**：[ADR-0011](../../../adr/0011-use-deepseek-only-for-p0-candidate-recognition.md) · [ADR-0012](../../../adr/0012-make-ai-primary-for-p0-three-source-recognition.md) · [ADR-0015](../../../adr/0015-merchant-id-whitelist-closed-set-dimension-recognition.md) · [MVP PRD v1.7](../../current/product/coupon-oa-mvp-prd-v1.7.md) · [本地长连接 POC runbook v1](../../current/operations/coupon-three-source-local-long-connection-poc-runbook-v1.md)
 - **实施计划**：[2026-10-16-coupon-three-source-merchant-id-whitelist.md](../../../../docs/superpowers/plans/2026-10-16-coupon-three-source-merchant-id-whitelist.md)
+
+## 修订记录
+
+- **2026-10-21（需求方反馈驱动）**：
+  1. **D2 修正（= bug-fix-4）**：删除「并填写 ≥2 字依据」要求及配套的 `*_dimensionReason` 必填输入框与三层校验——封闭枚举二选一本身即人的显式决定，`detectedDimension + confirmedAs + sourceSha256` 已构成完整审计链；真实使用中自由文本只产出「文件名写的」这类无信息量字符串。全文 D2、§3.2 表单键、实施计划 Task 3/4 中涉及 reason 的条款随之作废。
+  2. **ADR 编号顺延**：审计项 A2 原写「新增 ADR-0014」，因编号已被 open access 方案占用（`0014-open-access-usage-authorization-via-feishu-availability-scope.md`），实际为 **ADR-0015**。
+  3. **PRD 版本顺延**：v1.6 已被缺口提醒方案占用，本方案产品基线为 **PRD v1.7**。
+  4. **部署批次**：与 2026-10-21 bug-fix-1/2/5 同批次部署，rule v2 升版只作废在途草稿一次。
 
 ## 1. 背景与问题
 
@@ -26,7 +34,7 @@
 | # | 决定 | 内容 |
 | --- | --- | --- |
 | D1 | 封闭集意图判定 | 无表头单列数字名单由 DeepSeek 做意图判定，判定集封闭为 `SKU` / `MERCHANT_ID`，不存在超出该范围的输出；证据为数值位数与格式模式、Sheet 名、文件名标注、活动上下文，文件名仅作低权重线索。 |
-| D2 | owner 确认门 | AI 判定只是**系统推测候选**；无表头来源的名单无论 AI 判定结果如何，一律由 owner 在第二轮卡从「商家 ID / SKU」中显式确认并填写 ≥2 字依据。AI 不决定字段事实。 |
+| D2 | owner 确认门 | AI 判定只是**系统推测候选**；无表头来源的名单无论 AI 判定结果如何，一律由 owner 在第二轮卡从「商家 ID / SKU」中显式确认（2026-10-21 修订：不再要求填写 ≥2 字依据）。AI 不决定字段事实。 |
 | D3 | 限品类型取值 | 名单确认为商家 ID 时，标准配券表「限品类型」列写「限商家ID」（来自 owner 确认记录，非 AI 直写）。官方枚举未确认的风险见 §5-R3。 |
 | D4 | 忠实产物 | 商家 ID 名单生成维度化冻结产物：表头 `商家id`、文件名前缀「商家ID白名单/黑名单」、独立模板 id、hash + 回读校验；系统不改写任何单元格值；源文件仍绝不进入 OA 附件。 |
 
@@ -46,11 +54,11 @@
 
 - 触发条件从「确定性维度 ≠ SKU」扩展为：**无表头来源（确定性候选 `header === ""`）
   或任一识别维度 ≠ SKU**——即使 AI 判 `SKU` 也必须人工确认（审计改进 A4）；
-- 卡片文案改为「系统判定 + 双选项 + 依据」：
+- 卡片文案改为「系统判定 + 双选项」（2026-10-21 修订：无确认依据输入框）：
   「系统判定该名单为【商家 ID】（依据：文件名标注、数值位数…）。请确认实际类型：
-  ○ 商家 ID ○ SKU ＋ 确认依据（至少 2 个字）」；
+  ○ 商家 ID ○ SKU」；
 - 表单键：`whitelist_identifierDimension` / `blacklist_identifierDimension`
-  （取值 `SKU` | `MERCHANT_ID`），理由键沿用 `*_dimensionReason`；
+  （取值 `SKU` | `MERCHANT_ID`）；
   旧键 `*_confirmAsSku` 移除（rule version 升版后旧草稿 fail closed，见 3.5）。
 
 ### 3.3 降级链

@@ -26,7 +26,7 @@ describe("DeepSeek activity-copy gateway", () => {
               {
                 message: {
                   content: JSON.stringify({
-                    activityName: "满100减20优惠券申请",
+                    nameComponents: { category: "平板", idType: "SKU" },
                     activityBackground:
                       "本期申请满100减20优惠券，本期配置一档优惠券：满100减20。",
                     coveredTierIds: ["tier-1"],

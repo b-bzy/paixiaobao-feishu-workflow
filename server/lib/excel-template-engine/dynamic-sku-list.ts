@@ -5,6 +5,21 @@ const xlsxMimeType =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const maximumRowsPerSheet = 3_000;
 
+export type DynamicListDimension = "SKU" | "MERCHANT_ID";
+
+const listHeaderByDimension: Record<DynamicListDimension, string> = {
+  SKU: "sku",
+  MERCHANT_ID: "商家id",
+};
+
+const listPrefixByRoleAndDimension: Record<
+  "whitelist" | "blacklist",
+  Record<DynamicListDimension, string>
+> = {
+  whitelist: { SKU: "商品明细白名单", MERCHANT_ID: "商家ID白名单" },
+  blacklist: { SKU: "商品明细黑名单", MERCHANT_ID: "商家ID黑名单" },
+};
+
 export interface DynamicSkuListWorkbook {
   bytes: Uint8Array;
   mimeType: typeof xlsxMimeType;
@@ -45,9 +60,10 @@ function assertRows(tiers: Record<string, readonly string[]>): Array<{
     const rows = values.map((value) => {
       const id = value.trim();
       if (!id || /^[=+@-]/u.test(id) || /[\s,，、;；\n]/u.test(id)) {
-        throw new Error(`${name} 的 SKU 必须是一格一个的安全文本`);
+        throw new Error(`${name} 的名单 ID 必须是一格一个的安全文本`);
       }
-      if (idsInSheet.has(id)) throw new Error(`${name} 内存在重复 SKU：${id}`);
+      if (idsInSheet.has(id))
+        throw new Error(`${name} 内存在重复名单 ID：${id}`);
       idsInSheet.add(id);
       return id;
     });
@@ -60,7 +76,10 @@ function assertRows(tiers: Record<string, readonly string[]>): Array<{
 export async function verifyDynamicSkuListWorkbook(input: {
   bytes: Uint8Array;
   expectedTiers: Record<string, readonly string[]>;
+  dimension?: DynamicListDimension;
 }): Promise<void> {
+  const dimension = input.dimension ?? "SKU";
+  const header = listHeaderByDimension[dimension];
   const expected = assertRows(input.expectedTiers);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(Buffer.from(input.bytes) as never);
@@ -72,27 +91,27 @@ export async function verifyDynamicSkuListWorkbook(input: {
   for (const expectedSheet of expected) {
     const sheet = workbook.getWorksheet(expectedSheet.name);
     if (!sheet) throw new Error(`生成的名单缺少 Sheet：${expectedSheet.name}`);
-    if (sheet.getCell("A1").text !== "sku") {
-      throw new Error(`${expectedSheet.name} 的 A1 必须为 sku`);
+    if (sheet.getCell("A1").text !== header) {
+      throw new Error(`${expectedSheet.name} 的 A1 必须为 ${header}`);
     }
     const actual: string[] = [];
     for (let row = 2; row <= sheet.rowCount; row += 1) {
       const cell = sheet.getRow(row).getCell(1);
       if (!cell.text.trim()) continue;
       if (typeof cell.value !== "string" || cell.numFmt !== "@") {
-        throw new Error(`${expectedSheet.name}!A${row} 必须是文本 SKU`);
+        throw new Error(`${expectedSheet.name}!A${row} 必须是文本名单 ID`);
       }
       actual.push(cell.value);
       for (let column = 2; column <= sheet.columnCount; column += 1) {
         if (sheet.getRow(row).getCell(column).text.trim()) {
-          throw new Error(`${expectedSheet.name} 只能包含 sku 一列`);
+          throw new Error(`${expectedSheet.name} 只能包含 ${header} 一列`);
         }
       }
     }
     expectEqual(
       actual,
       expectedSheet.ids,
-      `${expectedSheet.name} 的 SKU 不匹配`,
+      `${expectedSheet.name} 的名单 ID 不匹配`,
     );
   }
 }
@@ -106,12 +125,15 @@ export async function generateDynamicSkuListWorkbook(input: {
   activityName: string;
   revision: number;
   role: "whitelist" | "blacklist";
+  dimension?: DynamicListDimension;
 }): Promise<DynamicSkuListWorkbook> {
+  const dimension = input.dimension ?? "SKU";
+  const header = listHeaderByDimension[dimension];
   const expected = assertRows(input.tiers);
   const workbook = new ExcelJS.Workbook();
   for (const { name, ids } of expected) {
     const sheet = workbook.addWorksheet(name);
-    sheet.getCell("A1").value = "sku";
+    sheet.getCell("A1").value = header;
     sheet.getCell("A1").font = { bold: true };
     sheet.getColumn(1).width = 24;
     ids.forEach((id, index) => {
@@ -121,9 +143,12 @@ export async function generateDynamicSkuListWorkbook(input: {
     });
   }
   const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
-  await verifyDynamicSkuListWorkbook({ bytes, expectedTiers: input.tiers });
-  const prefix =
-    input.role === "whitelist" ? "商品明细白名单" : "商品明细黑名单";
+  await verifyDynamicSkuListWorkbook({
+    bytes,
+    expectedTiers: input.tiers,
+    dimension,
+  });
+  const prefix = listPrefixByRoleAndDimension[input.role][dimension];
   const safeActivityName = input.activityName.replace(/[\\/:*?"<>|]/gu, "-");
   return {
     bytes,

@@ -546,6 +546,35 @@ function decimal(value: unknown): string | undefined {
   return negative && normalized !== "0" ? `-${normalized}` : normalized;
 }
 
+/**
+ * Feishu amount controls store cent precision, so the readback comparison
+ * normalizes both sides to cents: float-multiplication tails such as
+ * 22500.0000000000004 must not be reported as a field difference.
+ */
+function centsOf(normalized: string | undefined): number | undefined {
+  if (!normalized) return undefined;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? Math.round(value * 100) : undefined;
+}
+
+function controlLabel(
+  definitionControl: ApprovalFormControl | undefined,
+  submitted: ApprovalFormValue,
+): string {
+  return definitionControl?.name?.trim() || submitted.id;
+}
+
+function formatYuanText(normalized: string | undefined): string {
+  if (!normalized) return "无法解析";
+  const negative = normalized.startsWith("-");
+  const [integer, fraction = ""] = (
+    negative ? normalized.slice(1) : normalized
+  ).split(".");
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/u, ",");
+  const text = fraction ? `${grouped}.${fraction}` : grouped;
+  return negative ? `-${text}` : text;
+}
+
 function amountValue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const object = value as Record<string, unknown>;
@@ -555,7 +584,9 @@ function amountValue(value: unknown): unknown {
 function currencyValue(control: ApprovalFormValue): string | undefined {
   if (control.currency) return control.currency;
   if (!control.value || typeof control.value !== "object") return undefined;
-  const ext = (control.value as Record<string, unknown>).ext;
+  const object = control.value as Record<string, unknown>;
+  if (typeof object.currency === "string") return object.currency;
+  const ext = object.ext;
   if (!ext || typeof ext !== "object") return undefined;
   const currency = (ext as Record<string, unknown>).currency;
   return typeof currency === "string" ? currency : undefined;
@@ -709,22 +740,23 @@ export function diffSubmittedApprovalForm(
 
   for (const submitted of expected) {
     const receivedControls = actualById.get(submitted.id) ?? [];
+    const label = controlLabel(controlById.get(submitted.id), submitted);
     if (receivedControls.length !== 1) {
       issues.push(
-        `${submitted.id}: ${receivedControls.length ? "duplicate" : "missing"} from created approval`,
+        `${label}：OA 表单中该控件${receivedControls.length ? "重复出现" : "缺失"}`,
       );
       continue;
     }
     const received = receivedControls[0];
     if (received.type !== submitted.type) {
       issues.push(
-        `${submitted.id}: expected ${submitted.type}, received ${received.type}`,
+        `${label}：提交控件类型 ${submitted.type}，OA 实际 ${received.type}`,
       );
       continue;
     }
     const definitionControl = controlById.get(submitted.id);
     if (!definitionControl) {
-      issues.push(`${submitted.id}: not present in bound approval definition`);
+      issues.push(`${label}：不在当前审批定义中`);
       continue;
     }
 
@@ -739,9 +771,7 @@ export function diffSubmittedApprovalForm(
         !receivedOption ||
         submittedOption !== receivedOption
       ) {
-        issues.push(
-          `${submitted.id}: submitted option differs from created approval`,
-        );
+        issues.push(`${label}：提交选项与 OA 实际选项不一致`);
       }
       continue;
     }
@@ -761,23 +791,25 @@ export function diffSubmittedApprovalForm(
         receivedOptions.some((value) => !value) ||
         !sameSet(submittedOptions as string[], receivedOptions as string[])
       ) {
-        issues.push(
-          `${submitted.id}: submitted options differ from created approval`,
-        );
+        issues.push(`${label}：提交选项与 OA 实际选项不一致`);
       }
       continue;
     }
     if (submitted.type === "amount") {
       const submittedAmount = decimal(amountValue(submitted.value));
       const receivedAmount = decimal(amountValue(received.value));
+      const submittedCents = centsOf(submittedAmount);
+      const receivedCents = centsOf(receivedAmount);
+      const currencyMismatch =
+        currencyValue(submitted) !== currencyValue(received);
       if (
-        !submittedAmount ||
-        !receivedAmount ||
-        submittedAmount !== receivedAmount ||
-        currencyValue(submitted) !== currencyValue(received)
+        submittedCents === undefined ||
+        receivedCents === undefined ||
+        submittedCents !== receivedCents ||
+        currencyMismatch
       ) {
         issues.push(
-          `${submitted.id}: submitted amount differs from created approval`,
+          `${label}：提交 ${formatYuanText(submittedAmount)} / OA 实际 ${formatYuanText(receivedAmount)}${currencyMismatch ? "（币种不一致）" : ""}，请核对`,
         );
       }
       continue;
@@ -790,9 +822,7 @@ export function diffSubmittedApprovalForm(
         !receivedInterval ||
         stableJson(submittedInterval) !== stableJson(receivedInterval)
       ) {
-        issues.push(
-          `${submitted.id}: submitted date interval differs from created approval`,
-        );
+        issues.push(`${label}：提交日期区间与 OA 实际不一致`);
       }
       continue;
     }
@@ -800,22 +830,18 @@ export function diffSubmittedApprovalForm(
       const submittedIdentity = attachmentIdentity(submitted.value);
       const receivedIdentity = attachmentIdentity(received.value);
       if (!submittedIdentity || !receivedIdentity) {
-        issues.push(`${submitted.id}: created attachment value is invalid`);
+        issues.push(`${label}：OA 实际附件值无法解析`);
       } else if (
         submittedIdentity.kind === "codes" &&
         receivedIdentity.kind === "codes"
       ) {
         if (!sameSet(submittedIdentity.values, receivedIdentity.values)) {
-          issues.push(
-            `${submitted.id}: submitted attachment differs from created approval`,
-          );
+          issues.push(`${label}：提交附件与 OA 实际附件不一致`);
         }
       } else if (
         submittedIdentity.values.length !== receivedIdentity.values.length
       ) {
-        issues.push(
-          `${submitted.id}: submitted attachment count differs from created approval`,
-        );
+        issues.push(`${label}：提交附件数量与 OA 实际不一致`);
       } else if (
         !verifiedByAttachmentNames(
           submittedIdentity,
@@ -825,31 +851,25 @@ export function diffSubmittedApprovalForm(
         )
       ) {
         needsReview.push(
-          `${submitted.id}: Feishu returned display URLs instead of stable file identity`,
+          `${label}：飞书返回了展示链接而非稳定文件标识，需人工核对`,
         );
       }
       continue;
     }
     if (["input", "textarea"].includes(submitted.type)) {
       if (normalizeText(submitted.value) !== normalizeText(received.value)) {
-        issues.push(
-          `${submitted.id}: submitted text differs from created approval`,
-        );
+        issues.push(`${label}：提交文本与 OA 实际文本不一致`);
       }
       continue;
     }
     if (stableJson(received.value) !== stableJson(submitted.value)) {
-      issues.push(
-        `${submitted.id}: submitted value differs from created approval`,
-      );
+      issues.push(`${label}：提交值与 OA 实际值不一致`);
     }
     if (
       stableJson(received.open_ids ?? []) !==
       stableJson(submitted.open_ids ?? [])
     ) {
-      issues.push(
-        `${submitted.id}: submitted contacts differ from created approval`,
-      );
+      issues.push(`${label}：提交联系人与 OA 实际不一致`);
     }
   }
   return { issues, needsReview };

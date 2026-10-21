@@ -57,7 +57,7 @@ describe("dynamic SKU list workbook", () => {
         revision: 1,
         role: "whitelist",
       }),
-    ).rejects.toThrow("100减1 内存在重复 SKU");
+    ).rejects.toThrow("100减1 内存在重复名单 ID");
   });
 
   it("rejects invalid and duplicate Sheet names", async () => {

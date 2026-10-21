@@ -1,5 +1,6 @@
 import type { MultiTierSkuSheetName } from "../../excel-template-engine/template-manifests";
 import {
+  type IdentifierDimensionConfirmation,
   parseMultiSheetTieredIdentifierList,
   parseTieredIdentifierList,
 } from "./lists";
@@ -54,6 +55,10 @@ export interface OfflineThreeSourceRunInput {
   noBlacklistConfirmed?: boolean;
   whitelistSelection?: ListColumnSelection;
   blacklistSelection?: ListColumnSelection;
+  /** Owner-confirmed identifier dimensions (ADR-0015); headerless or
+   * non-SKU lists fail closed without them. */
+  whitelistDimensionConfirmation?: IdentifierDimensionConfirmation;
+  blacklistDimensionConfirmation?: IdentifierDimensionConfirmation;
   overlapDecision?: OverlapDecision;
   screenshotRenderer?: WorkbookScreenshotRenderer;
   templates: OfflineArtifactTemplates;
@@ -98,12 +103,17 @@ export async function runOfflineThreeSourceWorkflow(
 
   const coupon = await extractRegularFullReductionInput({
     recognition: couponRecognition,
+    productLimitType:
+      input.whitelistDimensionConfirmation?.confirmedAs === "MERCHANT_ID"
+        ? "限商家ID"
+        : "限SKU",
   });
   const whitelist =
     input.listMode === "dynamic-multi-sheet"
       ? await parseMultiSheetTieredIdentifierList({
           recognition: whitelistRecognition,
           role: "whitelist",
+          identifierDimensionConfirmation: input.whitelistDimensionConfirmation,
         })
       : await parseTieredIdentifierList({
           recognition: whitelistRecognition,
@@ -115,6 +125,7 @@ export async function runOfflineThreeSourceWorkflow(
       ? await parseMultiSheetTieredIdentifierList({
           recognition: blacklistRecognition,
           role: "blacklist",
+          identifierDimensionConfirmation: input.blacklistDimensionConfirmation,
         })
       : await parseTieredIdentifierList({
           recognition: blacklistRecognition,

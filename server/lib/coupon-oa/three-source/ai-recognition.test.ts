@@ -277,7 +277,7 @@ describe("coupon three-source AI recognition", () => {
     expect(request).not.toHaveProperty("chunks");
   });
 
-  it("keeps headerless numeric lists dimension-unknown and tells AI to separate role from identifier type", async () => {
+  it("uses closed-set dimension judgment in prompt v7 and separates role from identifier type", async () => {
     const sourceWorkbook = new ExcelJS.Workbook();
     const sheet = sourceWorkbook.addWorksheet("Sheet1");
     sheet.getCell("A1").value = 162203631;
@@ -288,6 +288,9 @@ describe("coupon three-source AI recognition", () => {
       bytes: new Uint8Array(bytes),
     });
 
+    // The validator keeps accepting out-of-set values (UNKNOWN/SPU) so the
+    // degraded path stays manual-choice instead of hard failure, but the AI
+    // contract itself now demands a closed-set judgment with evidence.
     const result = validateCouponThreeSourceAiProposal({
       workbook,
       proposal: {
@@ -300,17 +303,25 @@ describe("coupon three-source AI recognition", () => {
             confidence: 0.55,
             reason: "无表头单列数字，无法唯一判断标识维度",
           },
+          {
+            role: "whitelist",
+            dimension: "MERCHANT_ID",
+            sheetName: "Sheet1",
+            headerCell: "A1",
+            confidence: 0.9,
+            reason: "文件名标注商家ID，9 位数字符合商家ID位数",
+          },
         ],
         skuRegionCandidates: [
           {
             role: "whitelist",
-            dimension: "UNKNOWN",
+            dimension: "MERCHANT_ID",
             sheetName: "Sheet1",
             headerCell: "A1",
             startCell: "A1",
             endCell: "A2",
-            confidence: 0.55,
-            reason: "无表头单列数字区域",
+            confidence: 0.9,
+            reason: "无表头单列 9 位数字，文件名标注商家ID",
           },
         ],
       },
@@ -318,17 +329,22 @@ describe("coupon three-source AI recognition", () => {
 
     expect(result.listCandidates).toEqual([
       expect.objectContaining({ role: "whitelist", dimension: "UNKNOWN" }),
+      expect.objectContaining({ role: "whitelist", dimension: "MERCHANT_ID" }),
     ]);
     expect(result.skuRegionCandidates).toEqual([
-      expect.objectContaining({ dimension: "UNKNOWN" }),
+      expect.objectContaining({ dimension: "MERCHANT_ID" }),
     ]);
 
     const request = buildCouponThreeSourceAiRequest(workbook);
-    expect(request.promptVersion).toContain("v6");
+    expect(request.promptVersion).toBe("coupon-three-source-p0-ai-primary-v7");
     expect(request.system).toContain(
       "材料角色（whitelist/blacklist）与标识维度",
     );
-    expect(request.system).toContain("dimension 必须返回 UNKNOWN");
+    expect(request.system).toContain("dimension 只能返回 SKU 或 MERCHANT_ID");
+    expect(request.system).toContain("reason 必须引用可核验证据");
+    expect(request.system).toContain("文件名不得单独决定判定");
+    expect(request.system).not.toContain("dimension 必须返回 UNKNOWN");
+    expect(request.system).not.toContain("或把数字直接判断为 MERCHANT_ID");
   });
 
   it("keeps valid candidates when the model adds an extension role and activity theme", async () => {

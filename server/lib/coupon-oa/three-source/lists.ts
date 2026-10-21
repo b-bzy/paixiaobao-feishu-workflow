@@ -158,6 +158,7 @@ export interface ParseTieredIdentifierListInput {
   identifierCandidateId?: string;
   tierCandidateId?: string;
   defaultTier?: MultiTierSkuSheetName;
+  identifierDimensionConfirmation?: IdentifierDimensionConfirmation;
 }
 
 /**
@@ -188,9 +189,16 @@ export async function parseTieredIdentifierList(
   if (tier && tier.sheetName !== identifier.sheetName) {
     throw new Error("名单 ID 列和券档列不在同一 Sheet，需要业务员确认映射");
   }
-  if (identifier.dimension !== "SKU") {
+  const offlineDimension = resolveListDimension({
+    detected: identifier.dimension ?? "UNKNOWN",
+    headerless: identifier.header === "",
+    confirmation: input.identifierDimensionConfirmation,
+    sourceHash:
+      input.recognition.sourceHash || sourceHash(input.recognition.source),
+  });
+  if (!offlineDimension) {
     throw new Error(
-      `当前离线切片只支持 SKU 名单，不支持 ${identifier.dimension}`,
+      `当前离线切片只支持 SKU 或商家 ID 名单，不支持 ${identifier.dimension}，请先确认标识类型`,
     );
   }
 
@@ -226,7 +234,7 @@ export async function parseTieredIdentifierList(
 
     if (!idRaw || isEmptyIdentifierMarker(idRaw)) continue;
     if (isFormula(idCell)) {
-      issues.push(`${location} 不能使用公式作为 SKU`);
+      issues.push(`${location} 不能使用公式作为名单 ID`);
       continue;
     }
     if (/^[=+@-]/.test(idRaw)) {
@@ -238,7 +246,7 @@ export async function parseTieredIdentifierList(
       continue;
     }
     if (MULTIPLE_IDENTIFIER_SEPARATOR.test(idRaw)) {
-      issues.push(`${location} 包含多个 SKU 或分隔符`);
+      issues.push(`${location} 包含多个名单 ID 或分隔符`);
       continue;
     }
     if (tier && tierCell && isFormula(tierCell)) {
@@ -279,10 +287,43 @@ export async function parseTieredIdentifierList(
   return {
     role: input.role,
     sourceHash: hashValue,
-    dimension: identifier.dimension,
+    dimension: offlineDimension,
     entries,
     issues,
   };
+}
+
+export interface IdentifierDimensionConfirmation {
+  sourceSha256: string;
+  detectedDimension: "SKU" | "SPU" | "MERCHANT_ID" | "UNKNOWN";
+  confirmedAs: "SKU" | "MERCHANT_ID";
+}
+
+/**
+ * Resolves the effective parse dimension for one detected dimension: a
+ * matching owner confirmation overrides it in either direction (including
+ * “按 SKU 使用” overrides); headerless sources always require an explicit
+ * confirmation; headed SKU columns pass through without one.
+ */
+function resolveListDimension(input: {
+  detected: string;
+  headerless: boolean;
+  confirmation: IdentifierDimensionConfirmation | undefined;
+  sourceHash: string;
+}): "SKU" | "MERCHANT_ID" | undefined {
+  const confirmation = input.confirmation;
+  if (
+    confirmation &&
+    confirmation.sourceSha256 === input.sourceHash &&
+    (confirmation.detectedDimension === input.detected ||
+      confirmation.detectedDimension === "UNKNOWN")
+  ) {
+    return confirmation.confirmedAs;
+  }
+  if (input.headerless) return undefined;
+  return input.detected === "SKU" || input.detected === "MERCHANT_ID"
+    ? input.detected
+    : undefined;
 }
 
 export async function parseMultiSheetTieredIdentifierList(input: {
@@ -290,12 +331,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   role: "whitelist" | "blacklist";
   selection?: MultiSheetListSelection;
   aiSkuRegions?: AiSkuRegionCandidate[];
-  identifierDimensionConfirmation?: {
-    sourceSha256: string;
-    detectedDimension: "SPU" | "MERCHANT_ID" | "UNKNOWN";
-    confirmedAs: "SKU";
-    reason: string;
-  };
+  identifierDimensionConfirmation?: IdentifierDimensionConfirmation;
 }): Promise<ParsedTieredIdentifierList> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
@@ -315,16 +351,24 @@ export async function parseMultiSheetTieredIdentifierList(input: {
     (candidate) => candidate.role === input.role,
   );
   const aiCoveredSheets = new Set<string>();
-  const dimensionConfirmedAsSku = (dimension: string): boolean => {
-    const confirmation = input.identifierDimensionConfirmation;
-    return (
-      dimension !== "SKU" &&
-      confirmation?.sourceSha256 === sourceHashValue &&
-      (confirmation.detectedDimension === dimension ||
-        confirmation.detectedDimension === "UNKNOWN") &&
-      confirmation.confirmedAs === "SKU" &&
-      confirmation.reason.trim().length >= 2
-    );
+  let listDimension: "SKU" | "MERCHANT_ID" | undefined;
+  const dimensionGate = (detected: string, headerless: boolean) => {
+    const resolved = resolveListDimension({
+      detected,
+      headerless,
+      confirmation: input.identifierDimensionConfirmation,
+      sourceHash: sourceHashValue,
+    });
+    if (!resolved) {
+      issues.push("当前只支持 SKU 或商家 ID 名单，请先确认标识类型");
+      return undefined;
+    }
+    if (listDimension && listDimension !== resolved) {
+      issues.push("同一来源解析出不同标识维度，请重新确认标识类型");
+      return undefined;
+    }
+    listDimension = resolved;
+    return resolved;
   };
 
   if (aiRegions.length) {
@@ -335,11 +379,10 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         issues.push("系统识别的名单区域已失效，请重新上传材料");
         continue;
       }
-      if (
-        region.dimension !== "SKU" &&
-        !dimensionConfirmedAsSku(region.dimension)
-      ) {
-        issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
+      // Headerless regions anchor on the first data cell, so headerCell and
+      // startCell coincide; they always require an explicit confirmation.
+      const headerless = region.headerCell === bounds.startCell;
+      if (!dimensionGate(region.dimension, headerless)) {
         continue;
       }
       const headerColumnName = region.headerCell.match(/^[A-Z]+/)?.[0];
@@ -381,15 +424,15 @@ export async function parseMultiSheetTieredIdentifierList(input: {
         if (!raw || isEmptyIdentifierMarker(raw)) continue;
         const location = `${worksheet.name}!${cell.address}`;
         if (isFormula(cell) || /^[=+@-]/.test(raw)) {
-          issues.push(`${location} 不能使用公式作为 SKU`);
+          issues.push(`${location} 不能使用公式作为名单 ID`);
           continue;
         }
         if (identifier.issue || !normalized) {
-          issues.push(`${location} ${identifier.issue ?? "不是有效 SKU"}`);
+          issues.push(`${location} ${identifier.issue ?? "不是有效名单 ID"}`);
           continue;
         }
         if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
-          issues.push(`${location} 包含多个 SKU 或分隔符`);
+          issues.push(`${location} 包含多个名单 ID 或分隔符`);
           continue;
         }
         if (seenIds.has(normalized)) {
@@ -447,10 +490,11 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       continue;
     }
     if (
-      identifier.dimension !== "SKU" &&
-      !dimensionConfirmedAsSku(identifier.dimension ?? "UNKNOWN")
+      !dimensionGate(
+        identifier.dimension ?? "UNKNOWN",
+        identifier.header === "",
+      )
     ) {
-      issues.push(`${worksheet.name} 当前只支持 SKU 名单`);
       continue;
     }
     const column = worksheet.getColumn(identifier.column).number;
@@ -466,17 +510,17 @@ export async function parseMultiSheetTieredIdentifierList(input: {
       if (!raw || isEmptyIdentifierMarker(raw)) continue;
       const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
       if (isFormula(cell) || /^[=+@-]/.test(raw)) {
-        issues.push(`${location} 不能使用公式作为 SKU`);
+        issues.push(`${location} 不能使用公式作为名单 ID`);
         continue;
       }
       if (identifierValueResult.issue || !normalized) {
         issues.push(
-          `${location} ${identifierValueResult.issue ?? "不是有效 SKU"}`,
+          `${location} ${identifierValueResult.issue ?? "不是有效名单 ID"}`,
         );
         continue;
       }
       if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
-        issues.push(`${location} 包含多个 SKU 或分隔符`);
+        issues.push(`${location} 包含多个名单 ID 或分隔符`);
         continue;
       }
       if (seenIds.has(normalized)) {
@@ -504,7 +548,7 @@ export async function parseMultiSheetTieredIdentifierList(input: {
   return {
     role: input.role,
     sourceHash: sourceHashValue,
-    dimension: "SKU",
+    dimension: listDimension ?? "UNKNOWN",
     entries,
     sheetOrder,
     issues,
@@ -536,6 +580,9 @@ export async function parseSingleCouponIdentifierList(
     identifier.sheetName !== input.selectedSheetName
   ) {
     throw new Error("已选择的名单列不属于业务员确认的 Sheet");
+  }
+  if (identifier.dimension === "MERCHANT_ID") {
+    throw new Error("单券路径暂不支持商家 ID 名单");
   }
   if (identifier.dimension !== "SKU") {
     throw new Error(`当前 P0 只支持 SKU 名单，不支持 ${identifier.dimension}`);
@@ -570,7 +617,7 @@ export async function parseSingleCouponIdentifierList(
     const location = `${worksheet.name}!${identifier.column}${rowNumber}`;
     if (!raw || isEmptyIdentifierMarker(raw)) continue;
     if (isFormula(cell)) {
-      issues.push(`${location} 不能使用公式作为 SKU`);
+      issues.push(`${location} 不能使用公式作为名单 ID`);
       continue;
     }
     if (/^[=+@-]/.test(raw)) {
@@ -582,7 +629,7 @@ export async function parseSingleCouponIdentifierList(
       continue;
     }
     if (MULTIPLE_IDENTIFIER_SEPARATOR.test(raw)) {
-      issues.push(`${location} 包含多个 SKU 或分隔符`);
+      issues.push(`${location} 包含多个名单 ID 或分隔符`);
       continue;
     }
     if (seen.has(normalized)) {
@@ -621,8 +668,10 @@ export async function parseSingleCouponIdentifierList(
 export function groupIdentifiersByTier(
   list: ParsedTieredIdentifierList,
 ): Record<string, string[]> {
-  if (list.dimension !== "SKU") {
-    throw new Error(`标准 SKU 附件不支持 ${list.dimension} 维度`);
+  if (list.dimension !== "SKU" && list.dimension !== "MERCHANT_ID") {
+    throw new Error(
+      `标准附件不支持 ${list.dimension} 维度，当前只支持 SKU 或商家 ID 名单`,
+    );
   }
   if (list.issues.length) {
     throw new Error(

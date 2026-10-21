@@ -13,6 +13,7 @@
 | 阶段与 go/no-go | [rollout 计划](operations/coupon-oa-internal-pilot-rollout-plan-v1.md) | R0–R5、Gate、canary、暂停与回滚。 |
 | 三源本机长连接 POC | [本机长连接 draft-only POC 运行手册](operations/coupon-three-source-local-long-connection-poc-runbook-v1.md) | 需求方已选择的单用户严选三源 → OA 测试稿限时验证；不是 R1/R2/R3、可靠运行或原生 OA 授权。 |
 | 运行准备 | [资源发现与部署前交接指南](operations/coupon-oa-managed-bridge-provisioning-guide-v1.md) / [bridge runbook](operations/coupon-oa-managed-bridge-runbook-v1.md) / [readiness checklist](operations/coupon-oa-pilot-launch-readiness-checklist-v1.md) | 企业资源发现/申请与交接、运行期操作、Go/No-go 证据清单。 |
+| 交接与重建 | [项目交接与重建 Runbook](operations/coupon-p0-project-handover-runbook-v1.md) | 接手人未定时的资产归属清单、Vercel / Git / bridge / 名单重建步骤、环境变量事实清单与交接时序。 |
 
 ## 冲突时的读取顺序
 

@@ -1,6 +1,7 @@
 import {
   isCouponOaDraftStoreConfigured,
   isCouponOaNativeSubmitDisabled,
+  isCouponOaNativeSubmitOpenAccess,
 } from "./feishu/coupon-oa/config";
 
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
@@ -23,6 +24,8 @@ export function getDeploymentIdentity(
     readiness: {
       couponOaDraftStoreConfigured: isCouponOaDraftStoreConfigured(environment),
       couponOaNativeSubmitDisabled: isCouponOaNativeSubmitDisabled(environment),
+      couponOaNativeSubmitOpenAccess:
+        isCouponOaNativeSubmitOpenAccess(environment),
     },
   } as const;
 }

@@ -21,6 +21,7 @@ describe("deployment identity", () => {
       readiness: {
         couponOaDraftStoreConfigured: true,
         couponOaNativeSubmitDisabled: true,
+        couponOaNativeSubmitOpenAccess: false,
       },
     });
   });
@@ -48,6 +49,29 @@ describe("deployment identity", () => {
       }),
     ).toMatchObject({
       readiness: { couponOaNativeSubmitDisabled: false },
+    });
+  });
+
+  it("reports native-submit open access only for an explicit true flag", () => {
+    expect(
+      getDeploymentIdentity({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED: "true",
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS: "true",
+      }),
+    ).toMatchObject({
+      readiness: { couponOaNativeSubmitOpenAccess: true },
+    });
+
+    expect(
+      getDeploymentIdentity({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "74BD72E319582A1BF05BE812BFF2D2508208C2E3",
+        FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS: "yes",
+      }),
+    ).toMatchObject({
+      readiness: { couponOaNativeSubmitOpenAccess: false },
     });
   });
 

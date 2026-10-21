@@ -76,7 +76,17 @@
 | `FEISHU_COUPON_OA_NATIVE_SUBMIT_ENABLED` | `true` | 全局 kill switch。 |
 | `FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS` | `ou_canary1`(1–2 人) | **提交授权仍具名**;`OPEN_ACCESS` 对此层无效(测试锁定)。 |
 
-canary 值守逐笔核对(回读 instance code、申请人=发起人、附件=冻结产物 hash、路由未被改动;`SubmissionUnknown` 冻结对账、不盲建第二笔)与暂停条件同 [v1 §4](coupon-p0-multi-user-native-submit-deployment-plan-v1.md),不再重复。**是否把提交也开放给全部可用范围用户**:canary 干净一周后由 Owner 再决定;届时可扩展 `OPEN_ACCESS` 语义或全员列入提交名单,须回签 D1/D3。
+canary 值守逐笔核对(回读 instance code、申请人=发起人、附件=冻结产物 hash、路由未被改动;`SubmissionUnknown` 冻结对账、不盲建第二笔)与暂停条件同 [v1 §4](coupon-p0-multi-user-native-submit-deployment-plan-v1.md),不再重复。
+
+### 4.1 提交层开放(Owner 2026-10-21 裁定,提前于一周观察期)
+
+[ADR-0016](../../../adr/0016-open-native-submit-authorization-via-feishu-availability-scope.md) 已把提交授权边界改为飞书可用范围,新增变量:
+
+| 变量 | 值 | 说明 |
+| --- | --- | --- |
+| `FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS` | `true` | 跳过提交具名名单;mode 闸/kill switch/使用授权不放松(测试锁定)。默认 `false`=回具名名单。 |
+
+义务置换:放弃"canary 干净一周"前置,改为开放后**首批真实提交逐笔回读核对**并登记 §6;发现异常立即回滚(§5)。具名提交名单变量保留为回滚基线与未来收敛手段。
 
 ## 5. 回滚
 
@@ -84,13 +94,15 @@ canary 值守逐笔核对(回读 instance code、申请人=发起人、附件=�
 | --- | --- |
 | 使用层收缩 | `FEISHU_COUPON_OA_OPEN_ACCESS=false` 重新部署 → 回到按名单(保留的名单即回滚基线);或飞书后台缩小可用范围(即时生效,无需部署)。 |
 | 提交急停 | kill switch `false` 重新部署;已创建实例不受影响。 |
-| 单人止损 | 提交名单删该 open_id;使用层单人止损=可用范围移除该人(飞书后台即时)。 |
+| 提交层收回按人门禁 | `FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS=false` 重新部署 → 回到具名提交名单(ADR-0016 回滚路径)。 |
+| 单人止损 | 提交层开放期=可用范围移除该人(飞书后台即时);回滚到具名名单后=提交名单删该 open_id;使用层单人止损=可用范围移除该人。 |
 | 事件完整性存疑 | 停 bridge intake → 对账三态 → 恢复须重签 D1。 |
 
 ## 6. 变更与审计记录表
 
 | 时间 | 操作人 | 变更(变量/开关/可用范围) | 部署 revision | 验证 | 复核 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-10-21 | b-bzy(Owner 授权,agent 执行) | 决策:提交层开放(ADR-0016),`FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS=true`;同日飞书可用范围已由 b-bzy 发版打开 | ___(部署时回填) | `couponOaNativeSubmitOpenAccess:true` 回读 + 首批提交逐笔核对 | 待架构 Owner 追认 |
 | ___ | ___ | ___ | ___ | ___ | ___ |
 
 ## 7. 已知边界

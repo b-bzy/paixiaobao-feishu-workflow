@@ -69,6 +69,14 @@ export function isCouponOaNativeSubmitDisabled(
   return !value || value === "false";
 }
 
+export function isCouponOaNativeSubmitOpenAccess(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    environment.FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS?.trim() === "true"
+  );
+}
+
 function configuredOpenIds(name: string): Set<string> {
   const value = process.env[name]?.trim() ?? "";
   if (!value) return new Set();
@@ -92,6 +100,15 @@ function couponOaOpenAccessEnabled(): boolean {
   throw new Error("FEISHU_COUPON_OA_OPEN_ACCESS must be true or false");
 }
 
+function couponOaNativeSubmitOpenAccessEnabled(): boolean {
+  const value = process.env.FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS?.trim();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error(
+    "FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS must be true or false",
+  );
+}
+
 /**
  * Applies to all coupon-OA stateful operations, including draft-only. Open
  * access delegates usage authorization to the Feishu app availability scope;
@@ -108,6 +125,9 @@ export function assertCouponOaUserAllowed(openId: string): void {
 /**
  * Native approval creation is intentionally gated independently from the
  * broader coupon OA mode. A production mode alone never authorizes a write.
+ * FEISHU_COUPON_OA_NATIVE_SUBMIT_OPEN_ACCESS delegates only the submit
+ * allowlist to the Feishu availability scope; the mode gate, kill switch,
+ * and usage authorization always apply.
  */
 export function assertCouponOaNativeSubmitAllowed(openId: string): void {
   if (getCouponOaMode() !== "native-submit") {
@@ -117,6 +137,7 @@ export function assertCouponOaNativeSubmitAllowed(openId: string): void {
     throw new Error("Coupon OA native submit kill switch is closed");
   }
   assertCouponOaUserAllowed(openId);
+  if (couponOaNativeSubmitOpenAccessEnabled()) return;
   if (
     !configuredOpenIds("FEISHU_COUPON_OA_NATIVE_SUBMIT_ALLOWED_OPEN_IDS").has(
       openId,
